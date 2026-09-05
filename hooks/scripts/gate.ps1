@@ -59,11 +59,21 @@ function Get-UnwrappedExe([string]$Command) {
     $argv = Split-Arguments $Command
     if ($argv.Count -eq 0) { return '' }
 
-    $wrappers = '^(sudo|doas|nice|nohup|time|command|builtin|exec|env|timeout|stdbuf)$'
+    # Nalez Amber E4: JEDEN spolecny seznam prepinacu s hodnotou byl spatne. `-n` bere
+    # hodnotu u `nice`, ale NE u `sudo` (tam je to "neinteraktivne"), takze
+    # `sudo -n psql <<SQL` preskocilo rovnou psql a destruktivni operace propadla.
+    # Tabulka je proto podle OBALU, ne globalni.
+    $valueFlagsByWrapper = @{
+        'sudo'    = '^(-u|-g|-C|-p|-r|-t|-T|-U|--user|--group)$'
+        'doas'    = '^(-u|-C)$'
+        'nice'    = '^(-n|--adjustment)$'
+        'env'     = '^(-u|-C|-S|--unset|--chdir)$'
+        'docker'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
+        'podman'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
+        'stdbuf'  = '^(-i|-o|-e)$'
+    }
+    $plainWrappers = '^(nohup|time|command|builtin|exec)$'
     $containers = '^(docker|podman)$'
-    # Prepinace techto obalu berou HODNOTU, takze se preskakuji dva tokeny
-    # (`sudo -u postgres psql` - bez toho by rozbaleni skoncilo na `-u`).
-    $valueFlags = '^-(u|g|C|e|w|n|p|v|-user|-group|-env|-workdir)$'
 
     $i = 0
     $guard = 0
@@ -71,30 +81,70 @@ function Get-UnwrappedExe([string]$Command) {
         $guard++
         $tok = [string]$argv[$i]
 
-        if ($tok -match '^-') {
-            if ($tok -cmatch $valueFlags) { $i += 2 } else { $i++ }
-            continue
-        }
         # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
         if ($tok -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
+        if ($tok -match '^-') { $i++; continue }   # osamely prepinac bez znameho obalu
 
         $name = Get-ExecutableName $tok
-        if ($name -match $wrappers) { $i++; continue }
+        if ($name -match $plainWrappers) { $i++; continue }
 
-        # `docker exec -i nazev psql ...` / `podman run --rm obraz psql ...`
-        if ($name -match $containers) {
+        # `timeout 30 psql ...` - po prepinacich stoji CISLO, ktere se preskakuje.
+        if ($name -eq 'timeout') {
             $i++
-            if ($i -lt $argv.Count -and $argv[$i] -match '^(exec|run)$') { $i++ }
-            while ($i -lt $argv.Count -and $argv[$i] -match '^-') {
-                if ($argv[$i] -cmatch $valueFlags) { $i += 2 } else { $i++ }
+            while ($i -lt $argv.Count -and $argv[$i] -match '^-') { $i++ }
+            if ($i -lt $argv.Count -and $argv[$i] -match '^\d+(\.\d+)?[smhd]?$') { $i++ }
+            continue
+        }
+
+        if ($valueFlagsByWrapper.ContainsKey($name)) {
+            $flagPattern = [string]$valueFlagsByWrapper[$name]
+            $i++
+            if ($name -match $containers) {
+                if ($i -lt $argv.Count -and $argv[$i] -match '^(exec|run)$') { $i++ }
             }
-            if ($i -lt $argv.Count) { $i++ }   # jmeno kontejneru nebo obrazu
+            while ($i -lt $argv.Count -and $argv[$i] -match '^-') {
+                if ($argv[$i] -cmatch $flagPattern) { $i += 2 } else { $i++ }
+            }
+            if ($name -match $containers -and $i -lt $argv.Count) {
+                $i++   # jmeno kontejneru nebo obrazu
+            }
             continue
         }
 
         return $name
     }
     return ''
+}
+
+# Je token zkratkou parametru -EncodedCommand? PowerShell prijme kazdou jednoznacnou
+# predponu, takze `-e`, `-en`, `-enc` ... `-encodedcommand` (nalez Metis 4, kolo 2).
+function Test-EncodedCommandFlag([string]$Token) {
+    if ([string]::IsNullOrEmpty($Token)) { return $false }
+    if (-not $Token.StartsWith('-')) { return $false }
+    $body = $Token.Substring(1).ToLowerInvariant()
+    if ($body -eq '') { return $false }
+    return 'encodedcommand'.StartsWith($body)
+}
+
+# Zacina na tomhle radku heredoc MIMO uvozovky? Nalez Amber E2: regex nad radkem
+# nasel `<<` i uvnitr retezce (`echo "<<x>>"`) a zbytek prikazu se spolkl jako telo.
+function Test-HeredocOutsideQuotes([string]$Line) {
+    if ([string]::IsNullOrEmpty($Line)) { return $false }
+    $inSingle = $false
+    $inDouble = $false
+    for ($i = 0; $i -lt $Line.Length - 1; $i++) {
+        $c = $Line[$i]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; continue }
+        if ($c -eq "'" -and -not $inDouble) { $inSingle = $true; continue }
+        if ($c -eq '"') { $inDouble = -not $inDouble; continue }
+        if ($inDouble) { continue }
+        if ($c -eq '<' -and $Line[$i + 1] -eq '<') {
+            # `<<<` je here-string, ne heredoc.
+            if (($i + 2) -lt $Line.Length -and $Line[$i + 2] -eq '<') { return $false }
+            return $true
+        }
+    }
+    return $false
 }
 
 # Roura, jejimz POSLEDNIM clankem je SQL klient.
@@ -165,44 +215,74 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
 # by skoncilo jako lokalni operace (ask) misto vzdalene (deny). Nalez Amber A4.
 #
 # Vraci @{ Rest = prikaz bez tel heredocu; Bodies = @(@{ Outer; OuterExe; Body }) }.
+$script:HeredocPattern = '<<-?\s*(?:''([A-Za-z_][A-Za-z0-9_]*)''|"([A-Za-z_][A-Za-z0-9_]*)"|\\?([A-Za-z_][A-Za-z0-9_]*))'
+
 function Split-Heredoc([string]$Command) {
+    $heredocPattern = $script:HeredocPattern
     $bodies = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrWhiteSpace($Command)) {
-        return @{ Rest = $Command; Bodies = @() }
+        return @{ Rest = $Command; Bodies = @(); Unterminated = $false }
     }
-    if ($Command -notmatch '<<') { return @{ Rest = $Command; Bodies = @() } }
+    if ($Command -notmatch '<<') { return @{ Rest = $Command; Bodies = @(); Unterminated = $false } }
 
+    # Nalez Amber E2: `<<` se hledalo regexem nad radkem, takze `echo "<<x>>"` zacalo
+    # heredoc uvnitr retezce a zbytek prikazu se spolkl jako telo. Uvod heredocu se
+    # proto hleda kvotove korektne - jen `<<` MIMO uvozovky a ne `<<<` (here-string).
     $lines = [regex]::Split($Command, '\r?\n')
     $keep = New-Object System.Collections.ArrayList
+    $unterminated = $false
     $i = 0
     while ($i -lt $lines.Count) {
         $line = $lines[$i]
+        if (-not (Test-HeredocOutsideQuotes $line)) { [void]$keep.Add($line); $i++; continue }
         # `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"` - ne `<<<` (here-string) a ne `<`.
         # Nalez Amber C1: kotva `\s*$` na konci znamenala, ze `<<SQL 2>&1` ani
         # `<<SQL > out.log` se za heredoc nepovazovaly, telo se rozpadlo na radky
         # a vzdalena destruktivni operace propadla na allow. Kotva je pryc; co je
         # za delimiterem, zustava soucasti uvozujiciho prikazu (a nese tam hostitele).
-        $m = [regex]::Match($line, '<<-?\s*(?:''([A-Za-z_][A-Za-z0-9_]*)''|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))')
+        # `\` pred delimiterem (`<<\SQL`) je treti zpusob, jak potlacit expanzi -
+        # vedle `'SQL'` a `"SQL"`. Bez nej se telo nevytahlo (nalez Metis 2, kolo 2).
+        $m = [regex]::Match($line, $heredocPattern)
         if (-not $m.Success) {
             [void]$keep.Add($line); $i++; continue
         }
-        $delim = ''
-        foreach ($g in 1, 2, 3) { if ($m.Groups[$g].Success) { $delim = $m.Groups[$g].Value } }
-
-        # Co je ZA delimiterem (redirect), patri porad k uvozujicimu prikazu.
-        $outer = ($line.Substring(0, $m.Index) + ' ' + $line.Substring($m.Index + $m.Length)).Trim()
+        # Nalez Metis 6 (kolo 2): na jednom radku muze byt heredocu VIC
+        # (`cat <<IGNORE && psql -h prod <<SQL`) a tela se ctou v poradi uvedeni.
+        # Driv se bral jen prvni a telo toho druheho propadlo mimo SQL kontext.
+        $delims = New-Object System.Collections.ArrayList
+        $outerBuf = New-Object System.Text.StringBuilder
+        $pos = 0
+        foreach ($mm in [regex]::Matches($line, $heredocPattern)) {
+            foreach ($g in 1, 2, 3) { if ($mm.Groups[$g].Success) { [void]$delims.Add($mm.Groups[$g].Value) } }
+            if ($mm.Index -ge $pos) {
+                [void]$outerBuf.Append($line.Substring($pos, $mm.Index - $pos))
+                [void]$outerBuf.Append(' ')
+                $pos = $mm.Index + $mm.Length
+            }
+        }
+        [void]$outerBuf.Append($line.Substring($pos))
+        $outer = $outerBuf.ToString().Trim()
         [void]$keep.Add($outer)
 
-        $bodyLines = New-Object System.Collections.ArrayList
+        # Uvozujici prikaz pro KAZDE telo je ten clanek, ve kterem jeho `<<` stalo.
+        $outerStages = @(Split-Statement $outer)
         $j = $i + 1
-        while ($j -lt $lines.Count -and $lines[$j].Trim() -ne $delim) {
-            [void]$bodyLines.Add($lines[$j]); $j++
+        for ($d = 0; $d -lt $delims.Count; $d++) {
+            $delim = [string]$delims[$d]
+            $bodyLines = New-Object System.Collections.ArrayList
+            while ($j -lt $lines.Count -and $lines[$j].Trim() -ne $delim) {
+                [void]$bodyLines.Add($lines[$j]); $j++
+            }
+            if ($j -ge $lines.Count) { $unterminated = $true }
+            $myOuter = if ($d -lt $outerStages.Count) { [string]$outerStages[$d] } else { $outer }
+            [void]$bodies.Add(@{ Outer = $myOuter; OuterExe = (Get-UnwrappedExe $myOuter)
+                                 Body = ($bodyLines -join "`n") })
+            $j++   # radek s ukoncovacim delimiterem se zahazuje
         }
-        [void]$bodies.Add(@{ Outer = $outer; OuterExe = (Get-UnwrappedExe $outer); Body = ($bodyLines -join "`n") })
 
-        $i = $j + 1   # radek s ukoncovacim delimiterem se zahazuje
+        $i = $j
     }
-    return @{ Rest = ($keep -join "`n"); Bodies = @($bodies) }
+    return @{ Rest = ($keep -join "`n"); Bodies = @($bodies); Unterminated = $unterminated }
 }
 
 # ------------------------------------------------------------- pravidla ---
@@ -295,7 +375,12 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # z toho exe `(git`, a zadne pravidlo se nechytilo -> allow. Obal se strhne a vnitrek
     # se rozebere stejne jako u `&`. Kontrolni skupina `(Get-Date)` zustava allow, protoze
     # se rozebere na `Get-Date` a ten neni destruktivni.
+    # Nalez Metis 3 (kolo 2): stejny obal delaji SLOZENE zavorky - `& { git reset --hard }`
+    # je blok skriptu, ktery se spusti. Bez nej vychazelo exe `{` a zadne pravidlo nesedlo.
     $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
+    if (-not $paren.Success) {
+        $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?\{\s*(.*?)\s*\}\s*$')
+    }
     if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
         foreach ($l in (Get-CommandLeaf $paren.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
         return $out
@@ -313,14 +398,14 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     switch -Regex ($exe) {
         '^(sudo|nice|nohup|time|doas)$' {
-            $inner = ($rest -join ' ')
+            $inner = (Join-Argument $rest)
             foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
         '^(timeout)$' {
             $skip = 0
             if ($rest.Count -gt 0 -and $rest[0] -match '^[0-9]') { $skip = 1 }
-            $inner = (($rest | Select-Object -Skip $skip) -join ' ')
+            $inner = (Join-Argument ($rest | Select-Object -Skip $skip))
             foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
@@ -348,7 +433,32 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             for ($i = 0; $i -lt $rest.Count; $i++) {
                 $t = $rest[$i].ToLowerInvariant()
                 if (($t -eq '-filepath' -or $t -eq '-path') -and ($i + 1) -lt $rest.Count) { $file = $rest[$i + 1]; $i++; continue }
-                if (($t -eq '-argumentlist' -or $t -eq '-args') -and ($i + 1) -lt $rest.Count) { $argList = $rest[$i + 1]; $i++; continue }
+                if (($t -eq '-argumentlist' -or $t -eq '-args') -and ($i + 1) -lt $rest.Count) {
+                    # Nalez Metis 7 (kolo 2): `-ArgumentList @('-enc','...')` je POLE.
+                    # Bralo se to jako jeden token vcetne `@(`, `)` a apostrofu, takze
+                    # se `-enc` uvnitr nikdy nenaslo. Pole se rozlozi na tokeny.
+                    $val = [string]$rest[$i + 1]
+                    # Pole se pri tokenizaci rozpadne (`@('-enc',` + `'x')`), takze se
+                    # sbira dal, dokud se zavorka neuzavre.
+                    if ($val -match '^@?\(' -and $val -notmatch '\)\s*$') {
+                        $k = $i + 2
+                        while ($k -lt $rest.Count) {
+                            $val = $val + ' ' + [string]$rest[$k]
+                            if ($rest[$k] -match '\)\s*$') { break }
+                            $k++
+                        }
+                        $i = $k - 1
+                    }
+                    $arr = [regex]::Match($val, '^@?\(\s*(.*?)\s*\)$')
+                    if ($arr.Success) {
+                        $items = New-Object System.Collections.ArrayList
+                        foreach ($piece in (Split-Unquoted $arr.Groups[1].Value @(','))) {
+                            [void]$items.Add(($piece.Trim().Trim("'").Trim('"')))
+                        }
+                        $val = (Join-Argument $items)
+                    }
+                    $argList = $val; $i++; continue
+                }
                 if (-not $rest[$i].StartsWith('-') -and $file -eq '') { $file = $rest[$i] }
             }
             if ($file -eq '') { return $out }
@@ -400,7 +510,10 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             $isFile = $false
             for ($i = 0; $i -lt $rest.Count; $i++) {
                 $t = $rest[$i].ToLowerInvariant()
-                if ($t -eq '-encodedcommand' -or $t -eq '-e' -or $t -eq '-ec') {
+                # Nalez Metis 4 (kolo 2): PowerShell bere KAZDOU jednoznacnou zkratku
+                # parametru, takze `-enc`, `-enco`, `-encod` ... fungujou stejne jako
+                # `-encodedcommand`. Vyjmenovat tri z nich nestacilo.
+                if (Test-EncodedCommandFlag $t) {
                     [void]$out.Add(@{ Kind = 'opaque'; Raw = $raw }); return $out
                 }
                 if ($t -eq '-file' -or $t -eq '-f') { $isFile = $true; break }
@@ -409,7 +522,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             # skript souborem je pro hook nepruhledny -> propousti se (dokumentovano)
             if ($isFile) { return $out }
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
-            $inner = (($rest | Select-Object -Skip ($idx + 1)) -join ' ')
+            $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
             foreach ($s in (Split-CommandLine $inner)) {
                 foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
@@ -422,7 +535,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 if ($rest[$i].ToLowerInvariant() -eq '/c' -or $rest[$i].ToLowerInvariant() -eq '/k') { $idx = $i; break }
             }
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
-            $inner = (($rest | Select-Object -Skip ($idx + 1)) -join ' ')
+            $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
             foreach ($s in (Split-CommandLine $inner)) {
                 foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
@@ -430,7 +543,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             return $out
         }
         '^(eval)$' {
-            $inner = ($rest -join ' ')
+            $inner = (Join-CommandString $rest)
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
             foreach ($s in (Split-CommandLine $inner)) {
                 foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
@@ -446,7 +559,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 if ($t.StartsWith('-')) { $i++; continue }
                 break
             }
-            $inner = (($rest | Select-Object -Skip $i) -join ' ')
+            $inner = (Join-CommandString ($rest | Select-Object -Skip $i))
             if ($inner -eq '') { return $out }
             foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
@@ -471,7 +584,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             if ($idx -lt 0) { return $out }
             $tail = @($rest | Select-Object -Skip ($idx + 1) | Where-Object { $_ -ne ';' -and $_ -ne '+' -and $_ -ne '\;' })
-            $inner = ($tail -join ' ')
+            $inner = (Join-Argument $tail)
             if ($inner -eq '') { return $out }
             foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
@@ -497,7 +610,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
 # ---------------------------------------------------- strukturalni pravidla ---
 
-function Get-DbHost([string]$Raw, $LocalHosts) {
+function Get-DbHost([string]$Raw, $LocalHosts, [string]$Exe = '') {
     $patterns = @(
         'host\s*=\s*([^;"''\s]+)',
         # Nalez Amber B5: Npgsql bere `Server=` i `Data Source=` jako synonymum `Host=`.
@@ -505,12 +618,16 @@ function Get-DbHost([string]$Raw, $LocalHosts) {
         '(?:^|[;\s"''])server\s*=\s*([^;"''\s]+)',
         '(?:^|[;\s"''])data\s+source\s*=\s*([^;"''\s]+)',
         '(?:^|\s)-h\s+([^\s"'']+)',
-        # Nalez Amber C4: sqlcmd bere hostitele jako `-S`. Bez toho se `sqlcmd -S db.firma.cz`
-        # cetl jako lokalni, ackoli sqlcmd v seznamu klientu byl.
-        '(?:^|\s)-S\s+([^\s"'']+)',
         '--host[= ]([^\s"'']+)',
         'postgres(?:ql)?://[^@/\s]*@([^:/\s]+)'
     )
+    # Nalez Amber F1: `-S` je hostitel JEN u sqlcmd. U psql je `-S` single-line bez
+    # hodnoty, takze `psql -S -c "TRUNCATE x"` cetlo jako hostitele `-c` a skoncilo
+    # deny misto ask. Vzor se proto pridava jen podle jmena nastroje.
+    if ($Exe -eq 'sqlcmd') {
+        $patterns = @('(?:^|\s)-S\s+([^\s"'']+)') + $patterns
+    }
+
     foreach ($p in $patterns) {
         $m = [regex]::Match($Raw, $p, 'IgnoreCase')
         if ($m.Success) { return $m.Groups[$m.Groups.Count - 1].Value }
@@ -813,6 +930,57 @@ function Get-SqlText($Leaf, $SqlClients) {
     return ($parts -join ' ; ')
 }
 
+# `git checkout .` / `git restore .` = navrat pracovniho stromu, tedy ztrata prace.
+#
+# Nalez Amber E3: driv to byly dva regexy nad textem a byly UZSI nez puvodni vzor -
+# `git restore -s HEAD .`, `-W .`, `-q .` ani `git checkout -q HEAD -- .` nechytily.
+# Regex to ani chytit nemuze: `-s` bere HODNOTU, takze `HEAD` neni prepinac a vzor
+# `(-\S*\s+)*` se o nej zastavi. Rozhoduje se proto nad TOKENY, ne nad textem.
+function Test-GitRestoreRule($Leaf, $Config) {
+    if ($Leaf.Exe -ne 'git') { return $null }
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+
+    $rest = @(Get-LeafField $Leaf 'Args' @())
+    if ($rest.Count -eq 0) { return $null }
+    $sub = [string]$rest[0]
+    if ($sub -ne 'checkout' -and $sub -ne 'restore') { return $null }
+
+    $valueFlags = '^(-s|--source|--pathspec-from-file|-b|-B|--orphan)$'
+    $dotTargets = @('.', './', '.\', '*')
+
+    $positional = New-Object System.Collections.ArrayList
+    $hasStaged = $false
+    $hasWorktree = $false
+    $createsBranch = $false
+
+    for ($i = 1; $i -lt $rest.Count; $i++) {
+        $t = [string]$rest[$i]
+        if ($t -eq '--') { continue }
+        if ($t -cmatch '^(--staged|-S)$') { $hasStaged = $true; continue }
+        if ($t -cmatch '^(--worktree|-W)$') { $hasWorktree = $true; continue }
+        if ($t -cmatch '^(-b|-B|--orphan)$') { $createsBranch = $true; $i++; continue }
+        if ($t -match '^--[A-Za-z-]+=') { continue }        # `--source=HEAD` je jeden token
+        if ($t -cmatch $valueFlags) { $i++; continue }       # prepinac s hodnotou
+        if ($t -match '^-') { continue }                     # prepinac bez hodnoty
+        [void]$positional.Add($t)
+    }
+
+    # Zakladani vetve neni navrat stromu.
+    if ($createsBranch) { return $null }
+    # Odstagovani NENI ztrata prace - ztrata je az se stromem (nalez Amber C2).
+    if ($sub -eq 'restore' -and $hasStaged -and -not $hasWorktree) { return $null }
+
+    foreach ($p in $positional) {
+        if ($dotTargets -contains $p) {
+            $shapeKey = if ($sub -eq 'checkout') { 'gitCheckoutDot' } else { 'gitRestoreDot' }
+            return @{ Decision = 'deny'
+                      Shape = (Get-Field $shapes $shapeKey ('git ' + $sub + ' .')) }
+        }
+    }
+    return $null
+}
+
 function Test-DatabaseRule($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
@@ -851,7 +1019,10 @@ function Test-DatabaseRule($Leaf, $Config) {
     $update = [regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'update\b'), 'IgnoreCase')
     if (-not $destructive -and -not $update) { return $null }
 
-    $dbHost = Get-DbHost $hostText $localHosts
+    # U tela heredocu i roury je nastrojem uvozujici prikaz, ne 'heredoc'.
+    $hostExe = [string](Get-LeafField $Leaf 'OuterExe' '')
+    if ($hostExe -eq '') { $hostExe = [string](Get-LeafField $Leaf 'Exe' '') }
+    $dbHost = Get-DbHost $hostText $localHosts $hostExe.ToLowerInvariant()
     $isLocal = Test-LocalHost $dbHost $localHosts
 
     if ($destructive) {
@@ -904,9 +1075,29 @@ function Test-Leaf($Leaf, $Config) {
     # SQL pravidlo se dal uplatnuje, ale jen kdyz uvozujici prikaz JE SQL klient.
     if ($Leaf.Kind -eq 'heredoc') {
         $clients = @(Get-Field $gate 'sqlClients' @())
+        $shells = @(Get-Field $gate 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
         $oe = ([string](Get-LeafField $Leaf 'OuterExe' '')).ToLowerInvariant()
-        if (-not ($clients -ccontains $oe)) { return $null }
-        return (Test-DatabaseRule $Leaf $Config)
+
+        if ($clients -ccontains $oe) { return (Test-DatabaseRule $Leaf $Config) }
+
+        # Nalez Amber E2: D3 udelala z tela heredocu SLEPE MISTO. `bash <<'EOF' /
+        # git reset --hard / EOF` je telo, ktere se SPUSTI - a zahazovalo se.
+        # Kdyz je uvozujici prikaz shell, telo je prikazova radka a rozebere se.
+        if ($shells -ccontains $oe) {
+            $worst = $null
+            foreach ($sub in (Split-CommandLine ([string]$Leaf.Raw))) {
+                foreach ($inner in (Get-CommandLeaf $sub 0)) {
+                    $r = Test-Leaf $inner $Config
+                    if ($null -eq $r) { continue }
+                    if ($r.Decision -eq 'deny') { return $r }
+                    if ($null -eq $worst) { $worst = $r }
+                }
+            }
+            return $worst
+        }
+
+        # Jinak je telo DATA (`cat > NOTES.md <<EOF`) a pravidla se na nej neuplatnuji.
+        return $null
     }
 
     # Nalez Metis 27: `git -c alias.bd='branch -D' bd x` schova destruktivni podprikaz
@@ -923,7 +1114,7 @@ function Test-Leaf($Leaf, $Config) {
     $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'denyPatterns' @())
     if ($shape) { return @{ Decision = 'deny'; Shape = $shape } }
 
-    foreach ($rule in @('Test-GitPushRule', 'Test-GitCleanRule', 'Test-RecursiveDeleteRule', 'Test-DatabaseRule')) {
+    foreach ($rule in @('Test-GitPushRule', 'Test-GitCleanRule', 'Test-GitRestoreRule', 'Test-RecursiveDeleteRule', 'Test-DatabaseRule')) {
         $r = & $rule $Leaf $Config
         if ($r -and $r.Decision -eq 'deny') { return $r }
         if ($r -and $r.Decision -eq 'ask' -and -not $script:PendingAsk) { $script:PendingAsk = $r }
@@ -991,6 +1182,10 @@ foreach ($sub in (Split-CommandLine $pipeline.Rest)) {
 foreach ($b in $heredoc.Bodies) {
     [void]$leaves.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+}
+# Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti (Z3 -> ask).
+if ($heredoc.Unterminated) {
+    [void]$leaves.Add(@{ Kind = 'opaque'; Raw = $command })
 }
 foreach ($b in $pipeline.Bodies) {
     if ($b.Opaque) {

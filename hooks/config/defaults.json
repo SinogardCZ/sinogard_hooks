@@ -31,11 +31,12 @@
     "_sqlClientsComment": "Nástroje, jejichž ARGUMENTY se čtou jako SQL. Bez tohoto seznamu běžely SQL vzory nad surovým textem a `git commit -m \"Add DROP TABLE migration\"` končilo dotazem. GSD je PostgreSQL-only (ADR-008), proto tu nejsou klienti cizích stacků.",
     "sqlClients": ["psql", "pgcli", "dropdb", "sqlcmd"],
 
+    "_shellInterpretersComment": "Uvozující příkazy, jejichž tělo heredocu je PŘÍKAZOVÁ ŘÁDKA, ne data. Bez tohoto seznamu bylo `bash <<'EOF' / git reset --hard / EOF` slepé místo — tělo se zahodilo (nález Amber E2).",
+    "shellInterpreters": ["bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd"],
+
     "denyPatterns": [
       { "id": "git-reset-hard",     "pattern": "^git\\s+reset\\b.*\\s--hard(\\s|$)",                   "shape": "git reset --hard" },
-      { "id": "git-checkout-dot",   "pattern": "^git\\s+checkout\\s+(?:(?!-b\\b)\\S+\\s+)?(?:--\\s+)?(?:\\.|\\./|\\.\\\\|\\*)(?:\\s|$)", "shape": "git checkout ." },
-      { "id": "git-restore-dot",    "pattern": "^git\\s+restore\\s+(?!.*--staged(?!.*--worktree))(?:--source\\s+\\S+\\s+)?(?:--\\s+)?(?:\\.|\\./|\\.\\\\|\\*)(?:\\s|$)", "shape": "git restore ." },
-      { "id": "git-restore-both",   "pattern": "^git\\s+restore\\s+.*--worktree.*(?:\\s)(?:\\.|\\./|\\.\\\\|\\*)(?:\\s|$)", "shape": "git restore --worktree ." },
+      { "_pozn_checkout_restore": "`git checkout .` a `git restore .` řeší Test-GitRestoreRule v gate.ps1 nad TOKENY, ne regexem nad textem. Regex to neuměl: nález Amber E3 ukázal, že `-s HEAD .` regex nikdy nechytí (`-s` bere hodnotu, `HEAD` není přepínač), a Amberin vlastní návrh `(-\\S*\\s+)*` má tutéž díru." },
       { "id": "git-branch-delete",  "pattern": "^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)", "shape": "git branch -d/-D" },
       { "id": "git-update-ref-del", "pattern": "^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)",       "shape": "git update-ref -d" },
       { "id": "git-push-delete",    "pattern": "^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)",             "shape": "git push --delete" },
@@ -61,6 +62,8 @@
       "recursiveDelete": "rekurzivní mazání mimo povolené složky ({target})",
       "recursiveDeleteWildcard": "rekurzivní mazání v povolené složce s hvězdičkou/proměnnou v cestě ({target})",
       "netDeleteVariable": "mazání .NET voláním, kde cíl je proměnná ({text})",
+      "gitCheckoutDot": "git checkout . (návrat pracovního stromu = ztráta práce)",
+      "gitRestoreDot": "git restore . (návrat pracovního stromu = ztráta práce)",
       "sqlFromPipe": "SQL, které v příkazu není vidět — teče do klienta z roury nebo ze souboru ({text})",
       "dbDestroyRemote": "destruktivní DB operace na hostiteli {host}",
       "dbDestroyLocal": "destruktivní DB operace na lokální databázi (dotaz v terminálu = SCHVALUJU vynucené nástrojem)",
@@ -117,9 +120,9 @@
       "settings.local.json"
     ],
 
-    "_envVarNamePatternComment": "DVĚ větve a MATCHUJE SE CASE-SENSITIVNĚ (viz envVarNameCaseSensitive) — na tom celý vzor stojí. Větev 1 = UPPER_SNAKE (`API_KEY`, `API_KEYS`, `AZURE_CREDENTIALS`, `DB_PASSWD`); větev 2 = camelCase, kde citlivé slovo je až za malým písmenem (`apiKey`, `secretKey`). Bez rozlišení velikosti by `tokens` spadlo do stejné množiny jako `API_KEYS` a ptalo by se na běžnou práci. Neukotvený vzor bral `$PWD`, `$keys`, `$tokens`, `$keyFile` (nálezy Amber B2 a C6). Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
-    "envVarNameCaseSensitive": true,
-    "envVarNamePattern": "(^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?(_|$)|(^|_)PWD_|_PWD$|[a-z](Key|Token|Secret|Password|Passwd|Credential)s?($|[A-Z_])",
+    "_envVarNamePatternComment": "DVA vzory se DVĚMA režimy velikosti písmen — jeden vzor to neumí. `envVarNamePattern` (podtržítkový zápis) se matchuje IGNORE-CASE, aby chytil i `db_password` a `github_token` (nález Amber E5); množné číslo je povolené jen ZA podtržítkem, takže `API_KEYS` se ptá a holé `tokens` ne. `envVarNameCamelPattern` se matchuje CASE-SENSITIVNĚ, protože jen tak zůstane `monkey` a `keyFile` běžnou prací, zatímco `secretKey` a `apiKey` se ptají. Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
+    "envVarNamePattern": "(?:^(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)|_(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?)(_|$)|_PWD(_|$)|^PWD_",
+    "envVarNameCamelPattern": "[a-z](Key|Token|Secret|Password|Passwd|Credential)s?($|[A-Z_])",
 
     "shapes": {
       "secretFile": "čtení/zápis souboru se secrets ({path})",

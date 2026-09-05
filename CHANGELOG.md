@@ -3,6 +3,64 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.3] — 2026-09-06
+
+Třetí opravné kolo. Tentokrát ale hlavně **strukturální oprava společné příčiny**: tři kola
+po sobě šla oprava → nová díra na témže místě (B4 → C1, D3 → E2, C2 → E3). Společnou příčinou
+nebyla ani jedna z těch oprav — bylo to **dělení příkazové řádky regexem**.
+
+### Změněno — jeden skener místo regexů
+
+`[regex]::Split` neumí uvozovky, takže `echo "DROP TABLE users;" | psql -h db` se rozpadlo
+uprostřed řetězce a destruktivní příkaz propadl. Nově má `_common.ps1` jediný znakový skener
+`Split-Unquoted` se stavem uvozovek a zanoření `$( )`; nad ním jsou tenké obaly
+`Split-Statement`, `Split-Pipe` a `Split-CommandLine`. Druhá kopie skeneru v `gate.ps1` je pryč.
+
+**Tento refaktor neměnil žádné pravidlo** a byl doložen tím, že sada `gate` dala přesně
+tentýž výsledek jako před ním (790/0/0). Změřeno i tempo, protože tři průchody mohly zpomalit:
+medián hooku **1653 ms před** proti **1541 ms po**, 60 měření na čtyřech tvarech.
+
+### Přidáno — regresní invariant
+
+`tests/fixtures/invariants.json` (142 řádků, **generováno z případových polí, ne ručním
+výběrem**): každý tvar, který kdy byl `deny`, jím zůstává; každý tvar označený jako falešný
+blok zůstává `allow`. Soubor je append-only. Důvod je konkrétní: v kole 1 jsem si falešný blok
+(`git restore --staged .`) zafixovala testem a v kole 2 oprava jednoho nálezu rozbila jiný —
+sada, která roste jen o nové případy, tohle nechytí.
+
+### Opraveno — nálezy review
+
+- **Roura do SQL klienta se rozpadala na středníku v řetězci** (`echo "DROP TABLE users;" | psql`).
+- **Tělo heredocu u shellu bylo slepé místo.** `bash <<'EOF' / git reset --hard / EOF` se
+  zahazovalo. Tělo se nově rozebírá jako příkazy, když uvozující příkaz je shell; u ostatních
+  zůstává daty. Neukončený heredoc → `ask`.
+- **`<<` uvnitř uvozovek** (`echo "<<x>>"`) zakládalo heredoc a spolklo zbytek příkazu.
+- **`git checkout`/`git restore` se rozhodují nad TOKENY**, ne regexem — regex neuměl
+  `git restore -s HEAD .` (`-s` bere hodnotu, takže `HEAD` není přepínač).
+- **Přepínače obalů mají hodnotu podle obalu, ne globálně.** `sudo -n` hodnotu nebere,
+  `nice -n` ano; `timeout 30 psql` přeskakuje číslo.
+- **Vzor jmen proměnných má dva režimy velikosti písmen.** Podtržítkový zápis ignore-case
+  (chytí `db_password`), camelCase case-sensitive (nechá `monkey` a `keyFile` na pokoji).
+- **`-S` je hostitel jen u `sqlcmd`** — u `psql` je to single-line bez hodnoty.
+- **Substituce v článku roury** (`$(git reset --hard) | psql`) se vyhodnocuje.
+
+### Opraveno — nálezy councilu Métis (druhé kolo)
+
+Council dostal opravený stav a vrátil 7 nálezů; osmý sám stáhl jako neplatný (ověřeno, že
+ho stáhl právem). Všech 7 jsou parsovací mezery v už hlídaných tvarech:
+
+- **`find -exec sh -c '…'`** ztrácelo uvozovky při skládání tokenů zpět, takže vnitřní `-c`
+  vzalo jen první slovo. Nové `Join-Argument` hranice zachová.
+- **`<<\SQL`** — třetí způsob potlačení expanze vedle `'SQL'` a `"SQL"`.
+- **`& { … }`** — blok skriptu je obal stejně jako závorka.
+- **`pwsh -enc`, `-enco`, `-encod`** — PowerShell bere každou jednoznačnou zkratku parametru;
+  vyjmenovat tři z nich nestačilo.
+- **Procesová substituce `<( … )`** je taky spuštěný příkaz.
+- **Dva heredocy na jednom řádku** — bral se jen první.
+- **`-ArgumentList @('-enc', …)`** — pole se rozloží na tokeny.
+
+---
+
 ## [0.1.2] — 2026-09-05
 
 Druhé opravné kolo po review Amber (nálezy C a D). **Všech 22 tvrzených tvarů bylo před
@@ -175,6 +233,7 @@ První verze. Čtyři hooky, Windows-first, bez externích závislostí.
 - **`userConfig` pluginu se nepoužívá** — ukládá se do globálních user settings,
   tedy společně pro všechny projekty na stroji.
 
+[0.1.3]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.3
 [0.1.2]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.0

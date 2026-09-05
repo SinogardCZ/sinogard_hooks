@@ -1,0 +1,858 @@
+{
+  "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli gate.tests.ps1, ne rucnim vyberem.",
+  "_odebrano": "2026-09-05: tvar 'echo DROP | TABLE users | psql' - radek nikdy neplatil. 'DROP | TABLE' neni platne SQL, takze deny bylo MOJE chybne ocekavani z tehoz kola, ne drivejsi chovani. Nahrazeno tvarem, ktery roury i stredniky v retezci testuje na platnem SQL.",
+  "rows":
+  [
+    {
+      "tool": "Bash",
+      "cmd": "git push --force origin main",
+      "expect": "deny",
+      "since": "push --force main"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -f origin HEAD:main",
+      "expect": "deny",
+      "since": "push -f HEAD:main"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin +main",
+      "expect": "deny",
+      "since": "push +main"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --force-with-lease origin main",
+      "expect": "deny",
+      "since": "push --force-with-lease main"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -f origin feature/x:refs/heads/main",
+      "expect": "deny",
+      "since": "push -f refs/heads/main"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git reset --hard",
+      "expect": "deny",
+      "since": "reset --hard"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git reset --hard HEAD~1",
+      "expect": "deny",
+      "since": "reset --hard HEAD~1"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout -- .",
+      "expect": "deny",
+      "since": "checkout -- ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore .",
+      "expect": "deny",
+      "since": "restore ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -D feature/x",
+      "expect": "deny",
+      "since": "branch -D"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --delete origin feature/x",
+      "expect": "deny",
+      "since": "push --delete"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git clean -fd",
+      "expect": "deny",
+      "since": "clean -fd"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git clean -f",
+      "expect": "deny",
+      "since": "clean -f"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git stash drop",
+      "expect": "deny",
+      "since": "stash drop"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git stash clear",
+      "expect": "deny",
+      "since": "stash clear"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf src",
+      "expect": "deny",
+      "since": "rm -rf src"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -r src",
+      "expect": "deny",
+      "since": "rm -r src"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -fr docs",
+      "expect": "deny",
+      "since": "rm -fr docs"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Remove-Item -Recurse -Force src",
+      "expect": "deny",
+      "since": "Remove-Item -Recurse src"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rmdir /s /q src",
+      "expect": "deny",
+      "since": "rmdir /s src"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "rd /s src",
+      "expect": "deny",
+      "since": "rd /s src"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "del /s src",
+      "expect": "deny",
+      "since": "del /s src"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf W:/dev/gsd/repo/src",
+      "expect": "deny",
+      "since": "rm -rf abs mimo"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"DROP DATABASE gsd\" \"Host=db.firma.cz;Username=x\"",
+      "expect": "deny",
+      "since": "DROP DATABASE vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql \"Host=db.firma.cz\" -c \"DROP TABLE Record\"",
+      "expect": "deny",
+      "since": "DROP TABLE vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql \"Host=db.firma.cz\" -c \"TRUNCATE Record\"",
+      "expect": "deny",
+      "since": "TRUNCATE vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dropdb -h db.firma.cz gsd",
+      "expect": "deny",
+      "since": "dropdb vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database drop --connection \"Host=db.firma.cz;Database=gsd\"",
+      "expect": "deny",
+      "since": "ef database drop vzdalene"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "psql \"Host=db.firma.cz\" -c \"DROP SCHEMA public CASCADE\"",
+      "expect": "deny",
+      "since": "DROP SCHEMA vzdalene PS"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database update --connection \"Host=db.firma.cz;Database=gsd\"",
+      "expect": "deny",
+      "since": "ef update vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ConnectionStrings__Default=\"Host=db.firma.cz;Database=gsd\" dotnet ef database update",
+      "expect": "deny",
+      "since": "ef update env vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git filter-branch --tree-filter x HEAD",
+      "expect": "deny",
+      "since": "filter-branch"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git filter-repo --path x",
+      "expect": "deny",
+      "since": "filter-repo"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git reflog expire --expire=now --all",
+      "expect": "deny",
+      "since": "reflog expire"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git gc --prune=now",
+      "expect": "deny",
+      "since": "gc --prune"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "npm test && git branch -D x",
+      "expect": "deny",
+      "since": "retez &&"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $(git branch -D x)",
+      "expect": "deny",
+      "since": "substituce $()"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo `git reset --hard`",
+      "expect": "deny",
+      "since": "substituce zpetny apostrof"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cd src ; rm -rf lib",
+      "expect": "deny",
+      "since": "retez ;"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo x | xargs rm -rf src",
+      "expect": "deny",
+      "since": "roura"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "FOO=1 git reset --hard",
+      "expect": "deny",
+      "since": "env prefix"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"git push -f origin main\"",
+      "expect": "deny",
+      "since": "bash -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sh -c \"git reset --hard\"",
+      "expect": "deny",
+      "since": "sh -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cmd /c \"rd /s /q src\"",
+      "expect": "deny",
+      "since": "cmd /c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "powershell -Command \"git branch -D x\"",
+      "expect": "deny",
+      "since": "powershell -Command"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -c \"git reset --hard\"",
+      "expect": "deny",
+      "since": "pwsh -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "eval \"git reset --hard\"",
+      "expect": "deny",
+      "since": "eval s literalem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "xargs git branch -D",
+      "expect": "deny",
+      "since": "xargs"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find . -name x -exec rm -rf {} ;",
+      "expect": "deny",
+      "since": "find -exec"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "/usr/bin/git reset --hard",
+      "expect": "deny",
+      "since": "absolutni cesta k exe"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git.exe reset --hard",
+      "expect": "deny",
+      "since": "exe s priponou"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "\"git\" reset --hard",
+      "expect": "deny",
+      "since": "exe v uvozovkach"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C ../x reset --hard",
+      "expect": "deny",
+      "since": "git -C"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c a=b push -f origin main",
+      "expect": "deny",
+      "since": "git -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --git-dir=../x/.git reset --hard",
+      "expect": "deny",
+      "since": "git --git-dir"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo rm -rf /etc/x",
+      "expect": "deny",
+      "since": "sudo"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "rm -r -fo src",
+      "expect": "deny",
+      "since": "alias rm -r -fo"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "ri -Recurse -Force src",
+      "expect": "deny",
+      "since": "alias ri"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Remove-Item -Recurse:$true -LiteralPath:src",
+      "expect": "deny",
+      "since": "parametr s dvojteckou"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Remove-Item -Path:src -Recurse",
+      "expect": "deny",
+      "since": "parametr s dvojteckou 2"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rimraf src",
+      "expect": "deny",
+      "since": "M1 rimraf"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin :main",
+      "expect": "deny",
+      "since": "M3 push :main"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin :refs/heads/main",
+      "expect": "deny",
+      "since": "M3 push :refs/heads/main"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -lc \"rm -rf src\"",
+      "expect": "deny",
+      "since": "M4 bash -lc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "command rm -rf src",
+      "expect": "deny",
+      "since": "M5 command"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Remove-Item src -Recurse:$true -Force:$true",
+      "expect": "deny",
+      "since": "M6 -Recurse dvojtecka"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find src -depth -delete",
+      "expect": "deny",
+      "since": "M7 find -delete"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet-ef database drop --connection \"Host=db.firma.cz;Database=gsd\"",
+      "expect": "deny",
+      "since": "M10 dotnet-ef drop"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git update-ref -d refs/heads/feature/old",
+      "expect": "deny",
+      "since": "M12 update-ref -d"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -df feature/old",
+      "expect": "deny",
+      "since": "M13 branch -df"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --mirror origin",
+      "expect": "deny",
+      "since": "M14 push --mirror"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql \"Host=db.firma.cz\" -c \"DROP/**/TABLE users\"",
+      "expect": "deny",
+      "since": "M17 DROP s komentarem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c clean.requireForce=false clean -dx",
+      "expect": "deny",
+      "since": "M26 clean.requireForce"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env -i rm -rf src",
+      "expect": "deny",
+      "since": "M28 env -i"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python scripts/build.py",
+      "expect": "allow",
+      "since": "M kontrola python skript"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find . -name \"*.cs\"",
+      "expect": "allow",
+      "since": "M kontrola find bez akce"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push",
+      "expect": "allow",
+      "since": "M kontrola push bez cile"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c core.pager=cat clean -n",
+      "expect": "allow",
+      "since": "M kontrola clean -n"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env FOO=1 npm test",
+      "expect": "allow",
+      "since": "M kontrola env s prikazem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf docs/hlášení/září",
+      "expect": "deny",
+      "since": "ceska cesta deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.Directory]::Delete('src', $true)",
+      "expect": "deny",
+      "since": "A1 kontrola literal src"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.Directory]::Delete('bin', $true)",
+      "expect": "allow",
+      "since": "A1 kontrola literal bin"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout .",
+      "expect": "deny",
+      "since": "A2 checkout ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore -- .",
+      "expect": "deny",
+      "since": "A2 restore -- ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore --staged .",
+      "expect": "allow",
+      "since": "A2 restore --staged neni ztrata"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout *",
+      "expect": "deny",
+      "since": "A2 checkout *"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout main",
+      "expect": "allow",
+      "since": "A2 kontrola vetev"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout -- src/Program.cs",
+      "expect": "allow",
+      "since": "A2 kontrola soubor"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore --staged src/Program.cs",
+      "expect": "allow",
+      "since": "A2 kontrola restore soubor"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout -b feature/x",
+      "expect": "allow",
+      "since": "A2 kontrola nova vetev"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$out = dotnet test",
+      "expect": "allow",
+      "since": "B1 prirazeni prikazu"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$env:FOO = 'x'",
+      "expect": "allow",
+      "since": "B1 prirazeni env"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$env:X = 'y'; git status",
+      "expect": "allow",
+      "since": "B1 prirazeni pak prikaz"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$i = 0",
+      "expect": "allow",
+      "since": "B1 prirazeni cisla"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$msg = \"ahoj\"",
+      "expect": "allow",
+      "since": "B1 prirazeni retezce"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$x = git branch -D feature/y",
+      "expect": "deny",
+      "since": "B1 prirazeni neprere"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$r = git reset --hard",
+      "expect": "deny",
+      "since": "B1 prirazeni reset"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$tool build",
+      "expect": "ask",
+      "since": "B1 Z3 zustava"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz -c \"DROP TABLE users\"",
+      "expect": "deny",
+      "since": "B4 psql -c vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database update --connection \"Server=db.firma.cz;Database=gsd\"",
+      "expect": "deny",
+      "since": "B5 Server= vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database update --connection \"Data Source=db.firma.cz;Database=gsd\"",
+      "expect": "deny",
+      "since": "B5 Data Source= vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database update --connection \"Server=localhost;Database=gsd\"",
+      "expect": "allow",
+      "since": "B5 kontrola Server=local"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz -c \"DELETE FROM users\"",
+      "expect": "deny",
+      "since": "T1 delete bez where vzdal"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"DELETE FROM users WHERE id=1\"",
+      "expect": "allow",
+      "since": "T1 kontrola s where"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz -c \"DELETE FROM users WHERE id=1\"",
+      "expect": "allow",
+      "since": "T1 kontrola where vzdalene"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE users\" | psql -h db.firma.cz",
+      "expect": "deny",
+      "since": "C1 echo do psql"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"SELECT 1\" | psql -h db.firma.cz",
+      "expect": "allow",
+      "since": "C1 kontrola SELECT"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE x\" | grep -i drop",
+      "expect": "allow",
+      "since": "C1 kontrola cizi sink"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat x.sql | wc -l",
+      "expect": "allow",
+      "since": "C1 kontrola wc"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "(git reset --hard)",
+      "expect": "deny",
+      "since": "C7b zavorka"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$x = (git reset --hard)",
+      "expect": "deny",
+      "since": "C7b zavorka v prirazeni"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& (git reset --hard)",
+      "expect": "deny",
+      "since": "C7b ampersand zavorka"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "@(git branch -D x)",
+      "expect": "deny",
+      "since": "C7b pole"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "(Get-Date)",
+      "expect": "allow",
+      "since": "C7b kontrola"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$d = (Get-Date)",
+      "expect": "allow",
+      "since": "C7b kontrola prirazeni"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout HEAD -- .",
+      "expect": "deny",
+      "since": "C2 checkout HEAD -- ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout ./",
+      "expect": "deny",
+      "since": "C2 checkout ./"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout .\\",
+      "expect": "deny",
+      "since": "C2 checkout .\\"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore --source HEAD .",
+      "expect": "deny",
+      "since": "C2 restore --source HEAD ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore --worktree .",
+      "expect": "deny",
+      "since": "C2 restore --worktree ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore --staged --worktree .",
+      "expect": "deny",
+      "since": "C2 restore obojí ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sqlcmd -S db.firma.cz -Q \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "C4 sqlcmd -S -Q"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE users;\" | psql -h db.firma.cz",
+      "expect": "deny",
+      "since": "E1 strednik v SQL"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE a; DROP TABLE b\" | psql -h db.firma.cz",
+      "expect": "deny",
+      "since": "E1 dva statementy"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"SELECT 'a|b'; DROP TABLE users\" | psql -h db.firma.cz",
+      "expect": "deny",
+      "since": "E1 roura v retezci"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"a;b\" | grep a",
+      "expect": "allow",
+      "since": "E1 kontrola cizi sink"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore --source=HEAD .",
+      "expect": "deny",
+      "since": "E3 restore --source=HEAD"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore -s HEAD .",
+      "expect": "deny",
+      "since": "E3 restore -s HEAD"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore -W .",
+      "expect": "deny",
+      "since": "E3 restore -W"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore -q .",
+      "expect": "deny",
+      "since": "E3 restore -q"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout -q HEAD -- .",
+      "expect": "deny",
+      "since": "E3 checkout -q HEAD -- ."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore --source HEAD src/a.cs",
+      "expect": "allow",
+      "since": "E3 kontrola soubor"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "$(git reset --hard) | psql -h db.firma.cz",
+      "expect": "deny",
+      "since": "E6 substituce do psql"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find . -exec sh -c 'rm -rf /srv/data' {} \\;",
+      "expect": "deny",
+      "since": "M1 find exec literal"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find . -name \"*.cs\" -exec grep -l TODO {} \\;",
+      "expect": "allow",
+      "since": "M1 kontrola"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& { git reset --hard }",
+      "expect": "deny",
+      "since": "M3 blok skriptu reset"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& { Remove-Item -Recurse -Force C:\\dulezite }",
+      "expect": "deny",
+      "since": "M3 blok skriptu delete"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& { Get-Date }",
+      "expect": "allow",
+      "since": "M3 kontrola"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -NoProfile -Command \"Get-Date\"",
+      "expect": "allow",
+      "since": "M4 kontrola -e neni enc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat <(psql -h prod -c \"DROP TABLE x\")",
+      "expect": "deny",
+      "since": "M5 procesova substituce"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "diff <(ls a) <(ls b)",
+      "expect": "allow",
+      "since": "M5 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -D $'main'",
+      "expect": "deny",
+      "since": "M8 ANSI-C quoting"
+    }
+  ]}

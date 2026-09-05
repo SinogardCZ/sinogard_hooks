@@ -203,7 +203,7 @@ function Test-EnvironmentDump([string]$Command) {
     return $false
 }
 
-function Get-SensitiveEnvName([string]$Command, [string]$NamePattern, [bool]$CaseSensitive = $true) {
+function Get-SensitiveEnvName([string]$Command, [string]$NamePattern, [string]$CamelPattern) {
     $patterns = @(
         '\$env:([A-Za-z_][A-Za-z0-9_]*)',
         '(?:^|[^A-Za-z0-9_])env:([A-Za-z_][A-Za-z0-9_]*)',
@@ -214,13 +214,12 @@ function Get-SensitiveEnvName([string]$Command, [string]$NamePattern, [bool]$Cas
     foreach ($p in $patterns) {
         foreach ($m in [regex]::Matches($Command, $p, 'IgnoreCase')) {
             $name = $m.Groups[1].Value
-            # POZOR: Jmeno se porovnava CASE-SENSITIVNE. Cely vzor stoji na rozliseni
-            # `API_KEYS` (citlive) od `tokens` (bezna promenna) a `apiKey` od `keyFile` -
-            # s IgnoreCase by se ta rozliseni slozila do jedne mnoziny a brana by se
-            # ptala na beznou praci (nalezy Amber B2 a C6). Vyhledavani JMEN v prikazu
-            # zustava case-insensitive, to je neco jineho.
-            $nameOpts = if ($CaseSensitive) { 'None' } else { 'IgnoreCase' }
-            if ([regex]::IsMatch($name, $NamePattern, $nameOpts)) { return $name }
+            # DVA vzory se DVEMA rezimy - jeden vzor to neumi (nalezy Amber C6 a E5):
+            #  - podtrzitkovy zapis IGNORE-CASE, aby chytil i `db_password`;
+            #    mnozne cislo jen ZA podtrzitkem, takze `API_KEYS` ano, hole `tokens` ne,
+            #  - camelCase CASE-SENSITIVNE, jinak by `monkey` a `keyFile` byly citlive.
+            if ([regex]::IsMatch($name, $NamePattern, 'IgnoreCase')) { return $name }
+            if ($CamelPattern -ne '' -and [regex]::IsMatch($name, $CamelPattern)) { return $name }
         }
     }
     return ''
@@ -248,8 +247,8 @@ function Test-SecretCommand([string]$Command, $Config) {
     }
 
     $namePattern = [string](Get-Field $sec 'envVarNamePattern' '(^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)S?(_|$)')
-    $caseSensitive = [bool](Get-Field $sec 'envVarNameCaseSensitive' $true)
-    $name = Get-SensitiveEnvName $Command $namePattern $caseSensitive
+    $camelPattern = [string](Get-Field $sec 'envVarNameCamelPattern' '')
+    $name = Get-SensitiveEnvName $Command $namePattern $camelPattern
     if ($name -ne '') {
         if ($null -eq $worst) {
             $worst = @{ Decision = 'ask'

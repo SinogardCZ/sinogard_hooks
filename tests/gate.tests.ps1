@@ -405,6 +405,133 @@ $amber2Cases = @(
 
 Test-Cases 'review Amber kolo 2 (C, D)' $amber2Cases
 
+# ================================================================================
+#  Review Amber kolo 3 (nalezy E a F). Vsech 17 tvaru bylo pred opravou zmereno.
+# ================================================================================
+
+$amber3Cases = @(
+    # --- E1: strednik/roura v UVOZOVKACH rozbily regexove deleni statementu ---
+    (Case 'E1 strednik v SQL'           'echo "DROP TABLE users;" | psql -h db.firma.cz' 'deny')
+    (Case 'E1 dva statementy'           'echo "DROP TABLE a; DROP TABLE b" | psql -h db.firma.cz' 'deny')
+    # Roura UVNITR retezce nesmi rozdelit clanky. `DROP | TABLE` by nebylo platne SQL,
+    # takze se testuje tvar, kde je roura v retezcovem literalu a SQL je platne.
+    (Case 'E1 roura v retezci'          'echo "SELECT ''a|b''; DROP TABLE users" | psql -h db.firma.cz' 'deny')
+    (Case 'E1 novy radek v retezci'     "echo `"DROP`nTABLE users`" | psql -h db.firma.cz" 'deny')
+    (Case 'E1 kontrola cizi sink'       'echo "a;b" | grep a' 'allow')
+
+    # --- E2: telo heredocu u SHELLU se spusti, takze se musi rozebrat ---
+    (Case 'E2 bash heredoc'             "bash <<'EOF'`ngit reset --hard`nEOF" 'deny')
+    (Case 'E2 sh heredoc'               "sh <<EOF`ngit reset --hard`nEOF" 'deny')
+    (Case 'E2 pwsh heredoc'             "pwsh <<EOF`ngit branch -D x`nEOF" 'deny' 'PowerShell')
+    (Case 'E2 bash heredoc neskodny'    "bash <<'EOF'`ngit status`nEOF" 'allow')
+    # `<<` v uvozovkach NENI heredoc
+    (Case 'E2 uvozovky nezacnou telo'   'echo "<<x>>"' 'allow')
+    # neukonceny heredoc: nevime, kde telo konci (Z3)
+    (Case 'E2 neukonceny heredoc'       "bash <<EOF`ngit status" 'ask')
+    # kontrolni skupina D3 plati dal: telo u NE-shellu jsou data
+    (Case 'E2 kontrola D3 poznamka'     "cat > NOTES.md <<EOF`ngit reset --hard je nebezpecny`nEOF" 'allow')
+
+    # --- E3: navrat pracovniho stromu pres tokeny, ne regexem ---
+    (Case 'E3 restore --source=HEAD'    'git restore --source=HEAD .' 'deny')
+    (Case 'E3 restore -s HEAD'          'git restore -s HEAD .' 'deny')
+    (Case 'E3 restore -W'               'git restore -W .' 'deny')
+    (Case 'E3 restore -q'               'git restore -q .' 'deny')
+    (Case 'E3 checkout -q HEAD -- .'    'git checkout -q HEAD -- .' 'deny')
+    (Case 'E3 kontrola staged'          'git restore --staged .' 'allow')
+    (Case 'E3 kontrola -b'              'git checkout -b feature/x' 'allow')
+    (Case 'E3 kontrola soubor'          'git restore --source HEAD src/a.cs' 'allow')
+    (Case 'E3 kontrola vetev'           'git checkout main' 'allow')
+
+    # --- E4: prepinace obalu maji hodnotu podle OBALU, ne globalne ---
+    (Case 'E4 sudo -n'                  "sudo -n psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
+    (Case 'E4 timeout 30'               "timeout 30 psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
+    (Case 'E4 nice -n 10'               "nice -n 10 psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
+
+    # --- F1: `-S` je hostitel jen u sqlcmd ---
+    (Case 'F1 psql -S neni host'        'psql -S -c "TRUNCATE x"' 'ask')
+    (Case 'F1 kontrola sqlcmd'          'sqlcmd -S db.firma.cz -Q "DROP TABLE x"' 'deny')
+
+    # --- E6: substituce v upstream clanku roury ---
+    (Case 'E6 substituce do psql'       '$(git reset --hard) | psql -h db.firma.cz' 'deny')
+)
+
+Test-Cases 'review Amber kolo 3 (E, F)' $amber3Cases
+
+# ================================================================================
+#  Council Metis, druhe kolo (2026-09-06) - nad opravenym stavem.
+#  Vratil 7 nalezu a osmy (ANSI-C quoting `$'main'`) SAM STAHL jako neplatny.
+#  Overila jsem i ten stazeny - mel pravdu, ze ho stahl.
+#  Vsech 7 jsou parsovaci mezery v uz deklarovanych tvarech, takze se opravuji.
+# ================================================================================
+
+$metis2Cases = @(
+    # M1 - find -exec sh -c: spojovani tokenu ztracelo uvozovky, takze vnitrni `-c`
+    #      vzalo jen prvni slovo. S LITERALNIM cilem je to ted deny.
+    (Case 'M1 find exec literal'        'find . -exec sh -c ''rm -rf /srv/data'' {} \;' 'deny')
+    #      S promennou v cili plati Z3 (rozsah nezname) - stejne jako u [IO.Directory]::Delete($p).
+    (Case 'M1 find exec promenna'       'find . -exec sh -c ''rm -rf "$0"'' {} \;' 'ask')
+    (Case 'M1 kontrola'                 'find . -name "*.cs" -exec grep -l TODO {} \;' 'allow')
+
+    # M2 - `<<\SQL` je treti zpusob potlaceni expanze vedle `'SQL'` a `"SQL"`
+    (Case 'M2 heredoc escaped delim'    "psql -h prod.db <<\SQL`nDROP TABLE users;`nSQL" 'deny')
+
+    # M3 - blok skriptu je obal stejne jako zavorka
+    (Case 'M3 blok skriptu reset'       '& { git reset --hard }' 'deny' 'PowerShell')
+    (Case 'M3 blok skriptu delete'      '& { Remove-Item -Recurse -Force C:\dulezite }' 'deny' 'PowerShell')
+    (Case 'M3 kontrola'                 '& { Get-Date }' 'allow' 'PowerShell')
+
+    # M4 - PowerShell bere kazdou jednoznacnou zkratku parametru
+    (Case 'M4 -enc'                     'pwsh -enc UmVtb3ZlLUl0ZW0gLVJlY3Vyc2UgLUZvcmNlIEM6XA==' 'ask' 'PowerShell')
+    (Case 'M4 -encod'                   'pwsh -encod UmVtb3ZlLUl0ZW0=' 'ask' 'PowerShell')
+    (Case 'M4 kontrola -e neni enc'     'pwsh -NoProfile -Command "Get-Date"' 'allow' 'PowerShell')
+
+    # M5 - procesova substituce je taky spusteny prikaz
+    (Case 'M5 procesova substituce'     'cat <(psql -h prod -c "DROP TABLE x")' 'deny')
+    (Case 'M5 kontrola'                 'diff <(ls a) <(ls b)' 'allow')
+
+    # M6 - na jednom radku muze byt heredocu vic; tela se ctou v poradi
+    (Case 'M6 dva heredocy'             "cat <<IGNORE && psql -h prod <<SQL`nignorovany text`nIGNORE`nDROP TABLE users;`nSQL" 'deny')
+
+    # M7 - -ArgumentList jako POLE se rozlozi na tokeny
+    (Case 'M7 ArgumentList pole'        "Start-Process pwsh -ArgumentList @('-enc', 'UmVtb3ZlLUl0ZW0gQzpc')" 'ask' 'PowerShell')
+    (Case 'M7 kontrola'                 "Start-Process git -ArgumentList @('status')" 'allow' 'PowerShell')
+
+    # M8 - Metis sam stahl; overuji, ze mel pravdu, ze to stahl
+    (Case 'M8 ANSI-C quoting'           'git branch -D $''main''' 'deny')
+)
+
+Test-Cases 'council Metis kolo 2 (2026-09-06)' $metis2Cases
+
+# ================================================================================
+#  REGRESNI INVARIANT (Amber, bod 2 kola 3)
+#
+#  Kazdy tvar, ktery kdy byl deny, jim ZUSTAVA - a kazdy tvar, ktery byl kdy
+#  oznacen za falesny blok, zustava allow. Duvod je konkretni: v kole 1 jsem si
+#  falesny blok (`git restore --staged .`) zafixovala testem, a v kole 2 oprava
+#  jednoho nalezu (B4) rozbila jiny (C1). Sada, ktera roste jen o nove pripady,
+#  tohle nechyti.
+#
+#  Soubor je APPEND-ONLY: radek z nej odchazi jen s citovanym rozhodnutim.
+# ================================================================================
+
+Start-Case 'regresni invariant (fixtures/invariants.json)'
+$invPath = Join-Path $script:RepoRoot 'tests/fixtures/invariants.json'
+if (-not (Test-SafePath $invPath)) {
+    $script:Skip++
+    Write-Host '    SKIP invariants.json chybi' -ForegroundColor Yellow
+} else {
+    $invDoc = [System.IO.File]::ReadAllText($invPath, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+    $rowsProp = $invDoc.PSObject.Properties['rows']
+    $inv = if ($null -eq $rowsProp) { @() } else { @($rowsProp.Value) }
+    Assert-True ($inv.Count -ge 100) ("invariantu je {0} (ceka se aspon 100)" -f $inv.Count)
+    foreach ($row in $inv) {
+        $fx = if ($row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+        $json = New-HookInput $fx @{ 'tool_input.command' = $row.cmd }
+        $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json
+        Assert-Equal $row.expect (Get-Decision $r) ("[invariant/{0}] {1}" -f $row.since, $row.cmd)
+    }
+}
+
 # Nestaci, ze rozhodnuti sedi - musi souhlasit i BAJTY duvodu. Cesky text prochazi
 # stdin -> skript -> stdout/stderr; kterykoli clanek v OEM strance by ho rozsypal
 # a rozhodnuti by pritom zustalo spravne.

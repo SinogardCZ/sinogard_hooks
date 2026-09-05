@@ -241,6 +241,21 @@ function Get-Substitution([string]$Text) {
         if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
         if ($c -eq "'") { $inSingle = $true; $i++; continue }
         # V dvojitych uvozovkach se substituce PROVADI, takze se prochazi dal.
+        # Procesova substituce `<( ... )` a `>( ... )` je taky spusteny prikaz
+        # (nalez Metis 5, kolo 2) - bere se stejne jako `$( ... )`.
+        if (($c -eq '<' -or $c -eq '>') -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {
+            $depth = 1
+            $j = $i + 2
+            $start = $j
+            while ($j -lt $n -and $depth -gt 0) {
+                if ($Text[$j] -eq '(') { $depth++ }
+                elseif ($Text[$j] -eq ')') { $depth-- }
+                $j++
+            }
+            $len = [Math]::Max(0, ($j - 1) - $start)
+            if ($len -gt 0) { [void]$out.Add($Text.Substring($start, $len)) }
+            $i = $j; continue
+        }
         if ($c -eq '$' -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {
             $depth = 1
             $j = $i + 2
@@ -257,6 +272,36 @@ function Get-Substitution([string]$Text) {
         $i++
     }
     return ,@($out)
+}
+
+# Slozi tokeny zpatky do prikazove radky a ZACHOVA hranice, ktere nesly uvozovky.
+#
+# Nalez Metis 1 (kolo 2): `find . -exec sh -c 'rm -rf "$0"' {} \;` se rozbaloval tak,
+# ze se tokeny spojily mezerou - `sh -c rm -rf "$0" {}` - a vnitrni `-c` uz vzalo jen
+# `rm`. Zbytek prikazu se ztratil. Token s bilym znakem se proto uvozuje zpet.
+function Join-Argument($Tokens) {
+    $parts = New-Object System.Collections.ArrayList
+    foreach ($t in $Tokens) {
+        $s = [string]$t
+        if ($s -match '\s') {
+            if ($s -notmatch "'") { [void]$parts.Add("'" + $s + "'") }
+            else { [void]$parts.Add('"' + ($s -replace '"', '""') + '"') }
+        } else {
+            [void]$parts.Add($s)
+        }
+    }
+    return ($parts -join ' ')
+}
+
+# Protejsek Join-Argument pro obaly, ktere berou PRIKAZOVOU RADKU jako jeden retezec
+# (`bash -c "..."`, `cmd /c "..."`, `eval`). Tam se hranice tokenu NESMI obnovovat -
+# ten retezec se ma znovu rozebrat jako prikaz, ne predat jako jeden argument.
+#
+# Rozdil mezi temihle dvema funkcemi neni kosmeticky: kdyz jsem Join-Argument pouzila
+# i tady, `cmd /c "rd /s /q src"` se zabalilo zpatky do uvozovek, uz se nerozebralo
+# a propadlo na allow. Chytil to regresni invariant, ne novy test.
+function Join-CommandString($Tokens) {
+    return (($Tokens | ForEach-Object { [string]$_ }) -join ' ')
 }
 
 # Statementy = to, co je oddeleno `;`, `&&`, `||`, `&` nebo koncem radku. ROURA NE.
