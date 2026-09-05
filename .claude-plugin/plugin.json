@@ -1,6 +1,6 @@
 {
   "name": "sinogard-hooks",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Windows-first PreToolUse guard rails: destructive git/DB operations, secrets files, resume cost report and attention notifications.",
   "author": {
     "name": "SinogardCZ",

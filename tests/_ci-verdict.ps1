@@ -57,7 +57,7 @@ if ($failed -gt 0) {
     exit 1
 }
 if ($passed -eq 0) {
-    Write-Host ("VERDIKT {0}: 0 passed - sada neovrila nic, zelena by byla lez" -f $Suite) -ForegroundColor Red
+    Write-Host ("VERDIKT {0}: 0 passed - sada neoverila nic, zelena by byla lez" -f $Suite) -ForegroundColor Red
     exit 1
 }
 

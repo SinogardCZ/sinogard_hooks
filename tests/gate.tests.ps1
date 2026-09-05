@@ -267,7 +267,10 @@ $amberCases = @(
     (Case 'A2 checkout .'               'git checkout .' 'deny')
     (Case 'A2 checkout -- .'            'git checkout -- .' 'deny')
     (Case 'A2 restore -- .'             'git restore -- .' 'deny')
-    (Case 'A2 restore --staged .'       'git restore --staged .' 'deny')
+    # 🔴 V kole 1 tu stalo 'deny' a byl to FALESNY BLOK, ktery jsem si testem zafixovala
+    # (nalez Amber C2). `git restore --staged .` jen odstaguje - prace se neztraci.
+    # Ztrata je az s `--worktree`, na to je vlastni pripad v bloku kola 2.
+    (Case 'A2 restore --staged neni ztrata' 'git restore --staged .' 'allow')
     (Case 'A2 checkout *'               'git checkout *' 'deny')
     # kontrolni skupina: prepnuti vetve a navrat JEDNOHO souboru je bezna prace
     (Case 'A2 kontrola vetev'           'git checkout main' 'allow')
@@ -337,6 +340,70 @@ $amberCases = @(
 )
 
 Test-Cases 'review Amber + rozhodnuti T-1' $amberCases
+
+# ================================================================================
+#  Review Amber kolo 2 (nalezy C a D). Vsech 22 tvaru bylo pred opravou ZMERENO
+#  a chovalo se presne tak, jak Amber napsala - vcetne C7b, kde chtela mereni.
+# ================================================================================
+
+$amber2Cases = @(
+    # --- C1: regrese, kterou zavedla oprava B4. Roura do SQL klienta. ---
+    (Case 'C1 echo do psql'             'echo "DROP TABLE users" | psql -h db.firma.cz' 'deny')
+    (Case 'C1 echo lokalne'             'echo "TRUNCATE users" | psql' 'ask')
+    (Case 'C1 cat souboru do psql'      'cat drop.sql | psql -h db.firma.cz' 'ask')
+    (Case 'C1 Get-Content do psql'      'Get-Content drop.sql | psql -h db.firma.cz' 'ask' 'PowerShell')
+    # kontrolni skupina
+    (Case 'C1 kontrola SELECT'          'echo "SELECT 1" | psql -h db.firma.cz' 'allow')
+    (Case 'C1 kontrola cizi sink'       'echo "DROP TABLE x" | grep -i drop' 'allow')
+    (Case 'C1 kontrola wc'              'cat x.sql | wc -l' 'allow')
+    # --- C1: heredoc s redirectem za delimiterem ---
+    (Case 'C1 heredoc 2>&1'             "psql -h db.firma.cz <<SQL 2>&1`nDROP TABLE users`nSQL" 'deny')
+    (Case 'C1 heredoc > out.log'        "psql -h db.firma.cz <<SQL > out.log`nDROP TABLE users`nSQL" 'deny')
+
+    # --- C7b: zavorkovy obal (Amber chtela zmerit - merenim potvrzeno) ---
+    (Case 'C7b zavorka'                 '(git reset --hard)' 'deny' 'PowerShell')
+    (Case 'C7b zavorka v prirazeni'     '$x = (git reset --hard)' 'deny' 'PowerShell')
+    (Case 'C7b ampersand zavorka'       '& (git reset --hard)' 'deny' 'PowerShell')
+    (Case 'C7b pole'                    '@(git branch -D x)' 'deny' 'PowerShell')
+    (Case 'C7b kontrola'                '(Get-Date)' 'allow' 'PowerShell')
+    (Case 'C7b kontrola prirazeni'      '$d = (Get-Date)' 'allow' 'PowerShell')
+
+    # --- C2: hrany A2 + falesny blok na --staged ---
+    (Case 'C2 checkout HEAD -- .'       'git checkout HEAD -- .' 'deny')
+    (Case 'C2 checkout ./'              'git checkout ./' 'deny')
+    (Case 'C2 checkout .\'              'git checkout .\' 'deny')
+    (Case 'C2 restore --source HEAD .'  'git restore --source HEAD .' 'deny')
+    (Case 'C2 restore --worktree .'     'git restore --worktree .' 'deny')
+    (Case 'C2 restore obojí .'          'git restore --staged --worktree .' 'deny')
+    # 🔴 falesny blok: odstagovani NENI ztrata prace
+    (Case 'C2 staged neni ztrata'       'git restore --staged .' 'allow')
+    (Case 'C2 kontrola vetev'           'git checkout main' 'allow')
+    (Case 'C2 kontrola nova vetev'      'git checkout -b feature/x' 'allow')
+    (Case 'C2 kontrola soubor'          'git checkout -- src/Program.cs' 'allow')
+
+    # --- C4: obal pred SQL klientem + sqlcmd ---
+    (Case 'C4 sudo psql'                "sudo -u postgres psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
+    (Case 'C4 docker exec psql'         "docker exec -i db psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
+    (Case 'C4 sqlcmd -S -Q'             'sqlcmd -S db.firma.cz -Q "DROP TABLE x"' 'deny')
+    (Case 'C4 sqlcmd lokalne'           'sqlcmd -Q "TRUNCATE TABLE x"' 'ask')
+    (Case 'C4 psql -f souborem'         'psql -h db.firma.cz -f migrace.sql' 'ask')
+    (Case 'C4 sqlcmd -i souborem'       'sqlcmd -S db.firma.cz -i migrace.sql' 'ask')
+    (Case 'C4 kontrola sudo SELECT'     "sudo -u postgres psql -h db.firma.cz <<SQL`nSELECT 1`nSQL" 'allow')
+
+    # --- C7: prava strana prirazeni bez volani ---
+    (Case 'C7 promenna do promenne'     '$a = $b' 'allow' 'PowerShell')
+    (Case 'C7 PATH s interpolaci'       '$env:PATH = "$env:PATH;C:\x"' 'allow' 'PowerShell')
+    (Case 'C7 retezec s interpolaci'    '$msg = "ahoj $name"' 'allow' 'PowerShell')
+    (Case 'C7 kontrola volani zustava'  '$x = (git reset --hard)' 'deny' 'PowerShell')
+
+    # --- D3: telo heredocu je DATA, ne prikazova radka ---
+    (Case 'D3 poznamka o prikazu'       "cat > NOTES.md <<EOF`ngit reset --hard je nebezpecny`nEOF" 'allow')
+    (Case 'D3 poznamka o rm'            "cat > NOTES.md <<EOF`nnikdy nepis rm -rf src`nEOF" 'allow')
+    # kontrolni skupina: SQL klient nad telem se dal uplatnuje
+    (Case 'D3 kontrola psql heredoc'    "psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
+)
+
+Test-Cases 'review Amber kolo 2 (C, D)' $amber2Cases
 
 # Nestaci, ze rozhodnuti sedi - musi souhlasit i BAJTY duvodu. Cesky text prochazi
 # stdin -> skript -> stdout/stderr; kterykoli clanek v OEM strance by ho rozsypal

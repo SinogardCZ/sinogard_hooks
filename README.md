@@ -132,6 +132,13 @@ aby si je nikdo nemusel objevit sám.
    se jeho pravá strana, protože jinak by `ask` končila každá druhá řádka běžné práce.
 9. **`*.json` se ptá.** Zástupný znak, který může padnout na chráněné jméno (`secrets.json`,
    `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
+10. **SQL, které v příkazu není vidět, končí `ask`.** `cat migrace.sql | psql`,
+    `psql -f migrace.sql`, `sqlcmd -i migrace.sql` i `$sql | psql` — obsah souboru ani
+    roury hook nečte, takže rozsah nezná. Literál z `echo "…" | psql` se rozebere.
+11. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
+    zkouška (skutečné okno na obrazovce) proběhne až při zapojení. Když se toast neukáže,
+    správná odpověď je přepnout `notify.channel` na `none` s uvedeným důvodem, ne tvrdit,
+    že upozornění fungují.
 
 ---
 
@@ -158,9 +165,9 @@ nesmí zastavit session.
 | Proměnná | Kde platí | Co dělá |
 |---|---|---|
 | `SINOGARD_HOOKS_DEBUG=1` | `gate.ps1`, `secrets.ps1` | K hlášce o interní chybě přidá výjimku a místo. Fail-closed to **neoslabuje** — pořád se blokuje, jen se navíc řekne proč. Bez ní zůstane v logu jen „internal error" a příčina nikde. Zapnutá na CI, v produkci vypnutá (mohla by nést cizí text). |
-| `SINOGARD_HOOKS_DRYRUN=1` | `notify.ps1` | Kanály `toast` a `messagebox` **nic nepošlou** a místo toho napíšou na stderr, co by poslaly. Používá to sada — jinak by testy střílely skutečná okna, která po sobě nechávají viset procesy. `stdout` zůstává prázdný, takže tvrzení „kanál nic nevypíše" platí dál. |
+| `SINOGARD_HOOKS_DRYRUN=1` | `notify.ps1`, hlásí `resume-cost.ps1` | Kanály `toast` a `messagebox` **nic nepošlou** a místo toho napíšou na stderr, co by poslaly. Používá to sada — jinak by testy střílely skutečná okna, která po sobě nechávají viset procesy. `stdout` zůstává prázdný, takže tvrzení „kanál nic nevypíše" platí dál. **Je to globální proměnná**, takže kdyby prosákla do produkce, upozornění by tiše přestala chodit — proto ji kanárek při startu session **přizná**. |
 
-`resume-cost.ps1` a `notify.ps1` žádnou diagnostiku nemají — jsou fail-open, takže
+`resume-cost.ps1` a `notify.ps1` `SINOGARD_HOOKS_DEBUG` nečtou — jsou fail-open, takže
 selhání nikdy nedrží session a nemá co skrývat.
 
 ---

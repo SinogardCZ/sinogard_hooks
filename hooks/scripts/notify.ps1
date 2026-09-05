@@ -54,6 +54,10 @@ function Send-Toast([string]$Title, [string]$Body) {
     # kdyz typ nejde nacist, hook mlci a vraci $false (kanal se pak nepouzije).
     try {
         [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        # Nalez Amber C5: driv prisel XmlDocument z GetTemplateContent(), takze se typ
+        # deklarovat nemusel. Po prechodu na vlastni XML uz ano - bez teto deklarace by
+        # `::new()` vyhodilo a `catch` by toast TISE zahodil.
+        [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
         $xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
         $xml.LoadXml((Get-ToastXml $Title $Body))
         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)

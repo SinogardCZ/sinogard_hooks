@@ -46,6 +46,13 @@ function Get-CanaryMessage($Config, [string]$Root) {
     $text = $text -replace '\{secrets\}', $state['secrets']
     $text = $text -replace '\{resume\}', $state['resumeCost']
     $text = $text -replace '\{notify\}', $state['notify']
+
+    # Nalez Amber D2: SINOGARD_HOOKS_DRYRUN je globalni promenna prostredi. Kdyby
+    # prosakla do produkce, upozorneni by TISE prestala chodit a kanarek by dal hlasil
+    # notify jako zapnuty. Ted to rekne nahlas.
+    if ($env:SINOGARD_HOOKS_DRYRUN -eq '1') {
+        $text = $text + (Get-Text $Config 'canaryDryRun' ' (notify: dry-run)')
+    }
     return $text
 }
 

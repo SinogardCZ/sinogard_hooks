@@ -248,6 +248,35 @@ $amberSecretCases = @(
 
 Test-Cases 'review Amber - osa 2' $amberSecretCases
 
+# ================================================================================
+#  Review Amber kolo 2: C6 (falesna negativa po ukotveni B2) a C3 (`credentials`).
+# ================================================================================
+
+$amber2SecretCases = @(
+    # --- C6: ukotveni B2 zavedlo falesna NEGATIVA (propoustelo citliva jmena) ---
+    (CmdCase 'C6 API_KEYS'            'echo $env:API_KEYS' 'ask' 'PowerShell')
+    (CmdCase 'C6 AZURE_CREDENTIALS'   'echo $env:AZURE_CREDENTIALS' 'ask' 'PowerShell')
+    (CmdCase 'C6 DB_PASSWD'           'echo $env:DB_PASSWD' 'ask' 'PowerShell')
+    (CmdCase 'C6 camelCase apiKey'    'echo $env:apiKey' 'ask' 'PowerShell')
+    (CmdCase 'C6 camelCase secretKey' 'echo $secretKey' 'ask' 'PowerShell')
+    (CmdCase 'C6 TOKENS'              'echo $env:GITHUB_TOKENS' 'ask' 'PowerShell')
+    # 🔴 kontrolni skupina - tohle musi ZUSTAT allow, jinak jsem si vyrobila zpatky B2
+    (CmdCase 'C6 kontrola PWD'        'echo $PWD' 'allow' 'PowerShell')
+    (CmdCase 'C6 kontrola keys'       'echo $keys' 'allow' 'PowerShell')
+    (CmdCase 'C6 kontrola tokens'     'echo $tokens' 'allow' 'PowerShell')
+    (CmdCase 'C6 kontrola keyFile'    'Get-Content $keyFile' 'allow' 'PowerShell')
+    (CmdCase 'C6 kontrola Path'       'echo $env:Path' 'allow' 'PowerShell')
+    (CmdCase 'C6 kontrola USERPROFILE' 'echo $env:USERPROFILE' 'allow' 'PowerShell')
+
+    # --- C3: `credentials` zustalo v kanonickych jmenech, ac dokumentace tvrdila opak ---
+    (CmdCase 'C3 glob cred'           'ls cred*' 'allow')
+    (CmdCase 'C3 cat credentials'     'cat credentials' 'allow')
+    # kontrolni skupina: s adresarem se chytit MUSI
+    (CmdCase 'C3 kontrola aws'        'cat .aws/credentials' 'deny')
+)
+
+Test-Cases 'review Amber kolo 2 (C3, C6)' $amber2SecretCases
+
 # ---------------------------------- trackovany .env.<x> je MERENI, ne fixture ---
 
 Start-Case 'trackovany .env.<x> v GSD repu -> allow'

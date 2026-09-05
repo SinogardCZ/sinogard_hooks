@@ -153,6 +153,23 @@ $r = Invoke-Hook -Script 'resume-cost.ps1' -InputJson $json -Environment @{
 Assert-Equal '' (Get-SystemMessage $r) '[override] vypnuty hook nehlasi nic'
 Assert-Equal 0 $r.Exit '[override] exit 0'
 
+# ------------------------------------------------- D2: kanarek hlasi dry-run ---
+
+# Nalez Amber D2: SINOGARD_HOOKS_DRYRUN je GLOBALNI promenna prostredi. Kdyby prosakla
+# do produkce, upozorneni by tise prestala chodit a kanarek by dal hlasil notify jako
+# zapnuty. Par musi izolovat prave tuhle jednu promennou - stejny vstup, jen s ni a bez ni.
+Start-Case 'kanarek prizna dry-run rezim (a bez nej mlci)'
+$json = New-HookInput 'sessionstart-startup' @{}
+
+$rDry = Invoke-Hook -Script 'resume-cost.ps1' -InputJson $json -Environment @{ SINOGARD_HOOKS_DRYRUN = '1' }
+$msgDry = Get-SystemMessage $rDry
+Assert-True ($msgDry -match 'DRY-RUN') '[dry-run] kanarek rezim prizna'
+
+$rNormal = Invoke-Hook -Script 'resume-cost.ps1' -InputJson $json
+$msgNormal = Get-SystemMessage $rNormal
+Assert-True ($msgNormal -notmatch 'DRY-RUN') '[bez dry-run] kanarek o nem mlci'
+Assert-True ($msgNormal -ne '') '[bez dry-run] kanarek porad neco hlasi'
+
 Write-TestSummary
 if ($script:Fail -gt 0) { exit 1 }
 exit 0

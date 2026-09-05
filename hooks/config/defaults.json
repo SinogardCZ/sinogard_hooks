@@ -16,6 +16,7 @@
     "canary": "sinogard-hooks {version} aktivní: gate {gate} secrets {secrets} resume {resume} notify {notify}",
     "canaryOk": "✔",
     "canaryOff": "—",
+    "canaryDryRun": " · notify: DRY-RUN (upozornění se neposílají)",
     "resumeMessage": "Resume po {h} h {m} min · {tokens} tokenů v kontextu · cache expirovala: {expired} · odhad zápisu do cache ${usd}",
     "resumeYes": "ano",
     "resumeNo": "ne",
@@ -32,8 +33,9 @@
 
     "denyPatterns": [
       { "id": "git-reset-hard",     "pattern": "^git\\s+reset\\b.*\\s--hard(\\s|$)",                   "shape": "git reset --hard" },
-      { "id": "git-checkout-dot",   "pattern": "^git\\s+checkout\\s+(-\\S*\\s+)*(\\.|\\*)(\\s|$)",     "shape": "git checkout ." },
-      { "id": "git-restore-dot",    "pattern": "^git\\s+restore\\s+(-\\S*\\s+)*(\\.|\\*)(\\s|$)",      "shape": "git restore ." },
+      { "id": "git-checkout-dot",   "pattern": "^git\\s+checkout\\s+(?:(?!-b\\b)\\S+\\s+)?(?:--\\s+)?(?:\\.|\\./|\\.\\\\|\\*)(?:\\s|$)", "shape": "git checkout ." },
+      { "id": "git-restore-dot",    "pattern": "^git\\s+restore\\s+(?!.*--staged(?!.*--worktree))(?:--source\\s+\\S+\\s+)?(?:--\\s+)?(?:\\.|\\./|\\.\\\\|\\*)(?:\\s|$)", "shape": "git restore ." },
+      { "id": "git-restore-both",   "pattern": "^git\\s+restore\\s+.*--worktree.*(?:\\s)(?:\\.|\\./|\\.\\\\|\\*)(?:\\s|$)", "shape": "git restore --worktree ." },
       { "id": "git-branch-delete",  "pattern": "^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)", "shape": "git branch -d/-D" },
       { "id": "git-update-ref-del", "pattern": "^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)",       "shape": "git update-ref -d" },
       { "id": "git-push-delete",    "pattern": "^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)",             "shape": "git push --delete" },
@@ -59,6 +61,7 @@
       "recursiveDelete": "rekurzivní mazání mimo povolené složky ({target})",
       "recursiveDeleteWildcard": "rekurzivní mazání v povolené složce s hvězdičkou/proměnnou v cestě ({target})",
       "netDeleteVariable": "mazání .NET voláním, kde cíl je proměnná ({text})",
+      "sqlFromPipe": "SQL, které v příkazu není vidět — teče do klienta z roury nebo ze souboru ({text})",
       "dbDestroyRemote": "destruktivní DB operace na hostiteli {host}",
       "dbDestroyLocal": "destruktivní DB operace na lokální databázi (dotaz v terminálu = SCHVALUJU vynucené nástrojem)",
       "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
@@ -103,19 +106,20 @@
       "otherPolicy": "trackedAllowElseAsk"
     },
 
-    "_protectedBaseNamesComment": "Kanonická jména chráněných souborů. Slouží JEN k testu, jestli cesta se zástupným znakem (`.en?`, `*`) vůbec může na chráněné jméno padnout — bez toho by se `ls *.md` ptalo pokaždé. `config.json`, `config` a `credentials` odsud odešly (nález Amber B3): chráněné jsou jen s adresářem (`.docker/config.json`, `.kube/config`, `.aws/credentials`), a holá jména dělala z `*.json` a `config*` dotaz. Seznam ale pořád nese `secrets.json` a `settings.local.json`, takže `*.json` se ptá dál — měření a dvě možnosti jsou v hlášení 02.",
+    "_protectedBaseNamesComment": "Kanonická jména chráněných souborů. Slouží JEN k testu, jestli cesta se zástupným znakem (`.en?`, `*`) vůbec může na chráněné jméno padnout — bez toho by se `ls *.md` ptalo pokaždé. `config.json` a `config` odsud odešly (nález Amber B3), `credentials` až v druhém kole (nález Amber C3 — komentář, CHANGELOG i README to tvrdily, seznam ne): chráněné jsou jen s adresářem (`.docker/config.json`, `.kube/config`, `.aws/credentials`), a holá jména dělala z `*.json` a `config*` dotaz. Seznam ale pořád nese `secrets.json` a `settings.local.json`, takže `*.json` se ptá dál — měření a dvě možnosti jsou v hlášení 02.",
     "protectedBaseNames": [
       ".env", ".env.local", ".env.production.local", ".envrc",
       "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_rsa.pub",
-      "credentials", "secrets.json", "secrets.yaml", "secrets.yml", "secrets.toml",
+      "secrets.json", "secrets.yaml", "secrets.yml", "secrets.toml",
       "server.pem", "server.key", "server.pfx", "server.p12", "store.jks", "putty.ppk",
       "key.asc", "key.gpg", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
       "prod.pubxml", "prod.publishsettings",
       "settings.local.json"
     ],
 
-    "_envVarNamePatternComment": "Ukotvené na hranice slova v ŠROUBOVACÍM zápisu. Neukotvený vzor bral `$PWD` (pracovní adresář), `$keys`, `$tokens` i `$keyFile` jako citlivé jméno a ptal se na běžnou práci (nález Amber B2). Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
-    "envVarNamePattern": "(^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(_|$)|(^|_)PWD_|_PWD$",
+    "_envVarNamePatternComment": "DVĚ větve a MATCHUJE SE CASE-SENSITIVNĚ (viz envVarNameCaseSensitive) — na tom celý vzor stojí. Větev 1 = UPPER_SNAKE (`API_KEY`, `API_KEYS`, `AZURE_CREDENTIALS`, `DB_PASSWD`); větev 2 = camelCase, kde citlivé slovo je až za malým písmenem (`apiKey`, `secretKey`). Bez rozlišení velikosti by `tokens` spadlo do stejné množiny jako `API_KEYS` a ptalo by se na běžnou práci. Neukotvený vzor bral `$PWD`, `$keys`, `$tokens`, `$keyFile` (nálezy Amber B2 a C6). Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
+    "envVarNameCaseSensitive": true,
+    "envVarNamePattern": "(^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?(_|$)|(^|_)PWD_|_PWD$|[a-z](Key|Token|Secret|Password|Passwd|Credential)s?($|[A-Z_])",
 
     "shapes": {
       "secretFile": "čtení/zápis souboru se secrets ({path})",

@@ -13,7 +13,14 @@
 
 $script:InternalMessage = 'secrets.ps1: internal error, blocked'
 trap {
-    try { Write-HookStderr $script:InternalMessage } catch { [Console]::Error.Write($script:InternalMessage) }
+    $msg = $script:InternalMessage
+    # Nalez Amber D1: README slibovalo diagnostiku i pro secrets.ps1, kod ji nemel.
+    # Sjednoceno smerem ke kodu - stejne jako v gate.ps1 je opt-in a NEOSLABUJE
+    # fail-closed: blokuje se dal, jen se navic rekne proc.
+    if ($env:SINOGARD_HOOKS_DEBUG -eq '1') {
+        $msg = $msg + " [debug] " + $_.Exception.Message + " @ " + $_.InvocationInfo.PositionMessage
+    }
+    try { Write-HookStderr $msg } catch { [Console]::Error.Write($msg) }
     exit 2
 }
 
@@ -196,7 +203,7 @@ function Test-EnvironmentDump([string]$Command) {
     return $false
 }
 
-function Get-SensitiveEnvName([string]$Command, [string]$NamePattern) {
+function Get-SensitiveEnvName([string]$Command, [string]$NamePattern, [bool]$CaseSensitive = $true) {
     $patterns = @(
         '\$env:([A-Za-z_][A-Za-z0-9_]*)',
         '(?:^|[^A-Za-z0-9_])env:([A-Za-z_][A-Za-z0-9_]*)',
@@ -207,7 +214,13 @@ function Get-SensitiveEnvName([string]$Command, [string]$NamePattern) {
     foreach ($p in $patterns) {
         foreach ($m in [regex]::Matches($Command, $p, 'IgnoreCase')) {
             $name = $m.Groups[1].Value
-            if ([regex]::IsMatch($name, $NamePattern, 'IgnoreCase')) { return $name }
+            # POZOR: Jmeno se porovnava CASE-SENSITIVNE. Cely vzor stoji na rozliseni
+            # `API_KEYS` (citlive) od `tokens` (bezna promenna) a `apiKey` od `keyFile` -
+            # s IgnoreCase by se ta rozliseni slozila do jedne mnoziny a brana by se
+            # ptala na beznou praci (nalezy Amber B2 a C6). Vyhledavani JMEN v prikazu
+            # zustava case-insensitive, to je neco jineho.
+            $nameOpts = if ($CaseSensitive) { 'None' } else { 'IgnoreCase' }
+            if ([regex]::IsMatch($name, $NamePattern, $nameOpts)) { return $name }
         }
     }
     return ''
@@ -234,8 +247,9 @@ function Test-SecretCommand([string]$Command, $Config) {
         }
     }
 
-    $namePattern = [string](Get-Field $sec 'envVarNamePattern' '(KEY|TOKEN|SECRET|PASSWORD|PWD|CREDENTIAL)')
-    $name = Get-SensitiveEnvName $Command $namePattern
+    $namePattern = [string](Get-Field $sec 'envVarNamePattern' '(^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)S?(_|$)')
+    $caseSensitive = [bool](Get-Field $sec 'envVarNameCaseSensitive' $true)
+    $name = Get-SensitiveEnvName $Command $namePattern $caseSensitive
     if ($name -ne '') {
         if ($null -eq $worst) {
             $worst = @{ Decision = 'ask'

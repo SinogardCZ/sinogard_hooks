@@ -48,6 +48,135 @@ function Get-LeafField($Leaf, [string]$Name, $Default = '') {
     return $Leaf[$Name]
 }
 
+# Jmeno spustitelneho souboru PO rozbaleni obalu.
+#
+# Nalez Amber C4: `sudo -u postgres psql <<SQL` a `docker exec -i db psql <<SQL` davaly
+# OuterExe `sudo` resp. `docker`, ty nejsou v sqlClients, telo heredocu se proto vubec
+# nectlo jako SQL a destruktivni operace propadla na allow. Rozbaleni obalu uz umi
+# Get-CommandLeaf, takze se pouzije ono a vezme se posledni list.
+function Get-UnwrappedExe([string]$Command) {
+    if ([string]::IsNullOrWhiteSpace($Command)) { return '' }
+    $argv = Split-Arguments $Command
+    if ($argv.Count -eq 0) { return '' }
+
+    $wrappers = '^(sudo|doas|nice|nohup|time|command|builtin|exec|env|timeout|stdbuf)$'
+    $containers = '^(docker|podman)$'
+    # Prepinace techto obalu berou HODNOTU, takze se preskakuji dva tokeny
+    # (`sudo -u postgres psql` - bez toho by rozbaleni skoncilo na `-u`).
+    $valueFlags = '^-(u|g|C|e|w|n|p|v|-user|-group|-env|-workdir)$'
+
+    $i = 0
+    $guard = 0
+    while ($i -lt $argv.Count -and $guard -lt 64) {
+        $guard++
+        $tok = [string]$argv[$i]
+
+        if ($tok -match '^-') {
+            if ($tok -cmatch $valueFlags) { $i += 2 } else { $i++ }
+            continue
+        }
+        # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
+        if ($tok -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
+
+        $name = Get-ExecutableName $tok
+        if ($name -match $wrappers) { $i++; continue }
+
+        # `docker exec -i nazev psql ...` / `podman run --rm obraz psql ...`
+        if ($name -match $containers) {
+            $i++
+            if ($i -lt $argv.Count -and $argv[$i] -match '^(exec|run)$') { $i++ }
+            while ($i -lt $argv.Count -and $argv[$i] -match '^-') {
+                if ($argv[$i] -cmatch $valueFlags) { $i += 2 } else { $i++ }
+            }
+            if ($i -lt $argv.Count) { $i++ }   # jmeno kontejneru nebo obrazu
+            continue
+        }
+
+        return $name
+    }
+    return ''
+}
+
+# Roura, jejimz POSLEDNIM clankem je SQL klient.
+#
+# Nalez Amber C1 - regrese, kterou zavedla oprava B4: `echo "DROP TABLE users" | psql -h db`
+# se delilo na dva listy. `echo` neni SQL klient, takze se jeho argument necetl jako SQL;
+# `psql` uz zadne SQL nemel. Vysledek allow, pritom pred B4 to byl ask.
+#
+# Vraci @{ Rest = prikazy bez techto rour; Bodies = @(...) } ve stejnem tvaru jako
+# Split-Heredoc: bud list typu 'heredoc' s literalnim SQL, nebo priznak, ze obsah
+# neni videt (pak plati Z3 -> ask).
+function Split-SqlPipeline([string]$Command, $SqlClients) {
+    $bodies = New-Object System.Collections.ArrayList
+    $keep = New-Object System.Collections.ArrayList
+
+    if ([string]::IsNullOrWhiteSpace($Command) -or $Command -notmatch '\|') {
+        return @{ Rest = $Command; Bodies = @() }
+    }
+
+    # Statementy se deli na `;`, `&&`, `||` a konce radku; uvnitr statementu je roura.
+    foreach ($stmt in [regex]::Split($Command, '(?:&&|\|\||;|\r?\n)')) {
+        if ([string]::IsNullOrWhiteSpace($stmt)) { continue }
+        # POZOR: bez `@()`. Split-Pipe uz vraci `,@(...)`, aby se jednoprvkovy vysledek
+        # nerozbalil na skalar; dalsi `@()` kolem toho by pole zabalilo JESTE JEDNOU
+        # a Count by byl 1 misto poctu clanku. Presne na tom tahle oprava poprve spadla.
+        $stages = Split-Pipe $stmt
+        if ($stages.Count -lt 2) { [void]$keep.Add($stmt); continue }
+
+        $sink = $stages[$stages.Count - 1]
+        $sinkExe = Get-UnwrappedExe $sink
+        if (-not ($SqlClients -ccontains $sinkExe.ToLowerInvariant())) {
+            [void]$keep.Add($stmt); continue
+        }
+
+        # Sink zustava normalnim listem (nese hostitele i vlastni -c).
+        [void]$keep.Add($sink)
+
+        $literal = New-Object System.Collections.ArrayList
+        $opaque = $false
+        for ($i = 0; $i -lt $stages.Count - 1; $i++) {
+            $up = $stages[$i].Trim()
+            $upExe = Get-UnwrappedExe $up
+            if ($upExe -match '^(echo|printf|write-output|write-host)$') {
+                foreach ($m in [regex]::Matches($up, '"([^"]*)"|''([^'']*)''')) {
+                    foreach ($g in 1, 2) { if ($m.Groups[$g].Success) { [void]$literal.Add($m.Groups[$g].Value) } }
+                }
+            } else {
+                # `cat drop.sql | psql`, `Get-Content x | psql`, `$sql | psql` - obsah
+                # neni v prikazu videt, takze rozsah nezname. Plati Z3.
+                $opaque = $true
+            }
+        }
+
+        if ($opaque) {
+            [void]$bodies.Add(@{ Outer = $sink; OuterExe = $sinkExe; Body = ''; Opaque = $true })
+        } elseif ($literal.Count -gt 0) {
+            [void]$bodies.Add(@{ Outer = $sink; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false })
+        }
+    }
+
+    return @{ Rest = ($keep -join "`n"); Bodies = @($bodies) }
+}
+
+# Rozdeli statement na clanky roury pri respektovani uvozovek.
+function Split-Pipe([string]$Statement) {
+    $parts = New-Object System.Collections.ArrayList
+    $buffer = New-Object System.Text.StringBuilder
+    $inSingle = $false
+    $inDouble = $false
+    for ($i = 0; $i -lt $Statement.Length; $i++) {
+        $c = $Statement[$i]
+        if ($c -eq "'" -and -not $inDouble) { $inSingle = -not $inSingle; [void]$buffer.Append($c); continue }
+        if ($c -eq '"' -and -not $inSingle) { $inDouble = -not $inDouble; [void]$buffer.Append($c); continue }
+        if ($c -eq '|' -and -not $inSingle -and -not $inDouble) {
+            [void]$parts.Add($buffer.ToString()); [void]$buffer.Clear(); continue
+        }
+        [void]$buffer.Append($c)
+    }
+    [void]$parts.Add($buffer.ToString())
+    return ,@($parts | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+}
+
 # Heredoc: telo je SQL, ale hostitel DB stoji v uvozujicim prikazu PRED `<<`.
 # Split-CommandLine deli i na konci radku, takze by se telo stalo samostatnym
 # podprikazem BEZ hosta - a `psql -h db.firma.cz <<SQL / DROP TABLE x / SQL`
@@ -67,14 +196,19 @@ function Split-Heredoc([string]$Command) {
     while ($i -lt $lines.Count) {
         $line = $lines[$i]
         # `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"` - ne `<<<` (here-string) a ne `<`.
-        $m = [regex]::Match($line, '<<-?\s*(?:''([A-Za-z_][A-Za-z0-9_]*)''|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))\s*$')
+        # Nalez Amber C1: kotva `\s*$` na konci znamenala, ze `<<SQL 2>&1` ani
+        # `<<SQL > out.log` se za heredoc nepovazovaly, telo se rozpadlo na radky
+        # a vzdalena destruktivni operace propadla na allow. Kotva je pryc; co je
+        # za delimiterem, zustava soucasti uvozujiciho prikazu (a nese tam hostitele).
+        $m = [regex]::Match($line, '<<-?\s*(?:''([A-Za-z_][A-Za-z0-9_]*)''|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))')
         if (-not $m.Success) {
             [void]$keep.Add($line); $i++; continue
         }
         $delim = ''
         foreach ($g in 1, 2, 3) { if ($m.Groups[$g].Success) { $delim = $m.Groups[$g].Value } }
 
-        $outer = $line.Substring(0, $m.Index).Trim()
+        # Co je ZA delimiterem (redirect), patri porad k uvozujicimu prikazu.
+        $outer = ($line.Substring(0, $m.Index) + ' ' + $line.Substring($m.Index + $m.Length)).Trim()
         [void]$keep.Add($outer)
 
         $bodyLines = New-Object System.Collections.ArrayList
@@ -82,10 +216,7 @@ function Split-Heredoc([string]$Command) {
         while ($j -lt $lines.Count -and $lines[$j].Trim() -ne $delim) {
             [void]$bodyLines.Add($lines[$j]); $j++
         }
-        $outerArgv = Split-Arguments $outer
-        $outerExe = ''
-        if ($outerArgv.Count -gt 0) { $outerExe = Get-ExecutableName $outerArgv[0] }
-        [void]$bodies.Add(@{ Outer = $outer; OuterExe = $outerExe; Body = ($bodyLines -join "`n") })
+        [void]$bodies.Add(@{ Outer = $outer; OuterExe = (Get-UnwrappedExe $outer); Body = ($bodyLines -join "`n") })
 
         $i = $j + 1   # radek s ukoncovacim delimiterem se zahazuje
     }
@@ -168,11 +299,23 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         '^\s*\$(?:env:|script:|global:|local:|using:)?[A-Za-z_][A-Za-z0-9_]*\s*[+\-*/]?=(?!=)\s*(.*)$')
     if ($assign.Success) {
         $rhs = $assign.Groups[1].Value.Trim()
-        # Prirazeni literalu (`$env:FOO = 'x'`, `$i = 0`) neni prikaz - zadny list.
-        if ($rhs -eq '' -or $rhs -match '^(?:''[^'']*''|"[^"$`]*"|[0-9]+|\$(?:true|false|null))$') {
+        # Nalez Amber C7: prava strana BEZ VOLANI (jen promenne, retezce, cisla) neni
+        # prikaz - `$a = $b` ani `$env:PATH = "$env:PATH;C:\x"` nic nespousti a bez teto
+        # vetve koncily ask, tedy falesny blok na bezne praci.
+        if ($rhs -eq '' -or $rhs -match '^(?:\$[\w:]+|"[^"]*"|''[^'']*''|[0-9]+|\$(?:true|false|null)|[\s;+,.\-])*$') {
             return $out
         }
         foreach ($l in (Get-CommandLeaf $rhs ($Depth + 1))) { [void]$out.Add($l) }
+        return $out
+    }
+
+    # Nalez Amber C7b (zmereno): zavorkovy obal `(git reset --hard)` dal argv[0] = `(git`,
+    # z toho exe `(git`, a zadne pravidlo se nechytilo -> allow. Obal se strhne a vnitrek
+    # se rozebere stejne jako u `&`. Kontrolni skupina `(Get-Date)` zustava allow, protoze
+    # se rozebere na `Get-Date` a ten neni destruktivni.
+    $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
+    if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
+        foreach ($l in (Get-CommandLeaf $paren.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
         return $out
     }
 
@@ -380,6 +523,9 @@ function Get-DbHost([string]$Raw, $LocalHosts) {
         '(?:^|[;\s"''])server\s*=\s*([^;"''\s]+)',
         '(?:^|[;\s"''])data\s+source\s*=\s*([^;"''\s]+)',
         '(?:^|\s)-h\s+([^\s"'']+)',
+        # Nalez Amber C4: sqlcmd bere hostitele jako `-S`. Bez toho se `sqlcmd -S db.firma.cz`
+        # cetl jako lokalni, ackoli sqlcmd v seznamu klientu byl.
+        '(?:^|\s)-S\s+([^\s"'']+)',
         '--host[= ]([^\s"'']+)',
         'postgres(?:ql)?://[^@/\s]*@([^:/\s]+)'
     )
@@ -666,11 +812,18 @@ function Get-SqlText($Leaf, $SqlClients) {
     $parts = New-Object System.Collections.ArrayList
     $args2 = @(Get-LeafField $Leaf 'Args' @())
     for ($i = 0; $i -lt $args2.Count; $i++) {
-        if ($args2[$i] -match '^(-c|--command)$' -and ($i + 1) -lt $args2.Count) {
+        # `-Q`/`-q` je sqlcmd, `-c`/`--command` psql (nalez Amber C4).
+        if ($args2[$i] -cmatch '^(-c|--command|-Q|-q)$' -and ($i + 1) -lt $args2.Count) {
             [void]$parts.Add([string]$args2[$i + 1]); $i++
             continue
         }
         if ($args2[$i] -match '^--command=(.*)$') { [void]$parts.Add($Matches[1]) }
+        # `-f x.sql` (psql) a `-i x.sql` (sqlcmd) davaji SQL ze SOUBORU - obsah v prikazu
+        # videt neni, takze plati Z3. Signalizuje se zvlastnim tokenem, ktery Test-DatabaseRule
+        # cte jako "neznamy rozsah".
+        if ($args2[$i] -cmatch '^(-f|-i)$' -and ($i + 1) -lt $args2.Count) {
+            [void]$parts.Add('__SQL_ZE_SOUBORU__'); $i++
+        }
     }
     foreach ($m in [regex]::Matches([string]$Leaf.Raw, '"([^"]*)"|''([^'']*)''')) {
         foreach ($g in 1, 2) { if ($m.Groups[$g].Success) { [void]$parts.Add($m.Groups[$g].Value) } }
@@ -694,6 +847,13 @@ function Test-DatabaseRule($Leaf, $Config) {
     # bily znak, takze `DROP/**/TABLE` je platny prikaz, ktery `\s+` nikdy nepotka.
     # `dotnet[- ]ef`: nalez Metis 10 - primo nainstalovany nastroj se jmenuje `dotnet-ef`.
     $gap = '(?:\s|/\*.*?\*/)+'
+
+    # SQL prislo ze souboru nebo z roury - obsah nevidime, rozsah nezname (Z3 -> ask).
+    if ($sql -match '__SQL_ZE_SOUBORU__') {
+        return @{ Decision = 'ask'
+                  Shape = ((Get-Field $shapes 'sqlFromPipe' 'SQL, ktery neni v prikazu videt ({text})') `
+                           -replace '\{text\}', $Leaf.Text) }
+    }
 
     $sqlDestructive = $false
     if ($sql -ne '') {
@@ -747,6 +907,24 @@ function Test-Leaf($Leaf, $Config) {
         if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
         return @{ Decision = 'ask'
                   Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+    }
+
+    # Nalez Amber C1: do SQL klienta tece neco, co v prikazu neni videt
+    # (`cat drop.sql | psql`, `$sql | psql`). Rozsah nezname -> Z3.
+    if ($Leaf.Kind -eq 'sqlPipeOpaque') {
+        return @{ Decision = 'ask'
+                  Shape = ((Get-Field $shapes 'sqlFromPipe' 'SQL z roury ({text})') -replace '\{text\}', $Leaf.Text) }
+    }
+
+    # Nalez Amber D3: telo heredocu je DATA, ne prikazova radka. Bez teto zavory
+    # prochazelo denyPatterns, takze `cat > NOTES.md <<EOF / git reset --hard je
+    # nebezpecny / EOF` skoncilo deny - zapis poznamky o prikazu blokovan jako prikaz.
+    # SQL pravidlo se dal uplatnuje, ale jen kdyz uvozujici prikaz JE SQL klient.
+    if ($Leaf.Kind -eq 'heredoc') {
+        $clients = @(Get-Field $gate 'sqlClients' @())
+        $oe = ([string](Get-LeafField $Leaf 'OuterExe' '')).ToLowerInvariant()
+        if (-not ($clients -ccontains $oe)) { return $null }
+        return (Test-DatabaseRule $Leaf $Config)
     }
 
     # Nalez Metis 27: `git -c alias.bd='branch -D' bd x` schova destruktivni podprikaz
@@ -820,13 +998,26 @@ $decision = $null
 # podprikazem bez hosta a vzdalena operace by se cetla jako lokalni (Amber A4).
 $heredoc = Split-Heredoc $command
 
+# Roura do SQL klienta se resi az nad zbytkem - heredoc uz je z nej pryc (Amber C1).
+$sqlClientList = @(Get-Field (Get-Field $config 'gate') 'sqlClients' @('psql', 'pgcli', 'dropdb', 'sqlcmd'))
+$pipeline = Split-SqlPipeline $heredoc.Rest $sqlClientList
+
 $leaves = New-Object System.Collections.ArrayList
-foreach ($sub in (Split-CommandLine $heredoc.Rest)) {
+foreach ($sub in (Split-CommandLine $pipeline.Rest)) {
     foreach ($leaf in (Get-CommandLeaf $sub 0)) { [void]$leaves.Add($leaf) }
 }
 foreach ($b in $heredoc.Bodies) {
     [void]$leaves.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+}
+foreach ($b in $pipeline.Bodies) {
+    if ($b.Opaque) {
+        [void]$leaves.Add(@{ Kind = 'sqlPipeOpaque'; Exe = 'sql-pipe'; Args = @(); Raw = $b.Outer
+                             Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+    } else {
+        [void]$leaves.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
+                             Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+    }
 }
 
 foreach ($leaf in $leaves) {
