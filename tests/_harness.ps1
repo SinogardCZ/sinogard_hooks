@@ -216,7 +216,20 @@ function Assert-TimingBudget {
 # Vytahne permissionDecision z vystupu hooku; prazdny vystup = 'allow'
 # (zadne rozhodnuti, plati normalni tok opravneni).
 function Get-Decision($Result) {
-    if ([string]::IsNullOrWhiteSpace($Result.Stdout)) { return 'allow' }
+    if ([string]::IsNullOrWhiteSpace($Result.Stdout)) {
+        # Prazdny stdout ma DVA vyznamy a sada je musela rozlisovat od zacatku:
+        #   exit 0 = hook se nevyjadril, plati normalni tok opravneni (allow),
+        #   exit != 0 = hook SPADL a fail-closed ho utnul.
+        # Kdyz se oboji hlasilo jako 'allow', spadly hook vypadal jako propusteny
+        # prikaz - presne tak se na CI schovala pricina za 44 radku "dostano allow".
+        if ($Result.Exit -ne 0) {
+            $why = ($Result.Stderr -replace '\s+', ' ').Trim()
+            if ($why.Length -gt 300) { $why = $why.Substring(0, 300) }
+            if ([string]::IsNullOrWhiteSpace($why)) { $why = '(bez stderr)' }
+            return ("CRASH(exit={0}): {1}" -f $Result.Exit, $why)
+        }
+        return 'allow'
+    }
     try {
         $obj = $Result.Stdout | ConvertFrom-Json
     } catch {

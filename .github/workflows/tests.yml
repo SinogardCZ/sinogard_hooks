@@ -9,6 +9,11 @@ on:
 jobs:
   tests:
     runs-on: windows-latest
+    # Na CI je diagnostika zapnuta zamerne: bez ni pad hooku vypada v logu jako
+    # "dostano allow" a pricina nikde neni. Fail-closed to neoslabuje - blokuje se
+    # dal, jen se navic rekne proc. V produkci zustava vypnuta (mohla by nest cizi text).
+    env:
+      SINOGARD_HOOKS_DEBUG: '1'
     strategy:
       fail-fast: false
       matrix:
