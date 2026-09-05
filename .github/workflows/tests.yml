@@ -21,7 +21,9 @@ jobs:
       - name: Verze interpretu
         shell: pwsh
         run: |
-          & "${{ matrix.interpreter }}" -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"
+          # Jednoduche uvozovky zamerne: ve dvojitych by $PSVersionTable rozbalil
+          # vnejsi pwsh jeste pred predanim dovnitr a interpret by dostal prazdno.
+          & "${{ matrix.interpreter }}" -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
 
       - name: gate
         shell: pwsh
