@@ -129,6 +129,13 @@ function Invoke-Hook {
     $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $psi.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
     $psi.WorkingDirectory = $script:RepoRoot
+
+    # SINOGARD_HOOKS_DRYRUN se VZDY vynuluje, dokud si ho pripad sam nenastavi.
+    # Je to globalni promenna prostredi a CI ji nastavuje pro celou ulohu, takze
+    # kanarkove testy doma merily neco jineho nez na CI - proslo to jen proto, ze
+    # muj shell ji nema. Test nesmi merit okolni prostredi; hodnotu si urcuje sam.
+    $psi.EnvironmentVariables['SINOGARD_HOOKS_DRYRUN'] = ''
+
     if ($Environment) {
         foreach ($k in $Environment.Keys) { $psi.EnvironmentVariables[$k] = [string]$Environment[$k] }
     }
