@@ -215,6 +215,20 @@ function Assert-TimingBudget {
 
 # Vytahne permissionDecision z vystupu hooku; prazdny vystup = 'allow'
 # (zadne rozhodnuti, plati normalni tok opravneni).
+# Tyto dve funkce jsou ZAMERNE kopie tech z hooks/scripts/_common.ps1, ne dot-source:
+# kdyby sada sdilela kod s tim, co meri, chyba v _common.ps1 by se schovala sama pred
+# sebou. Duplicitu drzim vedome a je to par radku.
+function Join-SafePath([string]$Base, [string]$Leaf) {
+    if ([string]::IsNullOrWhiteSpace($Base)) { return $null }
+    try { return [System.IO.Path]::Combine($Base, $Leaf) } catch { return $null }
+}
+
+function Test-SafePath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try { return [System.IO.File]::Exists($Path) -or [System.IO.Directory]::Exists($Path) }
+    catch { return $false }
+}
+
 # Cesta na jednotce, ktera na tomhle stroji NEEXISTUJE. Presne to potkalo hook na CI:
 # fixtures nesou cwd "W:/dev/gsd/repo", runner zadne W: nema, Join-Path/Test-Path
 # resolvuji PSDrive a misto "neni" vyhodily vyjimku. Vraci $null, kdyz jsou vsechna

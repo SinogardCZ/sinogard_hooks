@@ -222,9 +222,12 @@ Test-Cases 'allow - prikazy bez secrets' $allowCommands
 # ---------------------------------- trackovany .env.<x> je MERENI, ne fixture ---
 
 Start-Case 'trackovany .env.<x> v GSD repu -> allow'
-$devEnv = Join-Path $GsdRepo 'web/.env.development'
+# Join-SafePath/Test-SafePath i tady: $GsdRepo je cesta specificka pro muj stroj
+# a na CI zadne W: neni. S Join-Path pripad SPADL jeste driv, nez se dostal ke
+# svemu vlastnimu preskoceni - test se rozbil o presne tu vec, kterou meri.
+$devEnv = Join-SafePath $GsdRepo 'web/.env.development'
 $gitOk = $false
-if (Test-Path -LiteralPath $devEnv) {
+if (Test-SafePath $devEnv) {
     $null = & git -C $GsdRepo ls-files --error-unmatch 'web/.env.development' 2>$null
     $gitOk = ($LASTEXITCODE -eq 0)
 }
