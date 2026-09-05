@@ -108,29 +108,25 @@ function Get-UnwrappedExe([string]$Command) {
 # neni videt (pak plati Z3 -> ask).
 function Split-SqlPipeline([string]$Command, $SqlClients) {
     $bodies = New-Object System.Collections.ArrayList
-    $keep = New-Object System.Collections.ArrayList
 
     if ([string]::IsNullOrWhiteSpace($Command) -or $Command -notmatch '\|') {
         return @{ Rest = $Command; Bodies = @() }
     }
 
-    # Statementy se deli na `;`, `&&`, `||` a konce radku; uvnitr statementu je roura.
-    foreach ($stmt in [regex]::Split($Command, '(?:&&|\|\||;|\r?\n)')) {
+    # Nalez Amber E1: driv se tu delilo `[regex]::Split`, ktery neumi uvozovky, takze
+    # `echo "DROP TABLE users;" | psql -h db` se rozpadlo UPROSTRED retezce a destruktivni
+    # prikaz propadl na allow. Deli se jedinym skenerem z _common.ps1.
+    foreach ($stmt in (Split-Statement $Command)) {
         if ([string]::IsNullOrWhiteSpace($stmt)) { continue }
         # POZOR: bez `@()`. Split-Pipe uz vraci `,@(...)`, aby se jednoprvkovy vysledek
         # nerozbalil na skalar; dalsi `@()` kolem toho by pole zabalilo JESTE JEDNOU
         # a Count by byl 1 misto poctu clanku. Presne na tom tahle oprava poprve spadla.
         $stages = Split-Pipe $stmt
-        if ($stages.Count -lt 2) { [void]$keep.Add($stmt); continue }
+        if ($stages.Count -lt 2) { continue }
 
         $sink = $stages[$stages.Count - 1]
         $sinkExe = Get-UnwrappedExe $sink
-        if (-not ($SqlClients -ccontains $sinkExe.ToLowerInvariant())) {
-            [void]$keep.Add($stmt); continue
-        }
-
-        # Sink zustava normalnim listem (nese hostitele i vlastni -c).
-        [void]$keep.Add($sink)
+        if (-not ($SqlClients -ccontains $sinkExe.ToLowerInvariant())) { continue }
 
         $literal = New-Object System.Collections.ArrayList
         $opaque = $false
@@ -155,27 +151,13 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
         }
     }
 
-    return @{ Rest = ($keep -join "`n"); Bodies = @($bodies) }
+    # Rest se NEPREPISUJE. Sink i upstream clanky projdou normalni cestou pres
+    # Split-CommandLine, takze roura nic neschovava. Tim se navic sam opravil nalez E6:
+    # substituce v upstream clanku prijde jako dalsi podprikaz a skonci deny, ne ask.
+    return @{ Rest = $Command; Bodies = @($bodies) }
 }
 
-# Rozdeli statement na clanky roury pri respektovani uvozovek.
-function Split-Pipe([string]$Statement) {
-    $parts = New-Object System.Collections.ArrayList
-    $buffer = New-Object System.Text.StringBuilder
-    $inSingle = $false
-    $inDouble = $false
-    for ($i = 0; $i -lt $Statement.Length; $i++) {
-        $c = $Statement[$i]
-        if ($c -eq "'" -and -not $inDouble) { $inSingle = -not $inSingle; [void]$buffer.Append($c); continue }
-        if ($c -eq '"' -and -not $inSingle) { $inDouble = -not $inDouble; [void]$buffer.Append($c); continue }
-        if ($c -eq '|' -and -not $inSingle -and -not $inDouble) {
-            [void]$parts.Add($buffer.ToString()); [void]$buffer.Clear(); continue
-        }
-        [void]$buffer.Append($c)
-    }
-    [void]$parts.Add($buffer.ToString())
-    return ,@($parts | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
-}
+# Split-Pipe a Split-Statement zijou v _common.ps1 - jeden skener pro vsechna deleni.
 
 # Heredoc: telo je SQL, ale hostitel DB stoji v uvozujicim prikazu PRED `<<`.
 # Split-CommandLine deli i na konci radku, takze by se telo stalo samostatnym

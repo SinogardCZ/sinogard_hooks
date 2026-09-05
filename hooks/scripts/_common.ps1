@@ -159,81 +159,138 @@ function ConvertTo-NormalPath([string]$Path) {
 
 # ------------------------------------------------- rozklad prikazove radky ---
 
-# Rozdeli prikaz na podprikazy na &&, ||, ;, |, & a novem radku - mimo uvozovky.
-# Obsah $( ) a paru zpetnych apostrofu se vraci jako DALSI podprikazy (substituce se
-# taky provede). Stav uvozovek se sleduje, takze `;` uvnitr retezce nerozdeluje.
-function Split-CommandLine([string]$Command) {
-    $result = New-Object System.Collections.ArrayList
-    $extras = New-Object System.Collections.ArrayList
-    if ([string]::IsNullOrWhiteSpace($Command)) { return @() }
+# --------------------------------------------------------------- skener ---
+#
+# JEDINY skener pro vsechna deleni prikazove radky. Vzniknul po tretim kole oprav,
+# kde po sobe sla oprava -> nova dira na TEMZE miste (B4 -> C1, D3 -> E2, C2 -> E3).
+# Spolecna pricina nebyla ani jedna z tech oprav: bylo to deleni textu s uvozovkami
+# REGEXEM. `[regex]::Split` neumi uvozovky, takze `echo "DROP TABLE users;" | psql`
+# se rozpadlo uprostred retezce a destruktivni prikaz propadl (nalez Amber E1).
+#
+# Pravidlo: nad prikazovou radkou se NEDELI regexem. Vsechno deli tahle funkce.
 
-    $buffer = New-Object System.Text.StringBuilder
+function Split-Unquoted([string]$Text, [string[]]$Separators) {
+    if ([string]::IsNullOrEmpty($Text)) { return ,@() }
+
+    $out = New-Object System.Collections.ArrayList
+    $buf = New-Object System.Text.StringBuilder
     $i = 0
-    $n = $Command.Length
+    $n = $Text.Length
     $inSingle = $false
     $inDouble = $false
+    $depth = 0        # zanoreni do $( ... )
+
+    # Delsi separatory se zkousi driv, jinak by `&&` rozpadlo na dve `&`.
+    $seps = @($Separators | Sort-Object -Property Length -Descending)
 
     while ($i -lt $n) {
-        $c = $Command[$i]
+        $c = $Text[$i]
 
         if ($inSingle) {
+            [void]$buf.Append($c)
             if ($c -eq "'") { $inSingle = $false }
-            [void]$buffer.Append($c); $i++; continue
+            $i++; continue
         }
         if ($c -eq "'" -and -not $inDouble) {
-            $inSingle = $true; [void]$buffer.Append($c); $i++; continue
+            $inSingle = $true; [void]$buf.Append($c); $i++; continue
+        }
+        if ($c -eq '"') { $inDouble = -not $inDouble; [void]$buf.Append($c); $i++; continue }
+        if ($inDouble) { [void]$buf.Append($c); $i++; continue }
+
+        # $( ... ) se nedeli - je to jeden vyraz, ktery se rozebira zvlast.
+        if ($c -eq '$' -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {
+            $depth++; [void]$buf.Append('$('); $i += 2; continue
+        }
+        if ($depth -gt 0) {
+            if ($c -eq '(') { $depth++ }
+            elseif ($c -eq ')') { $depth-- }
+            [void]$buf.Append($c); $i++; continue
         }
 
-        # $( ... ) se sbira i uvnitr dvojitych uvozovek - tam se substituce provadi
-        if ($c -eq '$' -and ($i + 1) -lt $n -and $Command[$i + 1] -eq '(') {
-            $depth = 0
-            $j = $i + 1
-            while ($j -lt $n) {
-                if ($Command[$j] -eq '(') { $depth++ }
-                elseif ($Command[$j] -eq ')') { $depth--; if ($depth -eq 0) { break } }
+        $hit = $null
+        foreach ($s in $seps) {
+            if ($s.Length -gt 0 -and ($n - $i) -ge $s.Length -and
+                [string]::CompareOrdinal($Text, $i, $s, 0, $s.Length) -eq 0) {
+                $hit = $s; break
+            }
+        }
+        if ($null -ne $hit) {
+            [void]$out.Add($buf.ToString()); [void]$buf.Clear(); $i += $hit.Length; continue
+        }
+
+        [void]$buf.Append($c); $i++
+    }
+    [void]$out.Add($buf.ToString())
+
+    # `,` je nutna: PowerShell rozbaluje vracene pole a jednoprvkovy vysledek by
+    # se vratil jako skalar, na kterem `.Count` pod StrictMode pada.
+    # POZOR: na volajicim miste uz se kolem toho `@()` NEDAVA - zabalilo by to znovu.
+    return ,@($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+}
+
+# Obsah vsech `$( ... )` v textu (kvotove korektne, vcetne zanoreni).
+function Get-Substitution([string]$Text) {
+    $out = New-Object System.Collections.ArrayList
+    if ([string]::IsNullOrEmpty($Text)) { return ,@() }
+
+    $i = 0
+    $n = $Text.Length
+    $inSingle = $false
+    while ($i -lt $n) {
+        $c = $Text[$i]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
+        if ($c -eq "'") { $inSingle = $true; $i++; continue }
+        # V dvojitych uvozovkach se substituce PROVADI, takze se prochazi dal.
+        if ($c -eq '$' -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {
+            $depth = 1
+            $j = $i + 2
+            $start = $j
+            while ($j -lt $n -and $depth -gt 0) {
+                if ($Text[$j] -eq '(') { $depth++ }
+                elseif ($Text[$j] -eq ')') { $depth-- }
                 $j++
             }
-            $start = $i + 2
-            $len = [Math]::Max(0, [Math]::Min($j, $n) - $start)
-            [void]$extras.Add($Command.Substring($start, $len))
-            [void]$buffer.Append(' ')
-            $i = $j + 1
-            continue
+            $len = [Math]::Max(0, ($j - 1) - $start)
+            if ($len -gt 0) { [void]$out.Add($Text.Substring($start, $len)) }
+            $i = $j; continue
         }
-
-        if ($c -eq '"') { $inDouble = -not $inDouble; [void]$buffer.Append($c); $i++; continue }
-        if ($inDouble) { [void]$buffer.Append($c); $i++; continue }
-
-        if ($c -eq '&' -and ($i + 1) -lt $n -and $Command[$i + 1] -eq '&') {
-            [void]$result.Add($buffer.ToString()); [void]$buffer.Clear(); $i += 2; continue
-        }
-        if ($c -eq '|' -and ($i + 1) -lt $n -and $Command[$i + 1] -eq '|') {
-            [void]$result.Add($buffer.ToString()); [void]$buffer.Clear(); $i += 2; continue
-        }
-        if ($c -eq ';' -or $c -eq '|' -or $c -eq '&' -or $c -eq "`n" -or $c -eq "`r") {
-            [void]$result.Add($buffer.ToString()); [void]$buffer.Clear(); $i++; continue
-        }
-
-        [void]$buffer.Append($c); $i++
+        $i++
     }
-    [void]$result.Add($buffer.ToString())
+    return ,@($out)
+}
+
+# Statementy = to, co je oddeleno `;`, `&&`, `||`, `&` nebo koncem radku. ROURA NE.
+function Split-Statement([string]$Text) {
+    return (Split-Unquoted $Text @('&&', '||', ';', '&', "`n", "`r"))
+}
+
+# Clanky roury. Vstup uz MUSI byt jeden statement - jinak by se `||` rozpadlo na `|`.
+function Split-Pipe([string]$Statement) {
+    return (Split-Unquoted $Statement @('|'))
+}
+
+function Split-CommandLine([string]$Command) {
+    if ([string]::IsNullOrWhiteSpace($Command)) { return ,@() }
+
+    $result = New-Object System.Collections.ArrayList
+    foreach ($seg in (Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r"))) {
+        [void]$result.Add($seg)
+    }
+
+    # Substituce se rozebiraji navic - `echo $(git branch -D x)` je i to vnitrni.
+    foreach ($e in (Get-Substitution $Command)) {
+        foreach ($sub in (Split-CommandLine $e)) { [void]$result.Add($sub) }
+    }
 
     # Pary zpetnych apostrofu = substituce v Bashi. V PowerShellu je zpetny apostrof
     # escape, takze prevzeti obsahu je nanejvys falesne pozitivni, nikdy negativni.
     foreach ($m in [regex]::Matches($Command, '`([^`]+)`')) {
-        [void]$extras.Add($m.Groups[1].Value)
+        foreach ($sub in (Split-CommandLine $m.Groups[1].Value)) { [void]$result.Add($sub) }
     }
 
-    foreach ($e in $extras) {
-        foreach ($sub in (Split-CommandLine $e)) { [void]$result.Add($sub) }
-    }
-
-    # `,` je nutna: PowerShell rozbaluje vracene pole a jednoprvkovy vysledek by
-    # se vratil jako skalar, na kterem `.Count` pod StrictMode pada.
     return ,@($result | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
 }
 
-# Rozdeli podprikaz na argumenty pri respektovani uvozovek.
 function Split-Arguments([string]$Command) {
     $items = New-Object System.Collections.ArrayList
     $buffer = New-Object System.Text.StringBuilder
