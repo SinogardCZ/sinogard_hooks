@@ -3,6 +3,65 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.1] — 2026-09-05
+
+Opravné kolo po review Amber (osy 0–2) a rozhodnutí Toma T36-F1. Ke každé opravě
+existuje test i **kontrolní skupina** — tvar, který se musí chovat opačně.
+
+### Opraveno — falešné bloky na běžné práci
+
+Tohle je nejdůležitější část vydání. Brána, která blokuje běžnou práci, se do týdne
+vypne, a pak nechrání nic.
+
+- **Přiřazení v PowerShellu končilo `ask`** (v `bypassPermissions` `deny`).
+  `$out = dotnet test` i `$env:FOO = 'x'` se braly jako proměnná v pozici příkazu.
+  Nově se rozebírá pravá strana přiřazení — ale **přiřazení nic nepere**:
+  `$x = git branch -D y` zůstává `deny`.
+- **SQL vzory běžely nad surovým textem včetně řetězců.**
+  `git commit -m "Add DROP TABLE migration"`, `grep -r "DROP TABLE" src`,
+  `truncate -s 0 x.log` i `echo "TRUNCATE users"` končily dotazem. SQL se nově čte
+  jen ze skutečného SQL kontextu (nový seznam `gate.sqlClients`, hodnoty `-c`/`--command`,
+  těla heredoců).
+- **Vzor jmen proměnných nebyl ukotvený.** `$PWD` (pracovní adresář), `$keys`,
+  `$tokens` a `$keyFile` končily dotazem. Ukotveno na hranice slova; holé `PWD`
+  vyňato, `DB_PWD` chycené zůstává.
+- **`config.json`, `config` a `credentials`** odešly z kanonických jmen — chráněné
+  jsou až s adresářem (`.docker/`, `.kube/`, `.aws/`). `ls config*` a `cat config.json`
+  se už neptají. `*.json` se ptá dál, protože kanonicky zůstává `secrets.json`.
+
+### Opraveno — díry v pokrytí
+
+- **`git checkout .` a `git restore -- .` propouštěly.** Vzor vyžadoval `--`
+  s neprázdným pokračováním, takže holé `--` ani úplně chybějící `--` neodpovídaly.
+- **`[IO.Directory]::Delete($p, $true)` propouštělo.** Cíl byl proměnná a regex hledal
+  literál v uvozovkách. Nově `ask` (§2.3: obal s proměnnou → `ask`).
+- **Heredoc ztrácel hostitele.** `psql -h db.firma.cz <<SQL / DROP TABLE x / SQL` se
+  dělil po řádcích, tělo zůstalo bez hosta a vzdálená operace se četla jako lokální
+  (`ask` místo `deny`). Tělo heredocu nově dědí uvozující příkaz.
+- **`Server=` a `Data Source=`** se nečetly jako hostitel, ačkoli je Npgsql bere jako
+  synonymum `Host=`. `--connection "Server=db.firma.cz;…"` se četlo jako lokální.
+
+### Přidáno
+
+- **`DELETE FROM` bez `WHERE`** mezi hlídané tvary (rozhodnutí Toma T36-F1 T-1):
+  má stejný dopad jako `TRUNCATE`. S `WHERE` je to běžná práce a projde; `WHERE`
+  se hledá v tomtéž statementu, ne kdekoli v textu.
+- **`SINOGARD_HOOKS_DRYRUN=1`** — `toast` i `messagebox` místo odeslání napíšou na
+  stderr, co by poslaly. Sada tím přestala střílet skutečná okna.
+- **`tests/_ci-verdict.ps1`** — CI čte verdikt ze **souhrnného řádku** sady, ne
+  z návratového kódu. Selže, když řádek chybí, když `failed > 0` nebo když `passed = 0`.
+  Dřív by `0 passed / 0 failed` prošlo zeleně.
+
+### Změněno
+
+- **Toast je tichý** (`<audio silent="true"/>`) — zadání §2.3 říká „Zvuk ne", šablona
+  `ToastText02` ho ale hrála. XML se skládá jako řetězec, takže tvrzení o tichosti umí
+  ověřit sada i pod `pwsh 7`, kde WinRT vůbec neexistuje.
+- README: doplněny hranice metody (timeout propouští, hook čte text příkazu a ne to,
+  co z něj shell vyrobí) a tabulka proměnných prostředí.
+
+---
+
 ## [0.1.0] — 2026-09-05
 
 První verze. Čtyři hooky, Windows-first, bez externích závislostí.

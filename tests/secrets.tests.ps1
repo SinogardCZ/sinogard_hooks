@@ -219,6 +219,35 @@ Test-Cases 'deny - prikazy ctouci secrets (T36-N7)' $denyCommands
 Test-Cases 'ask - prostredi a promenne (T36-N7)' $askCommands
 Test-Cases 'allow - prikazy bez secrets' $allowCommands
 
+# ================================================================================
+#  Nalezy review Amber 2026-09-05 - osa 2 (falesne bloky na bezne praci).
+#  Kazdy ma kontrolni skupinu: tvar, ktery se dal chytit MUSI.
+# ================================================================================
+
+$amberSecretCases = @(
+    # --- B2: vzor jmen promennych byl neukotveny a bral kus slova. ---
+    (CmdCase 'B2 PWD je adresar'      'echo $PWD' 'allow' 'PowerShell')
+    (CmdCase 'B2 keys'                'echo $keys' 'allow' 'PowerShell')
+    (CmdCase 'B2 tokens'              'echo $tokens' 'allow' 'PowerShell')
+    (CmdCase 'B2 keyFile'             'Get-Content $keyFile' 'allow' 'PowerShell')
+    (CmdCase 'B2 monkey'              'echo $monkey' 'allow' 'PowerShell')
+    # kontrolni skupina: skutecne citlive jmeno se chytit MUSI
+    (CmdCase 'B2 kontrola API_KEY'    'echo $env:API_KEY' 'ask' 'PowerShell')
+    (CmdCase 'B2 kontrola DB_PWD'     'echo $env:DB_PWD' 'ask' 'PowerShell')
+    (CmdCase 'B2 kontrola SECRET'     'echo $env:CLIENT_SECRET' 'ask' 'PowerShell')
+    (CmdCase 'B2 kontrola TOKEN'      'echo $env:GITHUB_TOKEN' 'ask' 'PowerShell')
+
+    # --- B3: kanonicka jmena `config.json`, `config`, `credentials` odesla. ---
+    (CmdCase 'B3 glob config hvezda'  'ls config*' 'allow')
+    (CmdCase 'B3 cat config.json'     'cat config.json' 'allow')
+    # kontrolni skupina: chranene JE az s adresarem
+    (CmdCase 'B3 kontrola docker'     'cat .docker/config.json' 'deny')
+    (CmdCase 'B3 kontrola kube'       'cat .kube/config' 'deny')
+    (CmdCase 'B3 kontrola aws'        'cat .aws/credentials' 'deny')
+)
+
+Test-Cases 'review Amber - osa 2' $amberSecretCases
+
 # ---------------------------------- trackovany .env.<x> je MERENI, ne fixture ---
 
 Start-Case 'trackovany .env.<x> v GSD repu -> allow'

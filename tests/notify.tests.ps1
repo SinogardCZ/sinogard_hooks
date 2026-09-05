@@ -95,15 +95,44 @@ $r = Invoke-Hook -Script 'notify.ps1' -InputJson $json -Environment @{ CLAUDE_PR
 Assert-Equal 0 $r.Exit '[none] exit 0'
 Assert-Equal '' $r.Stdout.Trim() '[none] zadny stdout'
 
-Start-Case 'channel toast a messagebox nic neblokuji a nic nevypisou'
+# 🔴 SINOGARD_HOOKS_DRYRUN=1 je tu POVINNE, ne pohodli. Bez nej sada strilela skutecne
+# toasty a modalni okna - Tom je videl jako "nekolik notifikaci jako Windows warning"
+# a kazdy messagebox po sobe nechal viset skryty proces (nalez Amber B12).
+# Skutecna notifikace patri sonde, kterou pousti clovek, ne sade.
+$dryRun = @{ SINOGARD_HOOKS_DRYRUN = '1' }
+
+Start-Case 'channel toast a messagebox nic neblokuji a nic nevypisou (dry-run)'
 foreach ($ch in @('toast', 'messagebox')) {
     $dir = New-Override ('projekt-notify-' + $ch) ('{"notify":{"channel":"' + $ch + '","title":"Claude Code"}}')
     $json = New-HookInput 'notification' @{ 'notification_type' = 'permission_prompt' }
-    $r = Invoke-Hook -Script 'notify.ps1' -InputJson $json -Environment @{ CLAUDE_PROJECT_DIR = $dir }
+    $r = Invoke-Hook -Script 'notify.ps1' -InputJson $json -Environment ($dryRun + @{ CLAUDE_PROJECT_DIR = $dir })
     Assert-Equal 0 ($r.Exit) ("[{0}] exit 0" -f $ch)
     Assert-Equal '' ($r.Stdout.Trim()) ("[{0}] zadny stdout" -f $ch)
+    Assert-True ($r.Stderr -match 'DRYRUN') ("[{0}] dry-run rekl, co by poslal" -f $ch)
     Assert-True ($r.Ms -lt ((Get-HookCeilingMs) + 3000)) ("[{0}] doba {1} ms - neblokuje" -f $ch, $r.Ms)
 }
+
+# Zadani par. 2.3: "Zvuk ne". Sablona ToastText02 ale zvuk HRAJE, dokud se
+# `<audio silent="true"/>` nedoplni (nalez Amber A3). XML se proto sklada jako
+# retezec - jinak by tohle tvrzeni neslo overit pod pwsh 7, kde WinRT neexistuje.
+Start-Case 'toast je tichy - XML nese audio silent="true"'
+$dir = New-Override 'projekt-notify-toast-tichy' '{"notify":{"channel":"toast","title":"Claude Code"}}'
+$json = New-HookInput 'notification' @{ 'notification_type' = 'permission_prompt' }
+$r = Invoke-Hook -Script 'notify.ps1' -InputJson $json -Environment ($dryRun + @{ CLAUDE_PROJECT_DIR = $dir })
+Assert-True ($r.Stderr -match '<audio\s+silent="true"\s*/>') 'XML toastu vypina zvuk'
+Assert-True ($r.Stderr -match 'ToastText02') 'XML toastu drzi puvodni sablonu'
+
+Start-Case 'ridici a XML znaky ve jmene matcheru toast nerozbiji'
+$dir = New-Override 'projekt-notify-toast-escape' '{"notify":{"channel":"toast","title":"Claude & <Code>"}}'
+$json = New-HookInput 'notification' @{ 'notification_type' = 'perm<&>"x"' }
+$r = Invoke-Hook -Script 'notify.ps1' -InputJson $json -Environment ($dryRun + @{ CLAUDE_PROJECT_DIR = $dir })
+Assert-Equal 0 $r.Exit '[escape] exit 0'
+$xml = ''
+if ($r.Stderr -match '(<toast>.*</toast>)') { $xml = $Matches[1] }
+Assert-True ($xml -ne '') '[escape] XML se naslo na stderr'
+$parsed = $null
+try { $parsed = [xml]$xml } catch { $parsed = $null }
+Assert-True ($null -ne $parsed) '[escape] XML je porad platne (znaky jsou escapovane)'
 
 Start-Case 'vadny vstup hook nezastavi'
 foreach ($bad in @('', '{', '{"hook_event_name":"Notification"}')) {

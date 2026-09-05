@@ -250,6 +250,94 @@ Test-Cases 'allow - bezna prace' $allowCases
 Test-Cases 'nalezy councilu Metis (2026-09-05)' $metisCases
 Test-Cases 'ceske cesty - round-trip kodovani' $czechCases
 
+# ================================================================================
+#  Nalezy review Amber 2026-09-05 (osa 1 a 2) + rozhodnuti Toma T36-F1 T-1.
+#  U kazdeho nalezu je i KONTROLNI SKUPINA - tvar, ktery se musi chovat opacne.
+#  Bez ni by se neslo poznat, jestli oprava neprebila i beznou praci.
+# ================================================================================
+
+$amberCases = @(
+    # --- A1: .NET mazani, kde cil je promenna. Drive allow, ted ask (par. 2.3). ---
+    (Case 'A1 net-delete promenna'      '[IO.Directory]::Delete($p, $true)' 'ask' 'PowerShell')
+    (Case 'A1 net-delete promenna File' '[System.IO.File]::Delete($target)' 'ask' 'PowerShell')
+    (Case 'A1 kontrola literal src'     '[IO.Directory]::Delete(''src'', $true)' 'deny' 'PowerShell')
+    (Case 'A1 kontrola literal bin'     '[IO.Directory]::Delete(''bin'', $true)' 'allow' 'PowerShell')
+
+    # --- A2: navrat pracovniho stromu bez `--` a s holym `--`. ---
+    (Case 'A2 checkout .'               'git checkout .' 'deny')
+    (Case 'A2 checkout -- .'            'git checkout -- .' 'deny')
+    (Case 'A2 restore -- .'             'git restore -- .' 'deny')
+    (Case 'A2 restore --staged .'       'git restore --staged .' 'deny')
+    (Case 'A2 checkout *'               'git checkout *' 'deny')
+    # kontrolni skupina: prepnuti vetve a navrat JEDNOHO souboru je bezna prace
+    (Case 'A2 kontrola vetev'           'git checkout main' 'allow')
+    (Case 'A2 kontrola soubor'          'git checkout -- src/Program.cs' 'allow')
+    (Case 'A2 kontrola restore soubor'  'git restore --staged src/Program.cs' 'allow')
+    (Case 'A2 kontrola nova vetev'      'git checkout -b feature/x' 'allow')
+
+    # --- A4: heredoc dedi hostitele z uvozujiciho prikazu. ---
+    (Case 'A4 heredoc vzdaleny host'    "psql -h db.firma.cz <<SQL`nDROP TABLE users`nSQL" 'deny')
+    (Case 'A4 heredoc quoted delim'     "psql -h db.firma.cz <<'SQL'`nTRUNCATE users`nSQL" 'deny')
+    (Case 'A4 heredoc conn string'      "psql `"Host=db.firma.cz`" <<SQL`nDROP SCHEMA public CASCADE`nSQL" 'deny')
+    # bez hosta = lokalni = ask (ne deny)
+    (Case 'A4 heredoc lokalni'          "psql <<SQL`nDROP TABLE users`nSQL" 'ask')
+    # kontrolni skupina: nedestruktivni SQL v heredocu je bezna prace
+    (Case 'A4 kontrola SELECT'          "psql -h db.firma.cz <<SQL`nSELECT 1`nSQL" 'allow')
+    (Case 'A4 kontrola cizi heredoc'    "cat <<EOF`nDROP TABLE users`nEOF" 'allow')
+
+    # --- B1: prirazeni v PowerShellu neni promenna v pozici prikazu. ---
+    (Case 'B1 prirazeni prikazu'        '$out = dotnet test' 'allow' 'PowerShell')
+    (Case 'B1 prirazeni env'            '$env:FOO = ''x''' 'allow' 'PowerShell')
+    (Case 'B1 prirazeni pak prikaz'     '$env:X = ''y''; git status' 'allow' 'PowerShell')
+    (Case 'B1 viceradkovy snippet'      "`$out = dotnet test`nWrite-Host `$out" 'allow' 'PowerShell')
+    (Case 'B1 prirazeni cisla'          '$i = 0' 'allow' 'PowerShell')
+    (Case 'B1 prirazeni retezce'        '$msg = "ahoj"' 'allow' 'PowerShell')
+    # KLICOVE: prirazeni nic nepere - destruktivni prikaz na prave strane zustava deny
+    (Case 'B1 prirazeni neprere'        '$x = git branch -D feature/y' 'deny' 'PowerShell')
+    (Case 'B1 prirazeni reset'          '$r = git reset --hard' 'deny' 'PowerShell')
+    # a Z3 dal plati: promenna v pozici prikazu (bez `=`) je porad nerozebratelna
+    (Case 'B1 Z3 zustava'               '$tool build' 'ask' 'PowerShell')
+    # viceradkovy vstup nesmi destruktivni prikaz schovat
+    (Case 'B1 viceradkovy destruktivni' "Write-Host 'a'`ngit reset --hard" 'deny' 'PowerShell')
+
+    # --- B4: SQL vzory jen v SQL kontextu, ne nad kazdym textem. ---
+    (Case 'B4 commit message'           'git commit -m "Add DROP TABLE migration"' 'allow')
+    (Case 'B4 grep v kodu'              'grep -r "DROP TABLE" src' 'allow')
+    # 🔴 Amber cekala allow. Merenim vyslo, ze tenhle jediny tvar konci ask - ale
+    # UZ NE kvuli DB vzoru (ten je opraveny), nybrz kvuli Z3: `$x` je promenna,
+    # takze prikaz je nerozebratelny. Z3 je deklarovany tvar zadani par. 2.3 a jeho
+    # zuzeni je rozhodnuti zadavatele, ne oprava - viz hlaseni 02. Doklad, ze DB
+    # vzor uz nehraje roli, je radek pod tim: s LITERALEM je vysledek allow.
+    (Case 'B4 Math Truncate promenna'   '[Math]::Truncate($x)' 'ask' 'PowerShell')
+    (Case 'B4 Math Truncate literal'    '[Math]::Truncate(1.5)' 'allow' 'PowerShell')
+    (Case 'B4 truncate logu'            'truncate -s 0 x.log' 'allow')
+    (Case 'B4 echo textu'               'echo "TRUNCATE users"' 'allow')
+    (Case 'B4 Select-String'            'Select-String "DROP TABLE" -Path src/x.sql' 'allow' 'PowerShell')
+    # kontrolni skupina: v SQL kontextu to porad chytit MUSI
+    (Case 'B4 psql -c vzdalene'         'psql -h db.firma.cz -c "DROP TABLE users"' 'deny')
+    (Case 'B4 psql -c lokalne'          'psql -c "TRUNCATE users"' 'ask')
+
+    # --- B5: Npgsql bere Server= i Data Source= jako hostitele. ---
+    (Case 'B5 Server= vzdalene'         'dotnet ef database update --connection "Server=db.firma.cz;Database=gsd"' 'deny')
+    (Case 'B5 Data Source= vzdalene'    'dotnet ef database update --connection "Data Source=db.firma.cz;Database=gsd"' 'deny')
+    (Case 'B5 kontrola Server=local'    'dotnet ef database update --connection "Server=localhost;Database=gsd"' 'allow')
+
+    # --- T-1 (Tom): DELETE FROM bez WHERE ma dopad TRUNCATE. ---
+    (Case 'T1 delete bez where vzdal'   'psql -h db.firma.cz -c "DELETE FROM users"' 'deny')
+    (Case 'T1 delete bez where lokal'   'psql -c "DELETE FROM users"' 'ask')
+    (Case 'T1 delete heredoc'           "psql -h db.firma.cz <<SQL`nDELETE FROM users`nSQL" 'deny')
+    # kontrolni skupina: s WHERE je to bezna prace
+    (Case 'T1 kontrola s where'         'psql -c "DELETE FROM users WHERE id=1"' 'allow')
+    (Case 'T1 kontrola where vzdalene'  'psql -h db.firma.cz -c "DELETE FROM users WHERE id=1"' 'allow')
+    # WHERE musi byt v TOM SAMEM statementu, ne kdekoli v textu
+    (Case 'T1 where v jinem statementu' 'psql -c "SELECT * FROM a WHERE id=1; DELETE FROM users"' 'ask')
+
+    # --- B11 (Amber, zeleny): absolutni povolena cesta a tvar Git Bashe ---
+    (Case 'B11 absolutni bin'           'rm -rf W:/dev/gsd/repo/bin' 'allow')
+)
+
+Test-Cases 'review Amber + rozhodnuti T-1' $amberCases
+
 # Nestaci, ze rozhodnuti sedi - musi souhlasit i BAJTY duvodu. Cesky text prochazi
 # stdin -> skript -> stdout/stderr; kterykoli clanek v OEM strance by ho rozsypal
 # a rozhodnuti by pritom zustalo spravne.

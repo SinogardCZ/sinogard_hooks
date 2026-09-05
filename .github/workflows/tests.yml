@@ -14,6 +14,9 @@ jobs:
     # dal, jen se navic rekne proc. V produkci zustava vypnuta (mohla by nest cizi text).
     env:
       SINOGARD_HOOKS_DEBUG: '1'
+      # Sada nesmi strilet skutecne toasty ani modalni okna - na runneru by je
+      # nemel kdo zavrit a na stroji Toma je videl on (nalez Amber B12).
+      SINOGARD_HOOKS_DRYRUN: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -32,16 +35,16 @@ jobs:
 
       - name: gate
         shell: pwsh
-        run: pwsh -NoProfile -File tests/gate.tests.ps1 -Interpreter "${{ matrix.interpreter }}"
+        run: pwsh -NoProfile -File tests/_ci-verdict.ps1 -Suite gate -Interpreter "${{ matrix.interpreter }}"
 
       - name: secrets
         shell: pwsh
-        run: pwsh -NoProfile -File tests/secrets.tests.ps1 -Interpreter "${{ matrix.interpreter }}"
+        run: pwsh -NoProfile -File tests/_ci-verdict.ps1 -Suite secrets -Interpreter "${{ matrix.interpreter }}"
 
       - name: resume-cost
         shell: pwsh
-        run: pwsh -NoProfile -File tests/resume-cost.tests.ps1 -Interpreter "${{ matrix.interpreter }}"
+        run: pwsh -NoProfile -File tests/_ci-verdict.ps1 -Suite resume-cost -Interpreter "${{ matrix.interpreter }}"
 
       - name: notify
         shell: pwsh
-        run: pwsh -NoProfile -File tests/notify.tests.ps1 -Interpreter "${{ matrix.interpreter }}"
+        run: pwsh -NoProfile -File tests/_ci-verdict.ps1 -Suite notify -Interpreter "${{ matrix.interpreter }}"

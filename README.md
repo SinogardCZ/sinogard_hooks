@@ -5,8 +5,13 @@ cena obnovení session a upozornění, když se čeká na člověka.** Windows-f
 bez externích závislostí.
 
 Plugin vznikl proto, že schvalovací brána („nic destruktivního bez výslovného souhlasu")
-byla do té doby vynucená jen chováním modelu. Hook ji posouvá do harness vrstvy, která
-selhat nemůže — model si ji nemůže rozmyslet.
+byla do té doby vynucená jen chováním modelu. Hook ji posouvá do harness vrstvy, kterou
+si **model nemůže rozmyslet** — rozhodnutí padá mimo něj.
+
+To ale neznamená, že selhat nemůže **vůbec**. Může, a stojí za to vědět jak: hook, který
+překročí `timeout`, Claude Code **nezablokuje** — příkaz projde. Rozklad příkazové řádky
+je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z něj shell vyrobí.**
+Úplný seznam hranic je v [Známá omezení](#známá-omezení).
 
 ---
 
@@ -114,6 +119,19 @@ aby si je nikdo nemusel objevit sám.
    ne k falešnému `allow`.
 5. **`git clean -X` bez `-x`** (tedy jen ignorované soubory) je `ask`, ne `deny` —
    `-fdX` je legitimní úklid buildu.
+6. **Hook čte text příkazu, ne to, co z něj shell vyrobí.** `psql -c ('TRUN' + 'CATE TABLE x')`
+   se skládá až za běhu; statický rozbor takový tvar nemá jak vidět. Totéž platí pro
+   jakoukoli expanzi proměnných. Poctivá odpověď je, že tohle je hranice metody, ne
+   nedodělek — proto tvary s proměnnou končí `ask`, a ne `allow`.
+7. **Timeout hooku propouští.** Když handler nestihne `timeout` z `hooks/hooks.json`,
+   Claude Code ho na `PreToolUse` **neblokuje** — příkaz projde. Timeouty jsou proto
+   nastavené vysoko nad naměřený studený start a hook nedělá nic, co by mohlo čekat
+   na síť nebo na člověka.
+8. **Proměnná v pozici příkazu končí `ask`, i když jde o výraz.** `[Math]::Truncate($x)`
+   se nerozebere, takže rozhoduje člověk. Přiřazení `$x = <příkaz>` je výjimka: rozebere
+   se jeho pravá strana, protože jinak by `ask` končila každá druhá řádka běžné práce.
+9. **`*.json` se ptá.** Zástupný znak, který může padnout na chráněné jméno (`secrets.json`,
+   `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
 
 ---
 
@@ -135,8 +153,15 @@ jakékoli výjimce, prázdném nebo nevalidním vstupu **exit 2** — tedy bloku
 `resume-cost.ps1` a `notify.ps1` naopak končí **exit 0** a mlčí: chyba v evidenci
 nesmí zastavit session.
 
-Diagnostika: `SINOGARD_HOOKS_DEBUG=1` přidá k hlášce o interní chybě výjimku a místo.
-Fail-closed to neoslabuje — pořád se blokuje, jen se navíc řekne proč.
+### Proměnné prostředí
+
+| Proměnná | Kde platí | Co dělá |
+|---|---|---|
+| `SINOGARD_HOOKS_DEBUG=1` | `gate.ps1`, `secrets.ps1` | K hlášce o interní chybě přidá výjimku a místo. Fail-closed to **neoslabuje** — pořád se blokuje, jen se navíc řekne proč. Bez ní zůstane v logu jen „internal error" a příčina nikde. Zapnutá na CI, v produkci vypnutá (mohla by nést cizí text). |
+| `SINOGARD_HOOKS_DRYRUN=1` | `notify.ps1` | Kanály `toast` a `messagebox` **nic nepošlou** a místo toho napíšou na stderr, co by poslaly. Používá to sada — jinak by testy střílely skutečná okna, která po sobě nechávají viset procesy. `stdout` zůstává prázdný, takže tvrzení „kanál nic nevypíše" platí dál. |
+
+`resume-cost.ps1` a `notify.ps1` žádnou diagnostiku nemají — jsou fail-open, takže
+selhání nikdy nedrží session a nemá co skrývat.
 
 ---
 

@@ -37,6 +37,61 @@ $ErrorActionPreference = 'Stop'
 
 $PluginRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 
+# ------------------------------------------------------------- pomocne ---
+
+# List je hashtable a ne kazdy nese kazdy klic. Pod StrictMode je pristup k chybejicimu
+# klici hazardni, takze se cte pres ContainsKey.
+function Get-LeafField($Leaf, [string]$Name, $Default = '') {
+    if ($null -eq $Leaf) { return $Default }
+    if (-not $Leaf.ContainsKey($Name)) { return $Default }
+    if ($null -eq $Leaf[$Name]) { return $Default }
+    return $Leaf[$Name]
+}
+
+# Heredoc: telo je SQL, ale hostitel DB stoji v uvozujicim prikazu PRED `<<`.
+# Split-CommandLine deli i na konci radku, takze by se telo stalo samostatnym
+# podprikazem BEZ hosta - a `psql -h db.firma.cz <<SQL / DROP TABLE x / SQL`
+# by skoncilo jako lokalni operace (ask) misto vzdalene (deny). Nalez Amber A4.
+#
+# Vraci @{ Rest = prikaz bez tel heredocu; Bodies = @(@{ Outer; OuterExe; Body }) }.
+function Split-Heredoc([string]$Command) {
+    $bodies = New-Object System.Collections.ArrayList
+    if ([string]::IsNullOrWhiteSpace($Command)) {
+        return @{ Rest = $Command; Bodies = @() }
+    }
+    if ($Command -notmatch '<<') { return @{ Rest = $Command; Bodies = @() } }
+
+    $lines = [regex]::Split($Command, '\r?\n')
+    $keep = New-Object System.Collections.ArrayList
+    $i = 0
+    while ($i -lt $lines.Count) {
+        $line = $lines[$i]
+        # `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"` - ne `<<<` (here-string) a ne `<`.
+        $m = [regex]::Match($line, '<<-?\s*(?:''([A-Za-z_][A-Za-z0-9_]*)''|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))\s*$')
+        if (-not $m.Success) {
+            [void]$keep.Add($line); $i++; continue
+        }
+        $delim = ''
+        foreach ($g in 1, 2, 3) { if ($m.Groups[$g].Success) { $delim = $m.Groups[$g].Value } }
+
+        $outer = $line.Substring(0, $m.Index).Trim()
+        [void]$keep.Add($outer)
+
+        $bodyLines = New-Object System.Collections.ArrayList
+        $j = $i + 1
+        while ($j -lt $lines.Count -and $lines[$j].Trim() -ne $delim) {
+            [void]$bodyLines.Add($lines[$j]); $j++
+        }
+        $outerArgv = Split-Arguments $outer
+        $outerExe = ''
+        if ($outerArgv.Count -gt 0) { $outerExe = Get-ExecutableName $outerArgv[0] }
+        [void]$bodies.Add(@{ Outer = $outer; OuterExe = $outerExe; Body = ($bodyLines -join "`n") })
+
+        $i = $j + 1   # radek s ukoncovacim delimiterem se zahazuje
+    }
+    return @{ Rest = ($keep -join "`n"); Bodies = @($bodies) }
+}
+
 # ------------------------------------------------------------- pravidla ---
 
 # Globalni prepinace gitu pred podprikazem. Hodnota: kolik tokenu se preskoci.
@@ -101,6 +156,25 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $stripped = [regex]::Replace($trimmed,
         '^\s*([A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|''[^'']*''|\S*)\s+)+', '')
+
+    # PowerShellove PRIRAZENI `$x = <prikaz>` neni volani promenne v pozici prikazu.
+    # Bez teto vetve bral Test-Unexpandable `$out` jako promennou v pozici prikazu
+    # (Z3) a KAZDE prirazeni koncilo ask - v bypassu deny. `$out = dotnet test` je
+    # ale bezna prace a falesne bloky na bezne praci branu do tydne vypnou (Amber B1).
+    #
+    # Prirazeni ale nic NEPERE: `$x = git branch -D y` se rozebira dal jako
+    # `git branch -D y` a skonci deny.
+    $assign = [regex]::Match($stripped,
+        '^\s*\$(?:env:|script:|global:|local:|using:)?[A-Za-z_][A-Za-z0-9_]*\s*[+\-*/]?=(?!=)\s*(.*)$')
+    if ($assign.Success) {
+        $rhs = $assign.Groups[1].Value.Trim()
+        # Prirazeni literalu (`$env:FOO = 'x'`, `$i = 0`) neni prikaz - zadny list.
+        if ($rhs -eq '' -or $rhs -match '^(?:''[^'']*''|"[^"$`]*"|[0-9]+|\$(?:true|false|null))$') {
+            return $out
+        }
+        foreach ($l in (Get-CommandLeaf $rhs ($Depth + 1))) { [void]$out.Add($l) }
+        return $out
+    }
 
     $argv = Split-Arguments $stripped
     if ($argv.Count -eq 0) { return $out }
@@ -301,6 +375,10 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 function Get-DbHost([string]$Raw, $LocalHosts) {
     $patterns = @(
         'host\s*=\s*([^;"''\s]+)',
+        # Nalez Amber B5: Npgsql bere `Server=` i `Data Source=` jako synonymum `Host=`.
+        # Bez nich se `--connection "Server=db.firma.cz;..."` cetlo jako lokalni.
+        '(?:^|[;\s"''])server\s*=\s*([^;"''\s]+)',
+        '(?:^|[;\s"''])data\s+source\s*=\s*([^;"''\s]+)',
         '(?:^|\s)-h\s+([^\s"'']+)',
         '--host[= ]([^\s"'']+)',
         'postgres(?:ql)?://[^@/\s]*@([^:/\s]+)'
@@ -448,6 +526,15 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         '\[(?:System\.)?IO\.(?:Directory|File)\]::Delete\(\s*[''"]([^''"]+)[''"]', 'IgnoreCase')
     foreach ($m in $netMatches) { $recursive = $true; [void]$targets.Add($m.Groups[1].Value) }
 
+    # Nalez Amber A1: `[IO.Directory]::Delete($p, $true)` - cil je PROMENNA, regex nad
+    # literalem v uvozovkach ji nenajde a bez teto vetve by cely tvar skoncil jako
+    # allow. Zadani par. 2.3: obal s promennou -> ask. Cil nezname, tak se pta.
+    if ($Leaf.Exe -eq 'net-delete' -and $targets.Count -eq 0) {
+        return @{ Decision = 'ask'
+                  Shape = ((Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})') `
+                           -replace '\{text\}', $Leaf.Text) }
+    }
+
     if (-not $recursive) {
         if ($script:PsRemoveExe -notcontains $Leaf.Exe) { return $null }
 
@@ -540,25 +627,89 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
     return $worst
 }
 
+# Rozhodnuti Toma 2026-09-05/T36-F1 T-1: `DELETE FROM` bez `WHERE` ma stejny dopad
+# jako TRUNCATE (nalez Metis 9), takze patri mezi hlidane tvary. S `WHERE` je to
+# bezna prace a musi projit - proto se dotaz deli po strednicich a `WHERE` se hleda
+# v TOM statementu, ne kdekoli v textu.
+function Test-DeleteWithoutWhere([string]$Sql) {
+    if ([string]::IsNullOrWhiteSpace($Sql)) { return $false }
+    foreach ($stmt in [regex]::Split($Sql, ';')) {
+        if (-not [regex]::IsMatch($stmt, '\bdelete(?:\s|/\*.*?\*/)+from\b', 'IgnoreCase')) { continue }
+        if (-not [regex]::IsMatch($stmt, '\bwhere\b', 'IgnoreCase')) { return $true }
+    }
+    return $false
+}
+
+# Text, ktery je SKUTECNE SQL - ne cely prikaz.
+#
+# Nalez Amber B4: vzory bezely nad surovym textem vcetne retezcu, takze
+# `git commit -m "Add DROP TABLE migration"`, `grep -r "DROP TABLE" src`,
+# `[Math]::Truncate($x)` i `truncate -s 0 x.log` koncily ask. To je falesny blok
+# na bezne praci a takova brana se do tydne vypne.
+#
+# SQL se proto cte jen odtud:
+#   - telo heredocu, jehoz UVOZUJICI prikaz je SQL klient (a4),
+#   - hodnoty -c / --command u SQL klienta,
+#   - retezce v uvozovkach u SQL klienta.
+# `dropdb` a `dotnet ef` zustavaji vazane na JMENO nastroje, ne na text.
+function Get-SqlText($Leaf, $SqlClients) {
+    $kind = [string](Get-LeafField $Leaf 'Kind' '')
+    if ($kind -eq 'heredoc') {
+        $outerExe = [string](Get-LeafField $Leaf 'OuterExe' '')
+        if ($SqlClients -ccontains $outerExe.ToLowerInvariant()) { return [string]$Leaf.Raw }
+        return ''
+    }
+
+    $exe = [string](Get-LeafField $Leaf 'Exe' '')
+    if (-not ($SqlClients -ccontains $exe.ToLowerInvariant())) { return '' }
+
+    $parts = New-Object System.Collections.ArrayList
+    $args2 = @(Get-LeafField $Leaf 'Args' @())
+    for ($i = 0; $i -lt $args2.Count; $i++) {
+        if ($args2[$i] -match '^(-c|--command)$' -and ($i + 1) -lt $args2.Count) {
+            [void]$parts.Add([string]$args2[$i + 1]); $i++
+            continue
+        }
+        if ($args2[$i] -match '^--command=(.*)$') { [void]$parts.Add($Matches[1]) }
+    }
+    foreach ($m in [regex]::Matches([string]$Leaf.Raw, '"([^"]*)"|''([^'']*)''')) {
+        foreach ($g in 1, 2) { if ($m.Groups[$g].Success) { [void]$parts.Add($m.Groups[$g].Value) } }
+    }
+    return ($parts -join ' ; ')
+}
+
 function Test-DatabaseRule($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
     $localHosts = @(Get-Field $gate 'localDbHosts' @('localhost', '127.0.0.1', '::1'))
+    $sqlClients = @(Get-Field $gate 'sqlClients' @('psql', 'pgcli', 'dropdb'))
     $raw = $Leaf.Raw
+
+    # Hostitel se cte i z UVOZUJICIHO prikazu - u tela heredocu stoji jen tam (A4).
+    $hostText = [string]$raw + ' ' + [string](Get-LeafField $Leaf 'Outer' '')
+
+    $sql = Get-SqlText $Leaf $sqlClients
 
     # `(?:\s|/\*.*?\*/)+` misto `\s+`: nalez Metis 17 - SQL bere blokovy komentar jako
     # bily znak, takze `DROP/**/TABLE` je platny prikaz, ktery `\s+` nikdy nepotka.
     # `dotnet[- ]ef`: nalez Metis 10 - primo nainstalovany nastroj se jmenuje `dotnet-ef`.
     $gap = '(?:\s|/\*.*?\*/)+'
-    $destructive = ([regex]::IsMatch($raw, ('\bdrop' + $gap + '(table|database|schema)\b'), 'IgnoreCase')) -or
-                   ([regex]::IsMatch($raw, '\btruncate\b', 'IgnoreCase')) -or
+
+    $sqlDestructive = $false
+    if ($sql -ne '') {
+        $sqlDestructive = ([regex]::IsMatch($sql, ('\bdrop' + $gap + '(table|database|schema)\b'), 'IgnoreCase')) -or
+                          ([regex]::IsMatch($sql, '\btruncate\b', 'IgnoreCase')) -or
+                          (Test-DeleteWithoutWhere $sql)
+    }
+
+    $destructive = $sqlDestructive -or
                    ($Leaf.Exe -eq 'dropdb') -or
                    ([regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'drop\b'), 'IgnoreCase'))
 
     $update = [regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'update\b'), 'IgnoreCase')
     if (-not $destructive -and -not $update) { return $null }
 
-    $dbHost = Get-DbHost $raw $localHosts
+    $dbHost = Get-DbHost $hostText $localHosts
     $isLocal = Test-LocalHost $dbHost $localHosts
 
     if ($destructive) {
@@ -665,14 +816,24 @@ if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 $script:PendingAsk = $null
 $decision = $null
 
-foreach ($sub in (Split-CommandLine $command)) {
-    foreach ($leaf in (Get-CommandLeaf $sub 0)) {
-        $r = Test-Leaf $leaf $config
-        if ($null -eq $r) { continue }
-        if ($r.Decision -eq 'deny') { $decision = $r; break }
-        if ($null -eq $decision) { $decision = $r }
-    }
-    if ($decision -and $decision.Decision -eq 'deny') { break }
+# Tela heredocu se vytahnou PRED delenim - jinak by se telo stalo samostatnym
+# podprikazem bez hosta a vzdalena operace by se cetla jako lokalni (Amber A4).
+$heredoc = Split-Heredoc $command
+
+$leaves = New-Object System.Collections.ArrayList
+foreach ($sub in (Split-CommandLine $heredoc.Rest)) {
+    foreach ($leaf in (Get-CommandLeaf $sub 0)) { [void]$leaves.Add($leaf) }
+}
+foreach ($b in $heredoc.Bodies) {
+    [void]$leaves.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
+                         Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+}
+
+foreach ($leaf in $leaves) {
+    $r = Test-Leaf $leaf $config
+    if ($null -eq $r) { continue }
+    if ($r.Decision -eq 'deny') { $decision = $r; break }
+    if ($null -eq $decision) { $decision = $r }
 }
 
 if ($null -eq $decision) { exit 0 }

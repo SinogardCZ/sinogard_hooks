@@ -35,17 +35,28 @@ function Remove-ControlChar([string]$Text) {
     return ([regex]::Replace($Text, '[\x00-\x1F\x7F]', ' '))
 }
 
+# XML se sklada jako RETEZEC a teprve pak se nacte. Dva duvody:
+#   1. `<audio silent="true"/>` sablona ToastText02 neumi - zadani par. 2.3 rika "Zvuk ne"
+#      a sablona ho hraje (nalez Amber A3).
+#   2. Retezec jde zkontrolovat i tam, kde WinRT vubec neexistuje (pwsh 7), takze
+#      tvrzeni "toast je tichy" umi overit sada na OBOU interpretech.
+function Get-ToastXml([string]$Title, [string]$Body) {
+    $t = [System.Security.SecurityElement]::Escape($Title)
+    $b = [System.Security.SecurityElement]::Escape($Body)
+    return '<toast><visual><binding template="ToastText02">' +
+           '<text id="1">' + $t + '</text>' +
+           '<text id="2">' + $b + '</text>' +
+           '</binding></visual><audio silent="true"/></toast>'
+}
+
 function Send-Toast([string]$Title, [string]$Body) {
     # WinRT z PowerShellu bez modulu. Proveditelnost nebyla predem overena -
     # kdyz typ nejde nacist, hook mlci a vraci $false (kanal se pak nepouzije).
     try {
         [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-        $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(
-            [Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-        $texts = $template.GetElementsByTagName('text')
-        $texts.Item(0).AppendChild($template.CreateTextNode($Title)) | Out-Null
-        $texts.Item(1).AppendChild($template.CreateTextNode($Body)) | Out-Null
-        $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
+        $xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
+        $xml.LoadXml((Get-ToastXml $Title $Body))
+        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
         $appId = 'Microsoft.WindowsTerminal_8wekyb3d8bbwe!App'
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
         return $true
@@ -102,10 +113,22 @@ switch ($channel) {
         exit 0
     }
     'toast' {
+        # SINOGARD_HOOKS_DRYRUN=1: nic se neposila, jen se na stderr rekne, CO by se
+        # poslalo. Sada tim prestala strilet skutecna okna - Tom videl "nekolik
+        # notifikaci jako Windows warning" a byly to prave testy (nalez Amber B12).
+        # stdout zustava prazdny, takze tvrzeni "kanal nic nevypise" plati dal.
+        if ($env:SINOGARD_HOOKS_DRYRUN -eq '1') {
+            Write-HookStderr ('DRYRUN toast ' + (Get-ToastXml $title $body))
+            exit 0
+        }
         [void](Send-Toast $title $body)
         exit 0
     }
     'messagebox' {
+        if ($env:SINOGARD_HOOKS_DRYRUN -eq '1') {
+            Write-HookStderr ('DRYRUN messagebox ' + $title + ' | ' + $body)
+            exit 0
+        }
         [void](Send-MessageBox $title $body)
         exit 0
     }

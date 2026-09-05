@@ -27,10 +27,13 @@
     "localDbHosts": ["localhost", "127.0.0.1", "::1"],
     "protectedBranches": ["main"],
 
+    "_sqlClientsComment": "Nástroje, jejichž ARGUMENTY se čtou jako SQL. Bez tohoto seznamu běžely SQL vzory nad surovým textem a `git commit -m \"Add DROP TABLE migration\"` končilo dotazem. GSD je PostgreSQL-only (ADR-008), proto tu nejsou klienti cizích stacků.",
+    "sqlClients": ["psql", "pgcli", "dropdb", "sqlcmd"],
+
     "denyPatterns": [
       { "id": "git-reset-hard",     "pattern": "^git\\s+reset\\b.*\\s--hard(\\s|$)",                   "shape": "git reset --hard" },
-      { "id": "git-checkout-dot",   "pattern": "^git\\s+checkout\\s+--\\s+(\\.|\\*)(\\s|$)",           "shape": "git checkout -- ." },
-      { "id": "git-restore-dot",    "pattern": "^git\\s+restore\\s+(--\\S+\\s+)*(\\.|\\*)(\\s|$)",     "shape": "git restore ." },
+      { "id": "git-checkout-dot",   "pattern": "^git\\s+checkout\\s+(-\\S*\\s+)*(\\.|\\*)(\\s|$)",     "shape": "git checkout ." },
+      { "id": "git-restore-dot",    "pattern": "^git\\s+restore\\s+(-\\S*\\s+)*(\\.|\\*)(\\s|$)",      "shape": "git restore ." },
       { "id": "git-branch-delete",  "pattern": "^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)", "shape": "git branch -d/-D" },
       { "id": "git-update-ref-del", "pattern": "^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)",       "shape": "git update-ref -d" },
       { "id": "git-push-delete",    "pattern": "^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)",             "shape": "git push --delete" },
@@ -55,6 +58,7 @@
       "gitCleanIgnored": "git clean nad ignorovanými soubory",
       "recursiveDelete": "rekurzivní mazání mimo povolené složky ({target})",
       "recursiveDeleteWildcard": "rekurzivní mazání v povolené složce s hvězdičkou/proměnnou v cestě ({target})",
+      "netDeleteVariable": "mazání .NET voláním, kde cíl je proměnná ({text})",
       "dbDestroyRemote": "destruktivní DB operace na hostiteli {host}",
       "dbDestroyLocal": "destruktivní DB operace na lokální databázi (dotaz v terminálu = SCHVALUJU vynucené nástrojem)",
       "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
@@ -99,18 +103,19 @@
       "otherPolicy": "trackedAllowElseAsk"
     },
 
-    "_protectedBaseNamesComment": "Kanonická jména chráněných souborů. Slouží JEN k testu, jestli cesta se zástupným znakem (`.en?`, `*`) vůbec může na chráněné jméno padnout — bez toho by se `ls *.md` ptalo pokaždé.",
+    "_protectedBaseNamesComment": "Kanonická jména chráněných souborů. Slouží JEN k testu, jestli cesta se zástupným znakem (`.en?`, `*`) vůbec může na chráněné jméno padnout — bez toho by se `ls *.md` ptalo pokaždé. `config.json`, `config` a `credentials` odsud odešly (nález Amber B3): chráněné jsou jen s adresářem (`.docker/config.json`, `.kube/config`, `.aws/credentials`), a holá jména dělala z `*.json` a `config*` dotaz. Seznam ale pořád nese `secrets.json` a `settings.local.json`, takže `*.json` se ptá dál — měření a dvě možnosti jsou v hlášení 02.",
     "protectedBaseNames": [
       ".env", ".env.local", ".env.production.local", ".envrc",
       "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_rsa.pub",
       "credentials", "secrets.json", "secrets.yaml", "secrets.yml", "secrets.toml",
       "server.pem", "server.key", "server.pfx", "server.p12", "store.jks", "putty.ppk",
       "key.asc", "key.gpg", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
-      "config.json", "config", "prod.pubxml", "prod.publishsettings",
+      "prod.pubxml", "prod.publishsettings",
       "settings.local.json"
     ],
 
-    "envVarNamePattern": "(KEY|TOKEN|SECRET|PASSWORD|PWD|CREDENTIAL)",
+    "_envVarNamePatternComment": "Ukotvené na hranice slova v ŠROUBOVACÍM zápisu. Neukotvený vzor bral `$PWD` (pracovní adresář), `$keys`, `$tokens` i `$keyFile` jako citlivé jméno a ptal se na běžnou práci (nález Amber B2). Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
+    "envVarNamePattern": "(^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(_|$)|(^|_)PWD_|_PWD$",
 
     "shapes": {
       "secretFile": "čtení/zápis souboru se secrets ({path})",
