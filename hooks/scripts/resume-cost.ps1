@@ -62,7 +62,8 @@ function Write-ResumeLog($Payload, [double]$Seconds, [double]$Tokens, [bool]$Exp
         expired    = $Expired
         usd        = $Usd
     } | ConvertTo-Json -Depth 4 -Compress
-    $path = Join-Path $dir $FileName
+    $path = Join-SafePath $dir $FileName
+    if ($null -eq $path) { return }
     $bytes = ([System.Text.UTF8Encoding]::new($false)).GetBytes($line + "`n")
     $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
     $stream.Write($bytes, 0, $bytes.Length)

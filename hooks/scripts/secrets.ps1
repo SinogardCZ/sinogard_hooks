@@ -47,7 +47,7 @@ function Get-BaseName([string]$NormalPath) {
 # Je soubor verzovany gitem? Neznama odpoved je 'ne' - nikdy allow ze slabosti.
 function Test-GitTracked([string]$RepoDir, [string]$RelativePath) {
     if ([string]::IsNullOrWhiteSpace($RepoDir)) { return $false }
-    if (-not (Test-Path -LiteralPath $RepoDir)) { return $false }
+    if (-not (Test-SafePath $RepoDir)) { return $false }
     try {
         $null = & git -C $RepoDir ls-files --error-unmatch -- $RelativePath 2>$null
         return ($LASTEXITCODE -eq 0)

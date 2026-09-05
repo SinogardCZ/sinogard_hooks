@@ -52,6 +52,25 @@ function Get-Field($Object, [string]$Name, $Default = $null) {
     return $prop.Value
 }
 
+# ------------------------------------------------------------------ cesty ---
+
+# Join-Path a Test-Path resolvuji PSDrive, takze na ceste s neexistujici jednotkou
+# (W:\... na cizim stroji, odpojeny sitovy disk) VYHODI vyjimku misto toho, aby
+# rekly "neni". U hooku je vstupem cizi cesta (cwd sezeni, CLAUDE_PROJECT_DIR),
+# takze by pad znamenal, ze fail-closed zablokuje uplne vsechno.
+# [IO.Path]::Combine je ciste retezcova matematika - zadny disk se nehleda.
+
+function Join-SafePath([string]$Base, [string]$Leaf) {
+    if ([string]::IsNullOrWhiteSpace($Base)) { return $null }
+    try { return [System.IO.Path]::Combine($Base, $Leaf) } catch { return $null }
+}
+
+function Test-SafePath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try { return [System.IO.File]::Exists($Path) -or [System.IO.Directory]::Exists($Path) }
+    catch { return $false }
+}
+
 # ------------------------------------------------------------ konfigurace ---
 
 function Get-HookConfig([string]$PluginRoot, [string]$ProjectDir) {
@@ -59,8 +78,8 @@ function Get-HookConfig([string]$PluginRoot, [string]$ProjectDir) {
     $config = ConvertFrom-Json (Read-Utf8File $defaultsPath)
 
     if ([string]::IsNullOrWhiteSpace($ProjectDir)) { return $config }
-    $overridePath = Join-Path $ProjectDir '.claude/sinogard-hooks.json'
-    if (-not (Test-Path -LiteralPath $overridePath)) { return $config }
+    $overridePath = Join-SafePath $ProjectDir '.claude/sinogard-hooks.json'
+    if (-not (Test-SafePath $overridePath)) { return $config }
 
     # Melke slouceni: klic v override NAHRAZUJE cely klic defaults. Zadny hluboky
     # merge - jinak by z override neslo polozku seznamu odebrat, jen pridat.

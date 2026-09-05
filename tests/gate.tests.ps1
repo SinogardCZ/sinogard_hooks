@@ -337,6 +337,36 @@ $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment @{
 Assert-Equal 'allow' (Get-Decision $r) '[override] vypnuty gate nerozhoduje'
 Assert-Equal 0 $r.Exit '[override] vypnuty gate exit 0'
 
+# ------------------------------------------------- cesta na cizi jednotce ---
+
+# Regrese po CI: hook dostava cwd cizi session i CLAUDE_PROJECT_DIR z prostredi.
+# Kdyz jednotka neexistuje, Join-Path/Test-Path VYHODI vyjimku misto "neni" -
+# a fail-closed pak zablokoval uplne vsechno, vcetne neskodnych prikazu.
+Start-Case 'cwd i CLAUDE_PROJECT_DIR na neexistujici jednotce hook nesloz'
+$missing = Get-MissingDrivePath
+if ($null -eq $missing) {
+    $script:Skip++
+    Write-Host '    SKIP vsechna pismena jednotek jsou obsazena - pripad nema jak vzniknout' -ForegroundColor Yellow
+} else {
+    # (a) cesta prijde payloadem jako cwd
+    $json = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'git reset --hard'; 'cwd' = $missing }
+    $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json
+    Assert-Equal 'deny' (Get-Decision $r) '[cizi disk / cwd] destruktivni prikaz porad deny'
+
+    # (b) cesta prijde prostredim
+    $json = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'git status' }
+    $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment @{ CLAUDE_PROJECT_DIR = $missing }
+    Assert-Equal 'allow' (Get-Decision $r) '[cizi disk / env] neskodny prikaz porad projde'
+    Assert-Equal 0 $r.Exit '[cizi disk / env] exit 0, ne pad do fail-closed'
+
+    # Kontrolni skupina: tataz cesta na EXISTUJICI jednotce se chova stejne -
+    # jinak by test merl neco jineho nez chybejici disk.
+    $existing = Join-Path $script:TempDir 'projekt-bez-override'
+    [void][System.IO.Directory]::CreateDirectory($existing)
+    $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment @{ CLAUDE_PROJECT_DIR = $existing }
+    Assert-Equal 'allow' (Get-Decision $r) '[kontrolni skupina] existujici disk bez override taky allow'
+}
+
 # --------------------------------------------------------- ASCII-only zdroj ---
 
 Start-Case 'zdrojove .ps1 jsou ASCII-only (PS 5.1 cte bez BOM jako ANSI)'

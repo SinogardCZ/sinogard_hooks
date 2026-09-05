@@ -280,6 +280,27 @@ $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json -Environment @{
 Assert-Equal 'allow' (Get-Decision $r) '[override] vypnuty secrets nerozhoduje'
 Assert-Equal 0 $r.Exit '[override] vypnuty secrets exit 0'
 
+# ------------------------------------------------- cesta na cizi jednotce ---
+
+# Tataz regrese jako u gate: secrets.ps1 navic saha na cwd pri zjistovani, jestli
+# je soubor verzovany gitem. Neexistujici jednotka nesmi hook slozit ani ho
+# nesmi zmekcit - .env zustava deny.
+Start-Case 'cwd na neexistujici jednotce secrets nesloz ani nezmekci'
+$missing = Get-MissingDrivePath
+if ($null -eq $missing) {
+    $script:Skip++
+    Write-Host '    SKIP vsechna pismena jednotek jsou obsazena - pripad nema jak vzniknout' -ForegroundColor Yellow
+} else {
+    $json = New-HookInput 'pretooluse-read' @{ 'tool_input.file_path' = '.env'; 'cwd' = $missing }
+    $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json
+    Assert-Equal 'deny' (Get-Decision $r) '[cizi disk] .env porad deny'
+
+    $json = New-HookInput 'pretooluse-read' @{ 'tool_input.file_path' = 'README.md'; 'cwd' = $missing }
+    $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json
+    Assert-Equal 'allow' (Get-Decision $r) '[cizi disk / kontrolni skupina] README.md porad allow'
+    Assert-Equal 0 $r.Exit '[cizi disk] exit 0, ne pad do fail-closed'
+}
+
 Assert-TimingBudget
 
 Write-TestSummary

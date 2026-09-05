@@ -215,6 +215,18 @@ function Assert-TimingBudget {
 
 # Vytahne permissionDecision z vystupu hooku; prazdny vystup = 'allow'
 # (zadne rozhodnuti, plati normalni tok opravneni).
+# Cesta na jednotce, ktera na tomhle stroji NEEXISTUJE. Presne to potkalo hook na CI:
+# fixtures nesou cwd "W:/dev/gsd/repo", runner zadne W: nema, Join-Path/Test-Path
+# resolvuji PSDrive a misto "neni" vyhodily vyjimku. Vraci $null, kdyz jsou vsechna
+# pismena obsazena - pak se pripad PRESKOCI, nezezelena naprazdno.
+function Get-MissingDrivePath([string]$Leaf = 'projekt') {
+    $used = @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1).ToUpperInvariant() })
+    foreach ($letter in [char[]]'QYXVUTSRPNMLKJIHGFE') {
+        if ($used -notcontains ([string]$letter)) { return ([string]$letter + ':\' + $Leaf) }
+    }
+    return $null
+}
+
 function Get-Decision($Result) {
     if ([string]::IsNullOrWhiteSpace($Result.Stdout)) {
         # Prazdny stdout ma DVA vyznamy a sada je musela rozlisovat od zacatku:
