@@ -1,0 +1,135 @@
+{
+  "_comment": "Vychozi konfigurace sinogard-hooks. Projektovy override: ${CLAUDE_PROJECT_DIR}/.claude/sinogard-hooks.json (stejny tvar, MELKE slouceni - klic v override nahradi cely klic zde). Skripty .ps1 jsou zamerne ASCII-only, vsechny lidske texty zijou tady a ctou se jako UTF-8.",
+
+  "hooks": {
+    "gate": true,
+    "secrets": true,
+    "resumeCost": true,
+    "notify": true
+  },
+
+  "texts": {
+    "gateReason": "Brána §6 persony: {shape} bez SCHVALUJU Toma se neprovádí. Deny úkony provádí Tom sám; u ask řekni Tomovi, co a proč.",
+    "bypassSuffix": " V bypass režimu se šedá zóna nedotazuje — SCHVALUJU v chatu.",
+    "gateInternalError": "gate.ps1: interní chyba, blokováno",
+    "secretsInternalError": "secrets.ps1: interní chyba, blokováno",
+    "canary": "sinogard-hooks {version} aktivní: gate {gate} secrets {secrets} resume {resume} notify {notify}",
+    "canaryOk": "✔",
+    "canaryOff": "—",
+    "resumeMessage": "Resume po {h} h {m} min · {tokens} tokenů v kontextu · cache expirovala: {expired} · odhad zápisu do cache ${usd}",
+    "resumeYes": "ano",
+    "resumeNo": "ne",
+    "notifyText": "Hestia čeká: {matcher}"
+  },
+
+  "gate": {
+    "allowedRemoveRoots": ["bin", "obj", "node_modules", "tmp", "dist", "TestResults"],
+    "localDbHosts": ["localhost", "127.0.0.1", "::1"],
+    "protectedBranches": ["main"],
+
+    "denyPatterns": [
+      { "id": "git-reset-hard",     "pattern": "^git\\s+reset\\b.*\\s--hard(\\s|$)",                   "shape": "git reset --hard" },
+      { "id": "git-checkout-dot",   "pattern": "^git\\s+checkout\\s+--\\s+(\\.|\\*)(\\s|$)",           "shape": "git checkout -- ." },
+      { "id": "git-restore-dot",    "pattern": "^git\\s+restore\\s+(--\\S+\\s+)*(\\.|\\*)(\\s|$)",     "shape": "git restore ." },
+      { "id": "git-branch-delete",  "pattern": "^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)", "shape": "git branch -d/-D" },
+      { "id": "git-update-ref-del", "pattern": "^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)",       "shape": "git update-ref -d" },
+      { "id": "git-push-delete",    "pattern": "^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)",             "shape": "git push --delete" },
+      { "id": "git-stash-destroy",  "pattern": "^git\\s+stash\\s+(drop|clear)(\\s|$)",                 "shape": "git stash drop/clear" },
+      { "id": "git-filter-branch",  "pattern": "^git\\s+filter-branch(\\s|$)",                         "shape": "git filter-branch" },
+      { "id": "git-filter-repo",    "pattern": "^git\\s+filter-repo(\\s|$)",                           "shape": "git filter-repo" },
+      { "id": "git-reflog-expire",  "pattern": "^git\\s+reflog\\s+expire(\\s|$)",                      "shape": "git reflog expire" },
+      { "id": "git-gc-prune",       "pattern": "^git\\s+gc\\b.*\\s--prune(\\s|=|$)",                   "shape": "git gc --prune" }
+    ],
+
+    "askPatterns": [
+      { "id": "git-rebase",         "pattern": "^git\\s+rebase(\\s|$)",                                "shape": "git rebase" },
+      { "id": "ef-migrations-rm",   "pattern": "^dotnet\\s+ef\\s+migrations\\s+remove(\\s|$)",         "shape": "dotnet ef migrations remove" },
+      { "id": "invoke-expression",  "pattern": "^(invoke-expression|iex)(\\s|$)",                      "shape": "Invoke-Expression" }
+    ],
+
+    "shapes": {
+      "forcePushProtected": "force push na chráněnou větev",
+      "forcePushOther": "force push",
+      "forcePushUnknown": "force push bez určeného cíle",
+      "gitClean": "git clean -f",
+      "gitCleanIgnored": "git clean nad ignorovanými soubory",
+      "recursiveDelete": "rekurzivní mazání mimo povolené složky ({target})",
+      "recursiveDeleteWildcard": "rekurzivní mazání v povolené složce s hvězdičkou/proměnnou v cestě ({target})",
+      "dbDestroyRemote": "destruktivní DB operace na hostiteli {host}",
+      "dbDestroyLocal": "destruktivní DB operace na lokální databázi (dotaz v terminálu = SCHVALUJU vynucené nástrojem)",
+      "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
+      "pushDeleteRefspec": "smazání vzdálené větve prázdným refspecem",
+      "deleteFromPipeline": "mazání se vstupem z roury (cíl není v příkazu vidět)",
+      "opaque": "příkaz, který nejde rozebrat ({text})"
+    }
+  },
+
+  "secrets": {
+    "denyPathPatterns": [
+      "\\.envrc$",
+      "\\.(pem|key|p12|pfx|jks|keystore|ppk|asc|gpg)$",
+      "(^|/)id_(rsa|dsa|ecdsa|ed25519)(\\.pub)?$",
+      "(^|/)\\.ssh/",
+      "/usersecrets/[^/]+/secrets\\.json$",
+      "(^|/)secrets\\.(json|ya?ml|toml)$",
+      "\\.secrets\\.json$",
+      "\\.(pubxml|publishsettings)$",
+      "(^|/)\\.(npmrc|pypirc|netrc|git-credentials)$",
+      "(^|/)\\.aws/credentials$",
+      "(^|/)\\.azure/",
+      "(^|/)\\.kube/config$",
+      "(^|/)\\.docker/config\\.json$"
+    ],
+
+    "askPathPatterns": [
+      "(^|/)\\.claude/settings\\.local\\.json$"
+    ],
+
+    "selfProtectPathPatterns": [
+      "(^|/)\\.claude/settings\\.json$",
+      "(^|/)\\.claude/settings\\.local\\.json$",
+      "(^|/)\\.claude/sinogard-hooks\\.json$",
+      "(^|/)hooks/hooks\\.json$",
+      "(^|/)hooks/config/[^/]+$"
+    ],
+
+    "envFile": {
+      "denyNames": ["\\.env$", "\\.env\\.local$", "\\.env\\.[^/]+\\.local$"],
+      "allowNames": ["\\.env\\.(example|sample|template)$"],
+      "otherPolicy": "trackedAllowElseAsk"
+    },
+
+    "_protectedBaseNamesComment": "Kanonická jména chráněných souborů. Slouží JEN k testu, jestli cesta se zástupným znakem (`.en?`, `*`) vůbec může na chráněné jméno padnout — bez toho by se `ls *.md` ptalo pokaždé.",
+    "protectedBaseNames": [
+      ".env", ".env.local", ".env.production.local", ".envrc",
+      "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_rsa.pub",
+      "credentials", "secrets.json", "secrets.yaml", "secrets.yml", "secrets.toml",
+      "server.pem", "server.key", "server.pfx", "server.p12", "store.jks", "putty.ppk",
+      "key.asc", "key.gpg", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+      "config.json", "config", "prod.pubxml", "prod.publishsettings",
+      "settings.local.json"
+    ],
+
+    "envVarNamePattern": "(KEY|TOKEN|SECRET|PASSWORD|PWD|CREDENTIAL)",
+
+    "shapes": {
+      "secretFile": "čtení/zápis souboru se secrets ({path})",
+      "envFileUntracked": "netrackovaný soubor prostředí ({path})",
+      "settingsLocal": "čtení .claude/settings.local.json (nese hodnoty secrets)",
+      "selfProtect": "zápis do souboru, kterým se brána vypíná ({path})",
+      "wildcardPath": "cesta se zástupným znakem, která může padnout na chráněný soubor ({path})",
+      "envDump": "výpis proměnných prostředí",
+      "envVarRead": "čtení proměnné prostředí s citlivým jménem ({name})"
+    }
+  },
+
+  "_notifyComment": "channel=toast je VOLBA Z MERENI, ne preference: OSC 9 umi Windows Terminal / ConEmu / WezTerm / iTerm2, ale merici stroj bezi ve VS Code (TERM_PROGRAM=vscode, WT_SESSION neni), takze tam OSC 9 nema kdo zobrazit. WinRT toast se pod powershell.exe (5.1 - produkcni interpret hooku) nacte a Show() projde; pod pwsh 7 typ neexistuje vubec. V terminalu, ktery OSC 9 umi, je spravna volba 'osc9'.",
+  "notify": {
+    "channel": "toast",
+    "title": "Claude Code"
+  },
+
+  "resumeCost": {
+    "logFile": "resume-log.jsonl"
+  }
+}

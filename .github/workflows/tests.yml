@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Hooky se v produkci spousti pres powershell.exe (Windows PowerShell 5.1);
+        # pwsh 7 se meri taky, protoze skripty maji byt kompatibilni s obema.
+        interpreter: [powershell.exe, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verze interpretu
+        shell: pwsh
+        run: |
+          & "${{ matrix.interpreter }}" -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"
+
+      - name: gate
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/gate.tests.ps1 -Interpreter "${{ matrix.interpreter }}"
+
+      - name: secrets
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/secrets.tests.ps1 -Interpreter "${{ matrix.interpreter }}"
+
+      - name: resume-cost
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/resume-cost.tests.ps1 -Interpreter "${{ matrix.interpreter }}"
+
+      - name: notify
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/notify.tests.ps1 -Interpreter "${{ matrix.interpreter }}"

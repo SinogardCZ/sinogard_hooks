@@ -1,0 +1,7 @@
+{
+  "session_id": "test-session",
+  "transcript_path": "/tmp/t.jsonl",
+  "cwd": "W:/dev/gsd/repo",
+  "hook_event_name": "SessionStart",
+  "source": "resume"
+}

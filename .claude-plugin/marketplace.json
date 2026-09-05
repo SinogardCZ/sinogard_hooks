@@ -1,0 +1,9 @@
+{
+  "name": "sinogard-hooks",
+  "owner": { "name": "SinogardCZ" },
+  "description": "Guard-rail hooks for Claude Code sessions (Windows-first, PowerShell).",
+  "plugins": [
+    { "name": "sinogard-hooks", "source": "./",
+      "description": "PreToolUse guard for destructive git/DB commands and secrets files, resume-cost report, attention notifications." }
+  ]
+}

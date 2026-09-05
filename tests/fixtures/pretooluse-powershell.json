@@ -1,0 +1,10 @@
+{
+  "session_id": "test-session",
+  "transcript_path": "/tmp/t.jsonl",
+  "cwd": "W:/dev/gsd/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "PowerShell",
+  "tool_input": { "command": "PLACEHOLDER", "description": "test" },
+  "tool_use_id": "toolu_test"
+}

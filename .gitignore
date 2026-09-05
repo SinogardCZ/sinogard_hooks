@@ -1,0 +1,4 @@
+# lokální běhové artefakty
+*.log
+.debug/
+TestResults/
