@@ -247,7 +247,6 @@ function Test-Cases([string]$Section, $Cases) {
         Assert-Equal $expectedExit $r.Exit ("[{0}] exit" -f $c.Name)
 
         # doba behu (T36-N4): tvrdy strop na jednu fixture; median resi Assert-TimingBudget
-        Add-HookTime $r.Ms
         Assert-True ($r.Ms -lt (Get-HookCeilingMs)) ("[{0}] doba {1} ms < {2}" -f $c.Name, $r.Ms, (Get-HookCeilingMs))
     }
 }
@@ -942,6 +941,45 @@ if ($pJ2b.ExitCode -ne 0) {
         if ($line.Trim() -ne '') { Write-Host ("    | " + $line) -ForegroundColor Yellow }
     }
     Write-Host '    --- konec vystupu potomka ---' -ForegroundColor Yellow
+}
+
+# ================================================================================
+#  OPAKOVANI PO PREKROCENI TVRDEHO STROPU (zmena mimo rozsah, vynucena CI)
+#
+#  Tvrdi se: beh, ktery strop prekroci, se JEDNOU zopakuje; tvrdi se druhe mereni,
+#  ale do medianu jde mereni PRVNI. A kdyz je pomalost SKUTECNA (opakuje se), druhe
+#  mereni je nad stropem taky - tedy cervena zustava cervenou.
+# ================================================================================
+
+if (-not (Test-CollectOnly)) {
+    Start-Case 'opakovani po prekroceni stropu (kolo 5b)'
+    $jsonRetry = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'git status' }
+
+    # 🔴 kontrolni skupina NEJDRIV: pri normalnim stropu se neopakuje nic.
+    $retriesBefore = Get-HookRetryCount
+    $timesBefore = Get-HookTimeCount
+    $rNorm = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonRetry
+    Assert-Equal $retriesBefore (Get-HookRetryCount) '[retry/kontrola] pod stropem se neopakuje'
+    Assert-Equal ($timesBefore + 1) (Get-HookTimeCount) '[retry/kontrola] jedno mereni do medianu'
+    Assert-True (-not $rNorm.PSObject.Properties['Retried']) '[retry/kontrola] vysledek neni znacen jako opakovany'
+
+    # Strop se snizi pod skutecnou dobu behu, takze opakovani MUSI nastat.
+    $ceiling = Get-HookCeilingMs
+    try {
+        Set-HookCeilingMs 1
+        $retriesBefore = Get-HookRetryCount
+        $timesBefore = Get-HookTimeCount
+        $rSlow = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonRetry
+        Assert-Equal ($retriesBefore + 1) (Get-HookRetryCount) '[retry] nad stropem se opakuje prave jednou'
+        Assert-Equal ($timesBefore + 1) (Get-HookTimeCount) '[retry] do medianu jde jen PRVNI mereni'
+        Assert-True ([bool]$rSlow.PSObject.Properties['FirstMs']) '[retry] prvni mereni zustava k dispozici'
+        # Pomalost je tu skutecna (strop = 1 ms), takze ani druhe mereni pod nej nejde -
+        # tvrzeni sady by tedy dal padalo. Opakovani cervenou NEPRETIRA na zelenou.
+        Assert-True ($rSlow.Ms -ge 1) '[retry] skutecna pomalost zustava nad stropem i podruhe'
+        Assert-Equal 'allow' (Get-Decision $rSlow) '[retry] rozhodnuti se opakovanim nemeni'
+    } finally {
+        Set-HookCeilingMs $ceiling
+    }
 }
 
 Write-CollectedCases

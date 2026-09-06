@@ -214,7 +214,6 @@ function Test-Cases([string]$Section, $Cases) {
         Assert-Equal $c.Expect (Get-Decision $r) ("[{0}] {1}" -f $c.Name, $c.Value)
         $expectedExit = if ($c.Expect -eq 'deny') { 2 } else { 0 }
         Assert-Equal $expectedExit $r.Exit ("[{0}] exit" -f $c.Name)
-        Add-HookTime $r.Ms
         Assert-True ($r.Ms -lt (Get-HookCeilingMs)) ("[{0}] doba {1} ms < {2}" -f $c.Name, $r.Ms, (Get-HookCeilingMs))
     }
 }

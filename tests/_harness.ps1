@@ -82,9 +82,25 @@ function Write-TestSummary {
         Write-Host ""
         return
     }
+    Write-TimingLine
     Write-Host ($format -f $script:Pass, $script:Fail, $script:Skip) `
         -ForegroundColor $(if ($script:Fail) { 'Red' } else { 'Green' })
     Write-Host ""
+}
+
+# Rozdeleni dob behu se tisklo jen v -Full, takze na CI nebylo videt NIKDY - a kdyz
+# strop spadl, zbyl holy udaj "9001 ms" bez toho, jak vypadal zbytek behu. Tri cykly
+# CI se hledala pricina, kterou mel rict prvni z nich. Tiskne se proto vzdycky.
+# Tvar radku zamerne NEobsahuje "passed /" - to je vzorec, kterym _ci-verdict.ps1
+# hleda souhrn, a druha shoda by mu podstrcila jina cisla.
+function Write-TimingLine {
+    if ($script:Times.Count -eq 0) { return }
+    $sorted = @($script:Times | Sort-Object)
+    $median = $sorted[[int][Math]::Floor($sorted.Count / 2)]
+    $max = $sorted[$sorted.Count - 1]
+    $slow = @($sorted | Where-Object { $_ -ge 3000 }).Count
+    Write-Host ("doba hooku: median {0} ms, max {1} ms, nad 3000 ms: {2} z {3}, opakovani po prekroceni stropu: {4}" `
+        -f $median, $max, $slow, $sorted.Count, $script:Retries) -ForegroundColor DarkGray
 }
 
 # ------------------------------------------------------------ spousteni ---
@@ -121,7 +137,40 @@ function New-HookInput([string]$Template, [hashtable]$Values) {
 # Spusti skript hooku jako skutecny proces. Vraci Exit / Stdout / Stderr / Ms.
 # Vstup se zapisuje do BaseStream jako bajty - .NET Framework (PS 5.1) neumi
 # StandardInputEncoding, takze jakykoli textovy zapis by prosel pres OEM stranku.
+# 🔴 ZMENA MIMO ROZSAH KOLA 5b - vynutilo si ji CI, viz hlaseni 07 §0.
+#
+# Tvrdy strop na jednu fixturu meril na CI ZATEZ RUNNERU, ne hook. Tri behy pwsh po
+# sobe spadly, pokazde na jinem tvaru (9001 ms, 5015 ms), zatimco tyz tvar doma bezi
+# 1,1 s a job powershell.exe byl zeleny pokazde. Presne pred tim varuje komentar
+# u HookCeilingMs: absolutni strop meri stroj.
+#
+# Beh, ktery se SKUTECNE zasekl, se zasekne i podruhe; vykyv planovace ne. Opakuje
+# se proto jednou a tvrdi se druhe mereni - ale do MEDIANU jde vzdycky mereni PRVNI,
+# aby median zustal poctivym pozorovanim stroje. Opakovani znovu spousti hook: na CI
+# je DRYRUN=1, takze je to neskodne; doma by opakovani u `notify` znamenalo druhy
+# toast - k prekroceni stropu tam ale nedochazi.
 function Invoke-Hook {
+    param(
+        [Parameter(Mandatory = $true)][string]$Script,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$InputJson,
+        [string]$Interpreter = $script:Interpreter,
+        [hashtable]$Environment = $null
+    )
+
+    $first = Invoke-HookOnce -Script $Script -InputJson $InputJson -Interpreter $Interpreter -Environment $Environment
+    # Do rozpoctu jde PRVNI mereni - jinak by median klesal prave o ty behy, kvuli
+    # kterym se opakuje, a prestal by systematicke zpomaleni videt.
+    Add-HookTime ([int]$first.Ms)
+    if ($first.Ms -lt $script:HookCeilingMs) { return $first }
+
+    $script:Retries++
+    $second = Invoke-HookOnce -Script $Script -InputJson $InputJson -Interpreter $Interpreter -Environment $Environment
+    Add-Member -InputObject $second -NotePropertyName 'FirstMs' -NotePropertyValue ([int]$first.Ms)
+    Add-Member -InputObject $second -NotePropertyName 'Retried' -NotePropertyValue $true
+    return $second
+}
+
+function Invoke-HookOnce {
     param(
         [Parameter(Mandatory = $true)][string]$Script,
         # Prazdny stdin je legitimni pripad brany (fail-closed), ne chyba volani.
@@ -215,6 +264,9 @@ function Measure-InterpreterBaseline {
 #   Odchylka od zneni zadani je vedoma a doprovozena merenim, ne odhadem.
 $script:HookCeilingMs = 5000
 $script:Times = New-Object System.Collections.ArrayList
+# Kolikrat se beh po prekroceni tvrdeho stropu opakoval. Tiskne se v souhrnu -
+# opakovani, o kterem se nevi, by z tvrdeho stropu udelalo mrtvou vetev.
+$script:Retries = 0
 
 function Add-HookTime([int]$Ms) { [void]$script:Times.Add($Ms) }
 
@@ -308,6 +360,12 @@ function Invoke-InvariantRows([string]$HookName) {
 }
 
 function Get-HookCeilingMs { return $script:HookCeilingMs }
+
+# Jen pro test opakovani (kolo 5b): sada si strop docasne snizi, aby se opakovani
+# vubec spustilo, a pak ho vrati. V bezne sade se tohle nevola.
+function Set-HookCeilingMs([int]$Ms) { $script:HookCeilingMs = $Ms }
+function Get-HookRetryCount { return $script:Retries }
+function Get-HookTimeCount { return $script:Times.Count }
 
 function Assert-TimingBudget {
     if ($script:Times.Count -eq 0) { return }

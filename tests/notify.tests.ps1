@@ -67,7 +67,6 @@ foreach ($m in $matchers) {
     $seq = Get-TerminalSequence $r
     $expectedBody = $cfg.texts.notifyText -replace '\{matcher\}', $m
     Assert-Equal ($ESC + ']9;' + $expectedBody + $BEL) $seq ("[{0}] sekvence presne dle konfigurace" -f $m)
-    Add-HookTime $r.Ms
     Assert-True ($r.Ms -lt (Get-HookCeilingMs)) ("[{0}] doba {1} ms < {2}" -f $m, $r.Ms, (Get-HookCeilingMs))
 }
 
