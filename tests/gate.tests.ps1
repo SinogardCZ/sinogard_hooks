@@ -932,6 +932,18 @@ $pJ2b.WaitForExit()
 Assert-Equal 0 $pJ2b.ExitCode '[J2/kontrola] bez promenne sada konci nulou'
 Assert-True ($outJ2b -match 'passed /') '[J2/kontrola] souhrnny radek se vypise'
 
+# Kontrolni skupina spousti CIZI sadu, takze jeji pad se sem promitne jako holy
+# navratovy kod - a "cekano <0>, dostano <1>" nerekne, co se rozbilo. Vypis
+# potomka proto pri padu jde do logu; jinak by se pricina hledala jen znovu-
+# spustenim na CI, kde uz muze byt jina zatez.
+if ($pJ2b.ExitCode -ne 0) {
+    Write-Host '    --- vystup potomka (notify.tests.ps1) ---' -ForegroundColor Yellow
+    foreach ($line in ($outJ2b -split "`r?`n")) {
+        if ($line.Trim() -ne '') { Write-Host ("    | " + $line) -ForegroundColor Yellow }
+    }
+    Write-Host '    --- konec vystupu potomka ---' -ForegroundColor Yellow
+}
+
 Write-CollectedCases
 Assert-TimingBudget
 
