@@ -84,6 +84,28 @@ escapu hostitele — známé omezení 12.
   způsob, jak režim zapnout. Ta proměnná od 0.1.5 sadu naopak **shodí**.
 - **L4** doplněny odkazy `[0.1.4]` a `[0.1.5]`.
 
+### Testy — opakování po překročení tvrdého stropu (změna mimo rozsah kola)
+
+🔴 **Vynutilo si ji CI, ne nález.** Tvrdý strop 5000 ms na jeden běh hooku shodil job
+`pwsh` **třikrát po sobě, pokaždé na jiném tvaru** (9001 ms, 5015 ms uvnitř potomka,
+a jeden běh, kde příčina v logu nebyla) — zatímco `powershell.exe` byl zelený pokaždé
+a týž tvar běží doma na `pwsh` 1,1 s. Přesně před tím varuje komentář u
+`HookCeilingMs`: absolutní strop měří **zátěž stroje**, ne hook.
+
+- běh nad stropem se **jednou zopakuje** a tvrdí se druhé měření; běh, který se
+  _skutečně_ zasekl, se zasekne i podruhé (doloženo kontrolní skupinou se stropem
+  dočasně sníženým na 1 ms — tvrzení tam dál padá)
+- do **mediánu** jde vždycky měření **první**, aby zůstal poctivým pozorováním stroje
+- řádek `doba hooku: median … max … nad 3000 ms … opakování …` se tiskne **vždy**,
+  ne jen v `-Full`; dřív na CI nebyl vidět nikdy, a proto tři cykly CI hledaly příčinu,
+  kterou měl říct první z nich
+- měření sbírá `Invoke-Hook` sám (explicitní `Add-HookTime` v sadách zrušen), takže
+  se na ně nedá zapomenout a počítají se i běhy invariantu
+
+Opakování hook znovu **spustí**: na CI je `DRYRUN=1`, doma by u `notify` znamenalo
+druhý toast — k překročení stropu tam ale nedochází (max 1671 ms / 1893 ms).
+Vrací se jedním revertem.
+
 ### Neopraveno vědomě
 
 **K2** — blok s ocasem (`if {…} else {…}`, `try {…} catch {…}`, `{…} # poznámka`) se
