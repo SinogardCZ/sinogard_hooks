@@ -224,6 +224,12 @@ $czechCases = @(
 function Test-Cases([string]$Section, $Cases) {
     Start-Case $Section
     foreach ($c in $Cases) {
+        # Nalez Amber H2: generator invariantu bere pripady odsud, ne rucnim vyberem.
+        # Pripad s jinym nez vychozim rezimem opravneni se do invariantu NEDAVA -
+        # radek nese jen prikaz a rezim by se pri prehrani ztratil.
+        if ($c.Mode -eq 'default') { Add-CollectedCase 'gate' 'cmd' $c.Tool $c.Cmd $c.Expect $c.Name }
+        if (Test-CollectOnly) { continue }
+
         $template = if ($c.Tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
         $json = New-HookInput $template @{
             'tool_input.command' = $c.Cmd
@@ -533,6 +539,62 @@ $amber4Cases = @(
     #      Tri zpetne apostrofy: dva davaji LITERALNI zpetny apostrof, treti s `n` konec radku.
     (Case 'G9 ps pokracovani radku'     "git reset ```n  --hard" 'deny' 'PowerShell')
     (Case 'G9 kontrola'                 "git status \`n  --short" 'allow')
+    # G9 - pokracovani radku PRED heredocem: uvozujici prikaz stal na jinem radku
+    #      nez `<<SQL`, takze vysel prazdny a telo se necetlo jako SQL.
+    (Case 'G9 heredoc pres dva radky'   "psql -h prod.db \`n  <<SQL`nDROP TABLE users;`nSQL" 'deny')
+    (Case 'G9 heredoc kontrola'         "cat \`n  <<EOF`nobycejny text`nEOF" 'allow')
+
+    # G2 - prepinac obalu, ktery BERE HODNOTU. Druha kopie tabulky obalu primo ve
+    #      vetvich Get-CommandLeaf ji neznala, takze argv[0] vyslo jako `-u`/`-n`/`-s`.
+    #      Amberin priklad `sudo -u root rm -rf /srv` konci ASK, ne deny - `/srv` ma
+    #      tri pismena a padne do STARE zabrany "kratke /xxx muze byt prepinac cmd,
+    #      rozsah nezname" (Z3). Nalez to nevyvraci: pred opravou bylo ALLOW.
+    #      Deny se dolozi tymz obalem nad cilem, ktery za prepinac vzit nejde.
+    (Case 'G2 sudo -u'                  'sudo -u root rm -rf /srv' 'ask')
+    (Case 'G2 sudo -u cesta'            'sudo -u root rm -rf /srv/data' 'deny')
+    (Case 'G2 sudo -n'                  'sudo -n git reset --hard' 'deny')
+    (Case 'G2 nice -n'                  'nice -n 10 rm -rf src' 'deny')
+    (Case 'G2 timeout -s'               'timeout -s KILL 30 rm -rf src' 'deny')
+    (Case 'G2 env -i'                   'env -i rm -rf src' 'deny')
+    (Case 'G2 command -p'               'command -p rm -rf src' 'deny')
+    (Case 'G2 kontrola sudo'            'sudo -u root ls -la /srv' 'allow')
+    (Case 'G2 kontrola nice'            'nice -n 10 dotnet test' 'allow')
+    (Case 'G2 kontrola env sam'         'env' 'allow')
+
+    # G6 - tyz nalez u SQL: `timeout -s KILL 30 psql` davalo OuterExe `kill`.
+    (Case 'G6 timeout -s pred psql'     "timeout -s KILL 30 psql -h prod.db <<SQL`nDROP TABLE users;`nSQL" 'deny')
+    (Case 'G6 kontrola'                 "timeout 30 psql -h localhost <<SQL`nSELECT 1;`nSQL" 'allow')
+
+    # G3 - xargs bere ARGV, ne prikazovou radku. Join-CommandString ztratilo hranice
+    #      tokenu a vnitrni `-c` vzalo jen prvni slovo.
+    (Case 'G3 xargs sh -c'              'echo . | xargs sh -c ''git reset --hard''' 'deny')
+    (Case 'G3 xargs -I'                 'ls | xargs -I {} sh -c ''rm -rf /srv/data''' 'deny')
+    (Case 'G3 kontrola'                 'ls | xargs echo' 'allow')
+
+    # G4 - stredniku uvnitr bloku skriptu. Bez nej to deny bylo, s nim ne.
+    (Case 'G4 blok se strednikem'       '& { rm -rf src; }' 'deny' 'PowerShell')
+    (Case 'G4 blok dva prikazy'         '& { git status; rm -rf src }' 'deny' 'PowerShell')
+    (Case 'G4 kontrola'                 '& { Get-Date; Get-Location }' 'allow' 'PowerShell')
+    #      Nevyvazena zavorka nesmi skener oslepit - druhy pruchod ji ignoruje.
+    (Case 'G4 nevyvazena zavorka'       'echo { ; git reset --hard' 'deny' 'PowerShell')
+
+    # G5 - `-ec` NENI predpona slova `encodedcommand`; `-c`/`-command` se porovnavaly presne.
+    (Case 'G5 -ec'                      'pwsh -ec UmVtb3ZlLUl0ZW0=' 'ask' 'PowerShell')
+    (Case 'G5 -com'                     'pwsh -com "git reset --hard"' 'deny' 'PowerShell')
+    (Case 'G5 -comm'                    'pwsh -comm "rm -rf src"' 'deny' 'PowerShell')
+    (Case 'G5 kontrola'                 'pwsh -NoProfile -File build.ps1' 'allow' 'PowerShell')
+
+    # G7 - cile, ktere git chape jako cely strom, ale ve vyctu nestaly.
+    (Case 'G7 checkout :/'              'git checkout -- :/' 'deny')
+    (Case 'G7 restore :(top)'           'git restore '':(top)''' 'deny')
+    (Case 'G7 checkout ./*'             'git checkout ./*' 'deny')
+    (Case 'G7 kontrola soubor'          'git checkout -- src/app.ts' 'allow')
+    (Case 'G7 kontrola vetev'           'git checkout -b feature/x' 'allow')
+
+    # G8 - telo heredocu, ktere se SPUSTI, ale rozebrat ho neumime (Z3 -> ask).
+    (Case 'G8 python heredoc'           "python <<EOF`nimport shutil`nshutil.rmtree('src')`nEOF" 'ask')
+    (Case 'G8 ssh heredoc'              "ssh prod <<EOF`nrm -rf /srv`nEOF" 'ask')
+    (Case 'G8 kontrola data'            "cat > NOTES.md <<EOF`nrm -rf je nebezpecny`nEOF" 'allow')
 )
 
 Test-Cases 'review Amber kolo 4 (G, H)' $amber4Cases
@@ -549,23 +611,8 @@ Test-Cases 'review Amber kolo 4 (G, H)' $amber4Cases
 #  Soubor je APPEND-ONLY: radek z nej odchazi jen s citovanym rozhodnutim.
 # ================================================================================
 
-Start-Case 'regresni invariant (fixtures/invariants.json)'
-$invPath = Join-Path $script:RepoRoot 'tests/fixtures/invariants.json'
-if (-not (Test-SafePath $invPath)) {
-    $script:Skip++
-    Write-Host '    SKIP invariants.json chybi' -ForegroundColor Yellow
-} else {
-    $invDoc = [System.IO.File]::ReadAllText($invPath, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
-    $rowsProp = $invDoc.PSObject.Properties['rows']
-    $inv = if ($null -eq $rowsProp) { @() } else { @($rowsProp.Value) }
-    Assert-True ($inv.Count -ge 100) ("invariantu je {0} (ceka se aspon 100)" -f $inv.Count)
-    foreach ($row in $inv) {
-        $fx = if ($row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
-        $json = New-HookInput $fx @{ 'tool_input.command' = $row.cmd }
-        $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json
-        Assert-Equal $row.expect (Get-Decision $r) ("[invariant/{0}] {1}" -f $row.since, $row.cmd)
-    }
-}
+# Prehrani radku zije v _harness.ps1 - od kola 4 ho vola i sada secrets (nalez H2).
+Invoke-InvariantRows 'gate'
 
 # Nestaci, ze rozhodnuti sedi - musi souhlasit i BAJTY duvodu. Cesky text prochazi
 # stdin -> skript -> stdout/stderr; kterykoli clanek v OEM strance by ho rozsypal
@@ -693,6 +740,7 @@ foreach ($f in (Get-ChildItem (Join-Path $script:RepoRoot 'hooks/scripts') -Filt
     Assert-Equal 0 $nonAscii ("[ascii] {0}" -f $f.Name)
 }
 
+Write-CollectedCases
 Assert-TimingBudget
 
 Write-TestSummary

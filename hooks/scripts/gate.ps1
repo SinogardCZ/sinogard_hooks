@@ -54,76 +54,95 @@ function Get-LeafField($Leaf, [string]$Name, $Default = '') {
 # OuterExe `sudo` resp. `docker`, ty nejsou v sqlClients, telo heredocu se proto vubec
 # nectlo jako SQL a destruktivni operace propadla na allow. Rozbaleni obalu uz umi
 # Get-CommandLeaf, takze se pouzije ono a vezme se posledni list.
-function Get-UnwrappedExe([string]$Command) {
-    if ([string]::IsNullOrWhiteSpace($Command)) { return '' }
-    $argv = Split-Arguments $Command
-    if ($argv.Count -eq 0) { return '' }
 
-    # Nalez Amber E4: JEDEN spolecny seznam prepinacu s hodnotou byl spatne. `-n` bere
-    # hodnotu u `nice`, ale NE u `sudo` (tam je to "neinteraktivne"), takze
-    # `sudo -n psql <<SQL` preskocilo rovnou psql a destruktivni operace propadla.
-    # Tabulka je proto podle OBALU, ne globalni.
-    $valueFlagsByWrapper = @{
-        'sudo'    = '^(-u|-g|-C|-p|-r|-t|-T|-U|--user|--group)$'
-        'doas'    = '^(-u|-C)$'
-        'nice'    = '^(-n|--adjustment)$'
-        'env'     = '^(-u|-C|-S|--unset|--chdir)$'
-        'docker'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
-        'podman'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
-        'stdbuf'  = '^(-i|-o|-e)$'
-    }
-    $plainWrappers = '^(nohup|time|command|builtin|exec)$'
-    $containers = '^(docker|podman)$'
+# Nalez Amber E4: JEDEN spolecny seznam prepinacu s hodnotou byl spatne. `-n` bere
+# hodnotu u `nice`, ale NE u `sudo` (tam je to "neinteraktivne"), takze
+# `sudo -n psql <<SQL` preskocilo rovnou psql a destruktivni operace propadla.
+# Tabulka je proto podle OBALU, ne globalni.
+#
+# Nalez Amber G2: tabulka existovala DVAKRAT - tady a jeste jednou, hur, primo ve
+# vetvich Get-CommandLeaf. Oprava E4 dosla jen do jedne kopie, takze
+# `sudo -u root rm -rf /srv` dal davalo argv[0] = `-u` a propadalo na allow.
+# Tabulka i pruchod jsou proto od kola 4 na JEDINEM miste (Get-WrapperTail)
+# a obe volajici strany se pisou nad nim.
+$script:WrapperValueFlags = @{
+    'sudo'    = '^(-u|-g|-C|-p|-r|-t|-T|-U|--user|--group)$'
+    'doas'    = '^(-u|-C)$'
+    'nice'    = '^(-n|--adjustment)$'
+    'env'     = '^(-u|-C|-S|--unset|--chdir)$'
+    'timeout' = '^(-s|--signal|-k|--kill-after)$'
+    'docker'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
+    'podman'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
+    'stdbuf'  = '^(-i|-o|-e)$'
+}
+$script:PlainWrappers = '^(nohup|time|command|builtin|exec)$'
+$script:ContainerWrappers = '^(docker|podman)$'
 
+# Odloupne z ARGV vsechny obaly a vrati zbytek - tedy skutecny prikaz vcetne jmena.
+# Kdyz zadny obal nesedi, vraci vstup nedotceny.
+function Get-WrapperTail($Argv) {
+    $arr = @($Argv)
     $i = 0
     $guard = 0
-    while ($i -lt $argv.Count -and $guard -lt 64) {
+    while ($i -lt $arr.Count -and $guard -lt 64) {
         $guard++
-        $tok = [string]$argv[$i]
+        $tok = [string]$arr[$i]
 
         # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
         if ($tok -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
         if ($tok -match '^-') { $i++; continue }   # osamely prepinac bez znameho obalu
 
         $name = Get-ExecutableName $tok
-        if ($name -match $plainWrappers) { $i++; continue }
+        if ($name -match $script:PlainWrappers) { $i++; continue }
+        if (-not $script:WrapperValueFlags.ContainsKey($name)) { break }
 
+        $flagPattern = [string]$script:WrapperValueFlags[$name]
+        $i++
+        if ($name -match $script:ContainerWrappers) {
+            if ($i -lt $arr.Count -and $arr[$i] -match '^(exec|run)$') { $i++ }
+        }
+        while ($i -lt $arr.Count -and $arr[$i] -match '^-') {
+            if ($arr[$i] -cmatch $flagPattern) { $i += 2 } else { $i++ }
+        }
+        if ($name -match $script:ContainerWrappers -and $i -lt $arr.Count) {
+            $i++   # jmeno kontejneru nebo obrazu
+        }
         # `timeout 30 psql ...` - po prepinacich stoji CISLO, ktere se preskakuje.
-        if ($name -eq 'timeout') {
-            $i++
-            while ($i -lt $argv.Count -and $argv[$i] -match '^-') { $i++ }
-            if ($i -lt $argv.Count -and $argv[$i] -match '^\d+(\.\d+)?[smhd]?$') { $i++ }
-            continue
-        }
-
-        if ($valueFlagsByWrapper.ContainsKey($name)) {
-            $flagPattern = [string]$valueFlagsByWrapper[$name]
-            $i++
-            if ($name -match $containers) {
-                if ($i -lt $argv.Count -and $argv[$i] -match '^(exec|run)$') { $i++ }
-            }
-            while ($i -lt $argv.Count -and $argv[$i] -match '^-') {
-                if ($argv[$i] -cmatch $flagPattern) { $i += 2 } else { $i++ }
-            }
-            if ($name -match $containers -and $i -lt $argv.Count) {
-                $i++   # jmeno kontejneru nebo obrazu
-            }
-            continue
-        }
-
-        return $name
+        if ($name -eq 'timeout' -and $i -lt $arr.Count -and $arr[$i] -match '^\d+(\.\d+)?[smhd]?$') { $i++ }
     }
-    return ''
+    if ($i -ge $arr.Count) { return ,@() }
+    return ,@($arr[$i..($arr.Count - 1)])
 }
 
-# Je token zkratkou parametru -EncodedCommand? PowerShell prijme kazdou jednoznacnou
-# predponu, takze `-e`, `-en`, `-enc` ... `-encodedcommand` (nalez Metis 4, kolo 2).
-function Test-EncodedCommandFlag([string]$Token) {
+# Jmeno spustitelneho souboru PO rozbaleni obalu.
+#
+# Nalez Amber C4: `sudo -u postgres psql <<SQL` a `docker exec -i db psql <<SQL` davaly
+# OuterExe `sudo` resp. `docker`, ty nejsou v sqlClients, telo heredocu se proto vubec
+# nectlo jako SQL a destruktivni operace propadla na allow.
+function Get-UnwrappedExe([string]$Command) {
+    if ([string]::IsNullOrWhiteSpace($Command)) { return '' }
+    $tail = Get-WrapperTail (Split-Arguments $Command)
+    if ($tail.Count -eq 0) { return '' }
+    return (Get-ExecutableName ([string]$tail[0]))
+}
+
+# Je token zkratkou daneho parametru PowerShellu? Prijima se kazda jednoznacna
+# predpona, takze `-c`, `-co`, `-com` ... `-command` (nalez Metis 4, kolo 2).
+function Test-ParameterPrefix([string]$Token, [string]$Full) {
     if ([string]::IsNullOrEmpty($Token)) { return $false }
     if (-not $Token.StartsWith('-')) { return $false }
     $body = $Token.Substring(1).ToLowerInvariant()
     if ($body -eq '') { return $false }
-    return 'encodedcommand'.StartsWith($body)
+    return $Full.StartsWith($body)
+}
+
+# -EncodedCommand ma navic ZKRATKY, ktere predponou nejsou: `-ec` (a `-e`). `ec` neni
+# predpona slova `encodedcommand` (to zacina na `en`), takze samotny predponovy test
+# ho minul a `pwsh -ec <base64>` propadlo na allow (nalez Amber G5).
+function Test-EncodedCommandFlag([string]$Token) {
+    if ([string]::IsNullOrEmpty($Token)) { return $false }
+    if ($Token.ToLowerInvariant() -eq '-ec') { return $true }
+    return (Test-ParameterPrefix $Token 'encodedcommand')
 }
 
 # Zacina na tomhle radku heredoc MIMO uvozovky? Nalez Amber E2: regex nad radkem
@@ -231,7 +250,16 @@ function Split-Heredoc([string]$Command) {
     # Nalez Amber E2: `<<` se hledalo regexem nad radkem, takze `echo "<<x>>"` zacalo
     # heredoc uvnitr retezce a zbytek prikazu se spolkl jako telo. Uvod heredocu se
     # proto hleda kvotove korektne - jen `<<` MIMO uvozovky a ne `<<<` (here-string).
-    $lines = [regex]::Split($Command, '\r?\n')
+    # Nalez Amber G9: radky se deli regexem a to je tu SPRAVNE - telo heredocu konci
+    # radkem, ktery se PRESNE rovna delimiteru, takze linky musi zustat, jak jsou.
+    # Chybelo neco jineho: pokracovani radku spojuje dva radky v JEDEN prikaz. Bez toho
+    # stalo `psql -h prod \` a `  <<SQL` na dvou radcich, uvozujici prikaz vysel prazdny
+    # a telo se necetlo jako SQL -> allow.
+    # Spojuje se i uvnitr uvozovek a uvnitr tel, kde to Bash nedela vzdy. Je to smerem
+    # k prisnosti: telo, jehoz radek konci escapem, se slepi s delimiterem, heredoc
+    # zustane neukonceny a plati Z3 -> ask.
+    $joined = [regex]::Replace($Command, [regex]::Escape((Get-ScannerEscape)) + '\r?\n', ' ')
+    $lines = [regex]::Split($joined, '\r?\n')
     $keep = New-Object System.Collections.ArrayList
     $unterminated = $false
     $i = 0
@@ -385,7 +413,12 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?\{\s*(.*?)\s*\}\s*$')
     }
     if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
-        foreach ($l in (Get-CommandLeaf $paren.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
+        # Nalez Amber G4: vnitrek se rozebira jako PRIKAZOVA RADKA, ne jako jediny
+        # prikaz - `& { git reset --hard; rm -rf src }` jsou dva prikazy a driv se
+        # z nich cetl jen prvni. Skener uz `{ }` zna, takze se sem dostane cely blok.
+        foreach ($s in (Split-CommandLine $paren.Groups[1].Value)) {
+            foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
+        }
         return $out
     }
 
@@ -400,22 +433,26 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     $rest = Get-RestTokens $argv
 
     switch -Regex ($exe) {
-        '^(sudo|nice|nohup|time|doas)$' {
-            $inner = (Join-Argument $rest)
-            foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
-            return $out
-        }
-        '^(timeout)$' {
-            $skip = 0
-            if ($rest.Count -gt 0 -and $rest[0] -match '^[0-9]') { $skip = 1 }
-            $inner = (Join-Argument ($rest | Select-Object -Skip $skip))
-            foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
-            return $out
-        }
-        '^(command|builtin|exec)$' {
-            # Nalez Metis 5: `command rm -rf src` obchazi jmeno spustitelneho souboru.
-            $tail = @($rest | Where-Object { $_ -ne '-p' -and $_ -ne '-v' -and $_ -ne '-V' })
-            foreach ($l in (Get-CommandLeaf ($tail -join ' ') ($Depth + 1))) { [void]$out.Add($l) }
+        '^(sudo|nice|nohup|time|doas|timeout|command|builtin|exec|env|stdbuf)$' {
+            # Nalez Amber G2: tady stala DRUHA, chudsi kopie tabulky obalu. Vetev jen
+            # spojila `$rest` a rekurzivne se zavolala, takze u obalu s prepinacem
+            # BEROUCIM HODNOTU (`sudo -u root rm -rf /srv`, `nice -n 10 rm -rf src`,
+            # `timeout -s KILL 30 rm -rf src`) vysel argv[0] jako `-u` / `-n` / `-s`,
+            # zadne pravidlo nesedlo a destruktivni prikaz propadl na ALLOW.
+            # Oprava E4 z kola 3 sla jen do Get-UnwrappedExe; tahle vetev byla od
+            # zalozeni pluginu beze zmeny. Pruchod obaly ma proto JEDINY zdroj pravdy.
+            #
+            # Nalez Metis 5: `command rm -rf src` obchazi jmeno spustitelneho souboru -
+            # `command|builtin|exec` jsou v tabulce jako obaly bez prepinacu s hodnotou.
+            $tail = Get-WrapperTail $argv
+            if ($tail.Count -eq 0) {
+                # `env` bez prikazu je legitimni vypis prostredi, ne obal.
+                if ($exe -eq 'env') {
+                    [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = 'env'; GitConfig = @() })
+                }
+                return $out
+            }
+            foreach ($l in (Get-CommandLeaf (Join-Argument $tail) ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
         '^(python|python3|node|nodejs|ruby|perl|php|deno)$' {
@@ -472,26 +509,6 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             return $out
         }
-        '^(env)$' {
-            # Nalez Metis 28: `env -i rm -rf src` - prepinace env se musi preskocit,
-            # jinak zacne rozbor u `-i` a skutecny prikaz zmizi.
-            $i = 0
-            while ($i -lt $rest.Count) {
-                $t = $rest[$i]
-                if ($t -eq '-' -or $t -eq '-i' -or $t -eq '--ignore-environment' -or $t -eq '-0' -or $t -eq '--null') { $i++; continue }
-                if ($t -eq '-u' -or $t -eq '--unset' -or $t -eq '-C' -or $t -eq '--chdir' -or $t -eq '-S') { $i += 2; continue }
-                if ($t -match '^--(unset|chdir)=') { $i++; continue }
-                if ($t -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
-                break
-            }
-            $tail = @($rest | Select-Object -Skip $i)
-            if ($tail.Count -eq 0) {
-                [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = 'env'; GitConfig = @() })
-                return $out
-            }
-            foreach ($l in (Get-CommandLeaf ($tail -join ' ') ($Depth + 1))) { [void]$out.Add($l) }
-            return $out
-        }
         '^(bash|sh|zsh|dash|ksh)$' {
             # Nalez Metis 4: `bash -lc '...'` - shell prijima slouceny kratky prepinac,
             # takze se hleda kterykoli tvar koncici `c`, ne presny token `-c`.
@@ -519,8 +536,10 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 if (Test-EncodedCommandFlag $t) {
                     [void]$out.Add(@{ Kind = 'opaque'; Raw = $raw }); return $out
                 }
-                if ($t -eq '-file' -or $t -eq '-f') { $isFile = $true; break }
-                if ($t -eq '-c' -or $t -eq '-command') { $idx = $i; break }
+                # Nalez Amber G5: `-c`/`-command` se porovnavaly PRESNE, takze
+                # `pwsh -com "git reset --hard"` prosel bez rozboru -> allow.
+                if (Test-ParameterPrefix $t 'file') { $isFile = $true; break }
+                if (Test-ParameterPrefix $t 'command') { $idx = $i; break }
             }
             # skript souborem je pro hook nepruhledny -> propousti se (dokumentovano)
             if ($isFile) { return $out }
@@ -562,7 +581,15 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 if ($t.StartsWith('-')) { $i++; continue }
                 break
             }
-            $inner = (Join-CommandString ($rest | Select-Object -Skip $i))
+            # Nalez Amber G3: tady se skladalo Join-CommandString, ale xargs bere ARGV,
+            # ne prikazovou radku. `echo . | xargs sh -c 'git reset --hard'` se tim
+            # slozilo na `sh -c git reset --hard`, vnitrni `-c` vzalo jen `git` a
+            # zbytek se ztratil -> allow. Tataz trida jako nalez Metis 1 u `find -exec`.
+            #
+            # Pravidlo, ktere ty dve funkce deli:
+            #   tail je ARGV (xargs, find -exec, sudo, ...)          -> Join-Argument
+            #   tail je PRIKAZOVA RADKA (bash -c, cmd /c, eval, ...) -> Join-CommandString
+            $inner = (Join-Argument ($rest | Select-Object -Skip $i))
             if ($inner -eq '') { return $out }
             foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
@@ -939,6 +966,19 @@ function Get-SqlText($Leaf, $SqlClients) {
 # `git restore -s HEAD .`, `-W .`, `-q .` ani `git checkout -q HEAD -- .` nechytily.
 # Regex to ani chytit nemuze: `-s` bere HODNOTU, takze `HEAD` neni prepinac a vzor
 # `(-\S*\s+)*` se o nej zastavi. Rozhoduje se proto nad TOKENY, ne nad textem.
+# Miri pathspec na CELY strom? Nalez Amber G7: vyjmenovane cile `. ./ .\ *` minuly
+# tvary, ktere git chape stejne - `:/` je koren repozitare, `:(top)` je magicky
+# pathspec s tymz vyznamem a `./*` je obycejny glob. Vsechny propadaly na allow.
+function Test-WholeTreeTarget([string]$Token) {
+    $t = ([string]$Token).Trim().Trim('"').Trim("'")
+    if ($t -eq '') { return $false }
+    if (@('.', './', '.\', '*', './*', '.\*', '**', '**/*', ':/', ':/*') -contains $t) { return $true }
+    # `:/neco` je cesta od korene repozitare; `:(top)`, `:(exclude)x` jsou magicke
+    # pathspecy, ktere zabiraji cely strom (pripadne cely strom krome neceho).
+    if ($t.StartsWith(':/') -or $t.StartsWith(':(')) { return $true }
+    return $false
+}
+
 function Test-GitRestoreRule($Leaf, $Config) {
     if ($Leaf.Exe -ne 'git') { return $null }
     $gate = Get-Field $Config 'gate'
@@ -950,7 +990,6 @@ function Test-GitRestoreRule($Leaf, $Config) {
     if ($sub -ne 'checkout' -and $sub -ne 'restore') { return $null }
 
     $valueFlags = '^(-s|--source|--pathspec-from-file|-b|-B|--orphan)$'
-    $dotTargets = @('.', './', '.\', '*')
 
     $positional = New-Object System.Collections.ArrayList
     $hasStaged = $false
@@ -975,7 +1014,7 @@ function Test-GitRestoreRule($Leaf, $Config) {
     if ($sub -eq 'restore' -and $hasStaged -and -not $hasWorktree) { return $null }
 
     foreach ($p in $positional) {
-        if ($dotTargets -contains $p) {
+        if (Test-WholeTreeTarget $p) {
             $shapeKey = if ($sub -eq 'checkout') { 'gitCheckoutDot' } else { 'gitRestoreDot' }
             return @{ Decision = 'deny'
                       Shape = (Get-Field $shapes $shapeKey ('git ' + $sub + ' .')) }
@@ -1097,6 +1136,17 @@ function Test-Leaf($Leaf, $Config) {
                 }
             }
             return $worst
+        }
+
+        # Nalez Amber G8: telo se SPUSTI, ale rozebrat ho neumime - je to kod interpretu
+        # (`python <<EOF`) nebo prikazy na cizim stroji (`ssh prod <<EOF`). Brat ho jako
+        # data znamenalo allow, pritom `python -c` uz konci ask. Plati Z3.
+        $opaqueOuters = @(Get-Field $gate 'codeInterpreters' @()) + @(Get-Field $gate 'remoteShells' @())
+        if ($opaqueOuters -ccontains $oe) {
+            $text = [string]$Leaf.Raw
+            if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
+            return @{ Decision = 'ask'
+                      Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
         }
 
         # Jinak je telo DATA (`cat > NOTES.md <<EOF`) a pravidla se na nej neuplatnuji.

@@ -34,6 +34,10 @@
     "_shellInterpretersComment": "Uvozující příkazy, jejichž tělo heredocu je PŘÍKAZOVÁ ŘÁDKA, ne data. Bez tohoto seznamu bylo `bash <<'EOF' / git reset --hard / EOF` slepé místo — tělo se zahodilo (nález Amber E2).",
     "shellInterpreters": ["bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd"],
 
+    "_opaqueHeredocOuterComment": "Uvozující příkazy, jejichž tělo heredocu se SPUSTÍ, ale rozebrat ho neumíme — kód interpretu (`python <<EOF`) nebo příkazy na cizím stroji (`ssh prod <<EOF`). Do E2 se takové tělo bralo jako data a propadlo na allow, ačkoli `python -c` končí ask. Platí Z3: nerozebratelné → ask (nález Amber G8).",
+    "codeInterpreters": ["python", "python3", "node", "nodejs", "ruby", "perl", "php", "deno"],
+    "remoteShells": ["ssh", "plink"],
+
     "denyPatterns": [
       { "id": "git-reset-hard",     "pattern": "^git\\s+reset\\b.*\\s--hard(\\s|$)",                   "shape": "git reset --hard" },
       { "_pozn_checkout_restore": "`git checkout .` a `git restore .` řeší Test-GitRestoreRule v gate.ps1 nad TOKENY, ne regexem nad textem. Regex to neuměl: nález Amber E3 ukázal, že `-s HEAD .` regex nikdy nechytí (`-s` bere hodnotu, `HEAD` není přepínač), a Amberin vlastní návrh `(-\\S*\\s+)*` má tutéž díru." },

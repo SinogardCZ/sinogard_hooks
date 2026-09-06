@@ -197,16 +197,19 @@ function Get-ScannerEscape { return $script:ScannerEscape }
 function Split-Unquoted([string]$Text, [string[]]$Separators) {
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
 
-    $r = Split-UnquotedCore $Text $Separators $true
+    $r = Split-UnquotedCore $Text $Separators $true $true
+    # Nevyvazena slozena zavorka => zanoreni se nikdy nevratilo na nulu a nedelilo by
+    # se uz vubec nic. Druhy pruchod ji ignoruje.
+    if ($r.BraceOpen) { $r = Split-UnquotedCore $Text $Separators $true $false }
     # Sken skoncil s OTEVRENOU dvojitou uvozovkou => vstup je bud rozbity, nebo jsme
     # si escapem zavreli oci (`echo "C:\src\"` je v Bashi opravdu neuzavreny retezec).
     # Druhy pruchod BEZ escapu deli VIC, tedy smerem k deny; propustit kvuli tomu nic
     # nejde, nanejvys se rozdeli neco, co se delit nemelo.
-    if ($r.Open) { $r = Split-UnquotedCore $Text $Separators $false }
+    if ($r.Open) { $r = Split-UnquotedCore $Text $Separators $false $false }
     return ,@($r.Parts)
 }
 
-function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEscape) {
+function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEscape, [bool]$HonorBrace) {
     $esc = $script:ScannerEscape
 
     $out = New-Object System.Collections.ArrayList
@@ -216,6 +219,7 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
     $inSingle = $false
     $inDouble = $false
     $depth = 0        # zanoreni do $( ... )
+    $brace = 0        # zanoreni do { ... }
 
     # Delsi separatory se zkousi driv, jinak by `&&` rozpadlo na dve `&`.
     $seps = @($Separators | Sort-Object -Property Length -Descending)
@@ -249,6 +253,16 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
             [void]$buf.Append($c); $i++; continue
         }
 
+        # Nalez Amber G4: `{ ... }` je zanoreni stejne jako `$( ... )`. Bez toho se
+        # `& { rm -rf src; }` rozpadlo na stredniku, prvni segment byl `& { rm -rf src`,
+        # exe vyslo jako `{` a zadne pravidlo nesedlo -> allow. (Bez stredniku uvnitr
+        # to deny bylo, takze diru otevrel prave ten stredni k.)
+        if ($HonorBrace) {
+            if ($c -eq '{') { $brace++; [void]$buf.Append($c); $i++; continue }
+            if ($c -eq '}' -and $brace -gt 0) { $brace--; [void]$buf.Append($c); $i++; continue }
+            if ($brace -gt 0) { [void]$buf.Append($c); $i++; continue }
+        }
+
         $hit = $null
         foreach ($s in $seps) {
             if ($s.Length -gt 0 -and ($n - $i) -ge $s.Length -and
@@ -272,9 +286,37 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
     # takze `,@(...)` by pole zabalilo JESTE JEDNOU a Count by byl 1 misto poctu casti.
     # Prave na tomhle spadly testy M6 a M7 hned po zavedeni escapu.
     return @{
-        Parts = @($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
-        Open  = $inDouble
+        Parts     = @($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        Open      = $inDouble
+        BraceOpen = ($brace -ne 0)
     }
+}
+
+# Najde pozici ZA uzavirajici zavorkou k otevrene zavorce zacinajici na $Start.
+#
+# Nalez Amber H4 (zmereno: misto je tady, ne ve Split-Unquoted - ten uvozovky uz umi):
+# tenhle pruchod je pocital naslepo, takze `$(echo ')')` skoncil na zavorce UVNITR
+# retezce a obsah substituce se ustrihl na `echo '`. Kdyz se do te ustrizene casti
+# nevejde cesta, `echo $(rm -rf ")" src)` uz zadne pravidlo nechytne -> allow.
+function Find-CloseParen([string]$Text, [int]$Start) {
+    $esc = $script:ScannerEscape
+    $n = $Text.Length
+    $depth = 1
+    $j = $Start
+    $inSingle = $false
+    $inDouble = $false
+    while ($j -lt $n -and $depth -gt 0) {
+        $c = $Text[$j]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $j++; continue }
+        if ($c -eq $esc -and ($j + 1) -lt $n) { $j += 2; continue }
+        if ($c -eq '"') { $inDouble = -not $inDouble; $j++; continue }
+        if ($inDouble) { $j++; continue }
+        if ($c -eq "'") { $inSingle = $true; $j++; continue }
+        if ($c -eq '(') { $depth++ }
+        elseif ($c -eq ')') { $depth-- }
+        $j++
+    }
+    return $j
 }
 
 # Obsah vsech `$( ... )` v textu (kvotove korektne, vcetne zanoreni).
@@ -295,28 +337,9 @@ function Get-Substitution([string]$Text) {
         # V dvojitych uvozovkach se substituce PROVADI, takze se prochazi dal.
         # Procesova substituce `<( ... )` a `>( ... )` je taky spusteny prikaz
         # (nalez Metis 5, kolo 2) - bere se stejne jako `$( ... )`.
-        if (($c -eq '<' -or $c -eq '>') -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {
-            $depth = 1
-            $j = $i + 2
-            $start = $j
-            while ($j -lt $n -and $depth -gt 0) {
-                if ($Text[$j] -eq '(') { $depth++ }
-                elseif ($Text[$j] -eq ')') { $depth-- }
-                $j++
-            }
-            $len = [Math]::Max(0, ($j - 1) - $start)
-            if ($len -gt 0) { [void]$out.Add($Text.Substring($start, $len)) }
-            $i = $j; continue
-        }
-        if ($c -eq '$' -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {
-            $depth = 1
-            $j = $i + 2
-            $start = $j
-            while ($j -lt $n -and $depth -gt 0) {
-                if ($Text[$j] -eq '(') { $depth++ }
-                elseif ($Text[$j] -eq ')') { $depth-- }
-                $j++
-            }
+        if (($c -eq '<' -or $c -eq '>' -or $c -eq '$') -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {
+            $start = $i + 2
+            $j = Find-CloseParen $Text $start
             $len = [Math]::Max(0, ($j - 1) - $start)
             if ($len -gt 0) { [void]$out.Add($Text.Substring($start, $len)) }
             $i = $j; continue

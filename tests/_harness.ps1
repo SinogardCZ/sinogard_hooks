@@ -206,6 +206,74 @@ $script:Times = New-Object System.Collections.ArrayList
 
 function Add-HookTime([int]$Ms) { [void]$script:Times.Add($Ms) }
 
+# ---------------------------------------------- sber pripadu a regresni invariant ---
+#
+# Nalez Amber H2: invariants.json vznikl "generovano z pripadovych poli", ale generator
+# v repu nebyl - pri pristim rustu sady by ho nikdo nezopakoval a soubor by zkamenel.
+# Sber jde pres tyhle dve funkce: sady, ktere vydavaji ROZHODNUTI o opravneni (gate,
+# secrets), kazdy svuj pripad ohlasi. resume-cost a notify zadne rozhodnuti nevydavaji
+# (SessionStart pridava kontext, Notification strili toast), takze pro ne invariant
+# nema co drzet - to je duvod, ne opomenuti.
+$script:CollectedCases = New-Object System.Collections.ArrayList
+
+function Test-CollectOnly { return ($env:SINOGARD_HOOKS_COLLECT -eq '1') }
+
+function Add-CollectedCase([string]$Hook, [string]$Kind, [string]$Tool, [string]$Value,
+                           [string]$Expect, [string]$Since) {
+    [void]$script:CollectedCases.Add([ordered]@{
+        hook = $Hook; kind = $Kind; tool = $Tool; cmd = $Value; expect = $Expect; since = $Since
+    })
+}
+
+# Vypis pro generator. Ohraniceny znackami, aby se dal vytahnout z vystupu sady.
+function Write-CollectedCases {
+    if (-not (Test-CollectOnly)) { return }
+    Write-Host '<<<SINOGARD-CASES'
+    Write-Host (($script:CollectedCases | ConvertTo-Json -Depth 5 -Compress))
+    Write-Host 'SINOGARD-CASES>>>'
+}
+
+# Prehraje radky invariantu, ktere patri danemu hooku. Radek bez `hook`/`kind` je
+# z prvniho vydani souboru - tehdy byl invariant jen pro branu nad prikazy.
+function Invoke-InvariantRows([string]$HookName) {
+    # V rezimu sberu se hook nespousti vubec - generator jen potrebuje seznam pripadu.
+    if (Test-CollectOnly) { return }
+    Start-Case ("regresni invariant (fixtures/invariants.json, hook {0})" -f $HookName)
+    $invPath = Join-Path $PSScriptRoot 'fixtures/invariants.json'
+    if (-not (Test-SafePath $invPath)) {
+        $script:Skip++
+        Write-Host '    SKIP invariants.json chybi' -ForegroundColor Yellow
+        return
+    }
+    $invDoc = [System.IO.File]::ReadAllText($invPath, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+    $rowsProp = $invDoc.PSObject.Properties['rows']
+    $all = if ($null -eq $rowsProp) { @() } else { @($rowsProp.Value) }
+
+    $mine = New-Object System.Collections.ArrayList
+    foreach ($row in $all) {
+        $hook = if ($row.PSObject.Properties['hook']) { [string]$row.hook } else { 'gate' }
+        if ($hook -eq $HookName) { [void]$mine.Add($row) }
+    }
+    Assert-True ($mine.Count -ge 1) ("invariantu pro {0} je {1}" -f $HookName, $mine.Count)
+
+    foreach ($row in $mine) {
+        $kind = if ($row.PSObject.Properties['kind']) { [string]$row.kind } else { 'cmd' }
+        if ($kind -eq 'path') {
+            $template = switch ([string]$row.tool) {
+                'Write' { 'pretooluse-write' }
+                'Edit'  { 'pretooluse-edit' }
+                default { 'pretooluse-read' }
+            }
+            $json = New-HookInput $template @{ 'tool_input.file_path' = $row.cmd }
+        } else {
+            $template = if ([string]$row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+            $json = New-HookInput $template @{ 'tool_input.command' = $row.cmd }
+        }
+        $r = Invoke-Hook -Script ($HookName + '.ps1') -InputJson $json
+        Assert-Equal $row.expect (Get-Decision $r) ("[invariant/{0}] {1}" -f $row.since, $row.cmd)
+    }
+}
+
 function Get-HookCeilingMs { return $script:HookCeilingMs }
 
 function Assert-TimingBudget {

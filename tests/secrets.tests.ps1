@@ -191,6 +191,11 @@ $allowCommands = @(
 function Test-Cases([string]$Section, $Cases) {
     Start-Case $Section
     foreach ($c in $Cases) {
+        # Nalez Amber H2: invariant se od kola 4 tyka i teto sady. Generator bere
+        # pripady odsud, ne rucnim vyberem.
+        Add-CollectedCase 'secrets' $c.Kind $c.Tool $c.Value $c.Expect $c.Name
+        if (Test-CollectOnly) { continue }
+
         if ($c.Kind -eq 'path') {
             $template = switch ($c.Tool) {
                 'Write' { 'pretooluse-write' }
@@ -277,6 +282,27 @@ $amber2SecretCases = @(
 
 Test-Cases 'review Amber kolo 2 (C3, C6)' $amber2SecretCases
 
+# ================================================================================
+#  Review Amber kolo 4: H1 - oprava E5 (dva vzory, dva rezimy velikosti pismen)
+#  nemela ANI JEDEN test na male podtrzitkove jmeno. Merilo se jen VELKE
+#  (GITHUB_TOKEN) a camelCase (apiKey), takze prave ta cast opravy, kvuli ktere
+#  je vzor s IgnoreCase, nebyla dolozena nicim.
+# ================================================================================
+
+$amber4SecretCases = @(
+    (CmdCase 'H1 db_password'         'echo $db_password' 'ask' 'PowerShell')
+    (CmdCase 'H1 env:github_token'    'echo $env:github_token' 'ask' 'PowerShell')
+    (CmdCase 'H1 api_key'             'echo $api_key' 'ask' 'PowerShell')
+    (CmdCase 'H1 Mixed_Secret_Key'    'echo $env:Mixed_Secret_Key' 'ask' 'PowerShell')
+    # 🔴 kontrolni skupina: podtrzitkove jmeno, ktere citlive NENI. Kdyby se vzor
+    #    rozsiril na "cokoli s podtrzitkem", zustalo by tohle allow uz jen nahodou.
+    (CmdCase 'H1 kontrola db_port'    'echo $db_port' 'allow' 'PowerShell')
+    (CmdCase 'H1 kontrola build_num'  'echo $env:build_number' 'allow' 'PowerShell')
+    (CmdCase 'H1 kontrola user_name'  'echo $user_name' 'allow' 'PowerShell')
+)
+
+Test-Cases 'review Amber kolo 4 (H1)' $amber4SecretCases
+
 # ---------------------------------- trackovany .env.<x> je MERENI, ne fixture ---
 
 Start-Case 'trackovany .env.<x> v GSD repu -> allow'
@@ -362,6 +388,9 @@ if ($null -eq $missing) {
     Assert-Equal 0 $r.Exit '[cizi disk] exit 0, ne pad do fail-closed'
 }
 
+Invoke-InvariantRows 'secrets'
+
+Write-CollectedCases
 Assert-TimingBudget
 
 Write-TestSummary

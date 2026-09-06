@@ -115,8 +115,14 @@ aby si je nikdo nemusel objevit sám.
 3. **Windows-first.** Handlery volají `powershell.exe`. Na Linuxu a macOS plugin
    nefunguje; portace by znamenala druhý běhový tvar, ne jen jinou cestu.
 4. **Rozklad příkazové řádky je tokenizér, ne shell.** Rozdělení na `&&`, `||`, `;`, `|`
-   respektuje uvozovky, ale neprovádí expanzi. Chyba směřuje k falešnému `ask`,
-   ne k falešnému `allow`.
+   respektuje uvozovky a escape znak podle shellu, ale neprovádí expanzi.
+   🔴 **Věta „chyba směřuje k falešnému `ask`, ne k falešnému `allow`" tu stála a byla
+   nepravdivá.** Vyvrátily ji nálezy G1–G3 review Amber (kolo 4): jakmile skener
+   špatně určí, kde končí řetězec, spolkne zbytek řádku *do řetězce* — a to je
+   falešné **allow**, ne `ask`. Platí tedy slabší a pravdivé tvrzení: chyba
+   v **jednotlivém pravidle** směřuje k `ask`; chyba ve **skeneru** může propustit.
+   Proto je skener jediný (`Split-Unquoted`), proto má regresní invariant a proto
+   nad ním běží samostatné kolo councilu.
 5. **`git clean -X` bez `-x`** (tedy jen ignorované soubory) je `ask`, ne `deny` —
    `-fdX` je legitimní úklid buildu.
 6. **Hook čte text příkazu, ne to, co z něj shell vyrobí.** `psql -c ('TRUN' + 'CATE TABLE x')`
@@ -135,7 +141,15 @@ aby si je nikdo nemusel objevit sám.
 10. **SQL, které v příkazu není vidět, končí `ask`.** `cat migrace.sql | psql`,
     `psql -f migrace.sql`, `sqlcmd -i migrace.sql` i `$sql | psql` — obsah souboru ani
     roury hook nečte, takže rozsah nezná. Literál z `echo "…" | psql` se rozebere.
-11. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
+11. **Příkaz uvnitř kontejneru se nerozebírá.** `docker exec` a `docker run` se odloupnou
+    jen kvůli jménu klienta (`docker exec -i db psql …` je pořád `psql`), ale to, co se
+    spustí *uvnitř* kontejneru, se pravidly nad cestami neposuzuje. Důvod je věcný:
+    `/tmp` v obrazu není pracovní strom Toma, takže by pravidlo „mazání mimo povolené
+    složky" blokovalo běžnou práci — a brána, která blokuje běžnou práci, se do týdne
+    vypne. Vědomé rozhodnutí kola 4, ne opomenutí.
+12. **Krátká absolutní cesta `/xxx` končí `ask`.** `rm -rf /srv` je od `/s` `/q` `/f`
+    (přepínače `cmd`) k nerozeznání, takže se rozsah nezná. `rm -rf /srv/data` je `deny`.
+13. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
     zkouška (skutečné okno na obrazovce) proběhne až při zapojení. Když se toast neukáže,
     správná odpověď je přepnout `notify.channel` na `none` s uvedeným důvodem, ne tvrdit,
     že upozornění fungují.

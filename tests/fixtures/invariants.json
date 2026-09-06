@@ -1,5 +1,5 @@
 {
-  "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli gate.tests.ps1, ne rucnim vyberem.",
+  "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli sad, ne rucnim vyberem - generator je tests/_generate-invariants.ps1 (nalez Amber H2: soubor se na generator odvolaval, ale ten v repu nebyl). Radek bez klice 'hook'/'kind' je z prvniho vydani, kdy byl invariant jen pro branu nad prikazy; chybejici klic znamena 'gate' / 'cmd' a dopisovat ho zpetne by znamenalo prepsat 142 radku, ktere prepsat nemam.",
   "_odebrano": "2026-09-05: tvar 'echo DROP | TABLE users | psql' - radek nikdy neplatil. 'DROP | TABLE' neni platne SQL, takze deny bylo MOJE chybne ocekavani z tehoz kola, ne drivejsi chovani. Nahrazeno tvarem, ktery roury i stredniky v retezci testuje na platnem SQL.",
   "rows":
   [
@@ -854,5 +854,1932 @@
       "cmd": "git branch -D $'main'",
       "expect": "deny",
       "since": "M8 ANSI-C quoting"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.Directory]::Delete('src',$true)",
+      "expect": "deny",
+      "since": "IO.Directory::Delete"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.File]::Delete('src/a.cs')",
+      "expect": "deny",
+      "since": "IO.File::Delete"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"$x\"",
+      "expect": "ask",
+      "since": "bash -c s promennou"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cmd /c %X%",
+      "expect": "ask",
+      "since": "cmd /c s promennou"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "eval $cmd",
+      "expect": "ask",
+      "since": "eval s promennou"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "$TOOL git push",
+      "expect": "ask",
+      "since": "promenna misto exe"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "./cleanup.sh",
+      "expect": "allow",
+      "since": "skript souborem sh"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -File x.ps1",
+      "expect": "allow",
+      "since": "skript souborem pwsh"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -File scripts/ci-local.ps1",
+      "expect": "allow",
+      "since": "skript souborem GSD"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git rebase main",
+      "expect": "ask",
+      "since": "rebase"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --force-with-lease origin feature/x",
+      "expect": "ask",
+      "since": "force-with-lease jina"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --force origin feature/x",
+      "expect": "ask",
+      "since": "force push jina vetev"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --force origin",
+      "expect": "ask",
+      "since": "force push bez cile"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf ./bin/*",
+      "expect": "ask",
+      "since": "rm -rf s hvezdickou"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf bin/../obj",
+      "expect": "ask",
+      "since": "rm -rf s .."
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf $BUILD/bin",
+      "expect": "ask",
+      "since": "rm -rf s promennou"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Invoke-Expression $cmd",
+      "expect": "ask",
+      "since": "Invoke-Expression"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "iex $cmd",
+      "expect": "ask",
+      "since": "iex"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef migrations remove",
+      "expect": "ask",
+      "since": "ef migrations remove"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git clean -fdX",
+      "expect": "ask",
+      "since": "clean -fdX"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"DROP TABLE Record\"",
+      "expect": "ask",
+      "since": "DROP TABLE bez hostu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dropdb gsd_test_e2e_1",
+      "expect": "ask",
+      "since": "dropdb lokalni"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database drop",
+      "expect": "ask",
+      "since": "ef database drop lokalni"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database drop --connection \"Host=localhost;Database=gsd_dev\"",
+      "expect": "ask",
+      "since": "ef drop Host=localhost"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h 127.0.0.1 -c \"TRUNCATE Record\"",
+      "expect": "ask",
+      "since": "TRUNCATE lokalni"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -u origin feature/task-36-sinogard-hooks",
+      "expect": "allow",
+      "since": "push -u feature"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin main",
+      "expect": "allow",
+      "since": "push bez force"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf bin",
+      "expect": "allow",
+      "since": "rm -rf bin"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf obj node_modules",
+      "expect": "allow",
+      "since": "rm -rf obj node_modules"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Remove-Item -Recurse -Force .\\bin",
+      "expect": "allow",
+      "since": "Remove-Item .\\bin"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Remove-Item -LiteralPath src/a.cs -Force",
+      "expect": "allow",
+      "since": "Remove-Item bez -Recurse"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Remove-Item -Recurse:$true -LiteralPath:bin",
+      "expect": "allow",
+      "since": "dvojtecka v povolene slozce"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database update",
+      "expect": "allow",
+      "since": "ef update bez connection"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database update --connection \"Host=localhost;Database=gsd_dev\"",
+      "expect": "allow",
+      "since": "ef update localhost"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git stash",
+      "expect": "allow",
+      "since": "stash"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git stash pop",
+      "expect": "allow",
+      "since": "stash pop"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -m stary novy",
+      "expect": "allow",
+      "since": "branch -m"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git clean -n",
+      "expect": "allow",
+      "since": "clean -n"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status --porcelain",
+      "expect": "allow",
+      "since": "status"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git commit -m \"TASK-36: hooky\"",
+      "expect": "allow",
+      "since": "commit"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "npm test",
+      "expect": "allow",
+      "since": "npm test"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -NoProfile -File scripts/ci-local.ps1",
+      "expect": "allow",
+      "since": "ci-local"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rimraf bin",
+      "expect": "allow",
+      "since": "M1 rimraf povolena"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find bin -delete",
+      "expect": "allow",
+      "since": "M7 find -delete povolena"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem src -Recurse -Force -File | Remove-Item -Force",
+      "expect": "ask",
+      "since": "M8 mazani z roury"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet-ef database drop",
+      "expect": "ask",
+      "since": "M10 dotnet-ef drop lokalne"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin '+refs/heads/*:refs/heads/*'",
+      "expect": "deny",
+      "since": "M15 push plus wildcard"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python -c \"import shutil; shutil.rmtree('src')\"",
+      "expect": "ask",
+      "since": "M16 python -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "node -e \"require('fs').rmSync('src')\"",
+      "expect": "ask",
+      "since": "M16 node -e"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process git -ArgumentList 'branch -D feature/old' -Wait",
+      "expect": "deny",
+      "since": "M25 Start-Process"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c alias.bd='branch -D' bd feature/old",
+      "expect": "ask",
+      "since": "M27 alias"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process git -ArgumentList 'status' -Wait",
+      "expect": "allow",
+      "since": "M kontrola Start-Process"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf docs/hl�sen�/z�r�",
+      "expect": "deny",
+      "since": "ceska cesta deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf bin/hl�sen�",
+      "expect": "allow",
+      "since": "ceska cesta allow"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf bin/hl�sen�/*",
+      "expect": "ask",
+      "since": "ceska cesta ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.Directory]::Delete($p, $true)",
+      "expect": "ask",
+      "since": "A1 net-delete promenna"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[System.IO.File]::Delete($target)",
+      "expect": "ask",
+      "since": "A1 net-delete promenna File"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz <<SQL\nDROP TABLE users\nSQL",
+      "expect": "deny",
+      "since": "A4 heredoc vzdaleny host"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz <<'SQL'\nTRUNCATE users\nSQL",
+      "expect": "deny",
+      "since": "A4 heredoc quoted delim"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql \"Host=db.firma.cz\" <<SQL\nDROP SCHEMA public CASCADE\nSQL",
+      "expect": "deny",
+      "since": "A4 heredoc conn string"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql <<SQL\nDROP TABLE users\nSQL",
+      "expect": "ask",
+      "since": "A4 heredoc lokalni"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz <<SQL\nSELECT 1\nSQL",
+      "expect": "allow",
+      "since": "A4 kontrola SELECT"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat <<EOF\nDROP TABLE users\nEOF",
+      "expect": "allow",
+      "since": "A4 kontrola cizi heredoc"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$out = dotnet test\nWrite-Host $out",
+      "expect": "allow",
+      "since": "B1 viceradkovy snippet"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Write-Host 'a'\ngit reset --hard",
+      "expect": "deny",
+      "since": "B1 viceradkovy destruktivni"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git commit -m \"Add DROP TABLE migration\"",
+      "expect": "allow",
+      "since": "B4 commit message"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "grep -r \"DROP TABLE\" src",
+      "expect": "allow",
+      "since": "B4 grep v kodu"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Math]::Truncate($x)",
+      "expect": "ask",
+      "since": "B4 Math Truncate promenna"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Math]::Truncate(1.5)",
+      "expect": "allow",
+      "since": "B4 Math Truncate literal"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "truncate -s 0 x.log",
+      "expect": "allow",
+      "since": "B4 truncate logu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"TRUNCATE users\"",
+      "expect": "allow",
+      "since": "B4 echo textu"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Select-String \"DROP TABLE\" -Path src/x.sql",
+      "expect": "allow",
+      "since": "B4 Select-String"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"TRUNCATE users\"",
+      "expect": "ask",
+      "since": "B4 psql -c lokalne"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"DELETE FROM users\"",
+      "expect": "ask",
+      "since": "T1 delete bez where lokal"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz <<SQL\nDELETE FROM users\nSQL",
+      "expect": "deny",
+      "since": "T1 delete heredoc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"SELECT * FROM a WHERE id=1; DELETE FROM users\"",
+      "expect": "ask",
+      "since": "T1 where v jinem statementu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf W:/dev/gsd/repo/bin",
+      "expect": "allow",
+      "since": "B11 absolutni bin"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"TRUNCATE users\" | psql",
+      "expect": "ask",
+      "since": "C1 echo lokalne"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat drop.sql | psql -h db.firma.cz",
+      "expect": "ask",
+      "since": "C1 cat souboru do psql"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content drop.sql | psql -h db.firma.cz",
+      "expect": "ask",
+      "since": "C1 Get-Content do psql"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz <<SQL 2>&1\nDROP TABLE users\nSQL",
+      "expect": "deny",
+      "since": "C1 heredoc 2>&1"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz <<SQL > out.log\nDROP TABLE users\nSQL",
+      "expect": "deny",
+      "since": "C1 heredoc > out.log"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo -u postgres psql -h db.firma.cz <<SQL\nDROP TABLE x\nSQL",
+      "expect": "deny",
+      "since": "C4 sudo psql"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i db psql -h db.firma.cz <<SQL\nDROP TABLE x\nSQL",
+      "expect": "deny",
+      "since": "C4 docker exec psql"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sqlcmd -Q \"TRUNCATE TABLE x\"",
+      "expect": "ask",
+      "since": "C4 sqlcmd lokalne"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz -f migrace.sql",
+      "expect": "ask",
+      "since": "C4 psql -f souborem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sqlcmd -S db.firma.cz -i migrace.sql",
+      "expect": "ask",
+      "since": "C4 sqlcmd -i souborem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo -u postgres psql -h db.firma.cz <<SQL\nSELECT 1\nSQL",
+      "expect": "allow",
+      "since": "C4 kontrola sudo SELECT"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$a = $b",
+      "expect": "allow",
+      "since": "C7 promenna do promenne"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$env:PATH = \"$env:PATH;C:\\x\"",
+      "expect": "allow",
+      "since": "C7 PATH s interpolaci"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$msg = \"ahoj $name\"",
+      "expect": "allow",
+      "since": "C7 retezec s interpolaci"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat > NOTES.md <<EOF\ngit reset --hard je nebezpecny\nEOF",
+      "expect": "allow",
+      "since": "D3 poznamka o prikazu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat > NOTES.md <<EOF\nnikdy nepis rm -rf src\nEOF",
+      "expect": "allow",
+      "since": "D3 poznamka o rm"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.firma.cz <<SQL\nDROP TABLE x\nSQL",
+      "expect": "deny",
+      "since": "D3 kontrola psql heredoc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP\nTABLE users\" | psql -h db.firma.cz",
+      "expect": "deny",
+      "since": "E1 novy radek v retezci"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash <<'EOF'\ngit reset --hard\nEOF",
+      "expect": "deny",
+      "since": "E2 bash heredoc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sh <<EOF\ngit reset --hard\nEOF",
+      "expect": "deny",
+      "since": "E2 sh heredoc"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh <<EOF\ngit branch -D x\nEOF",
+      "expect": "deny",
+      "since": "E2 pwsh heredoc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash <<'EOF'\ngit status\nEOF",
+      "expect": "allow",
+      "since": "E2 bash heredoc neskodny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"<<x>>\"",
+      "expect": "allow",
+      "since": "E2 uvozovky nezacnou telo"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash <<EOF\ngit status",
+      "expect": "ask",
+      "since": "E2 neukonceny heredoc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo -n psql -h db.firma.cz <<SQL\nDROP TABLE x\nSQL",
+      "expect": "deny",
+      "since": "E4 sudo -n"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout 30 psql -h db.firma.cz <<SQL\nDROP TABLE x\nSQL",
+      "expect": "deny",
+      "since": "E4 timeout 30"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "nice -n 10 psql -h db.firma.cz <<SQL\nDROP TABLE x\nSQL",
+      "expect": "deny",
+      "since": "E4 nice -n 10"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -S -c \"TRUNCATE x\"",
+      "expect": "ask",
+      "since": "F1 psql -S neni host"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find . -exec sh -c 'rm -rf \"$0\"' {} \\;",
+      "expect": "ask",
+      "since": "M1 find exec promenna"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod.db <<\\SQL\nDROP TABLE users;\nSQL",
+      "expect": "deny",
+      "since": "M2 heredoc escaped delim"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -enc UmVtb3ZlLUl0ZW0gLVJlY3Vyc2UgLUZvcmNlIEM6XA==",
+      "expect": "ask",
+      "since": "M4 -enc"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -encod UmVtb3ZlLUl0ZW0=",
+      "expect": "ask",
+      "since": "M4 -encod"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat <<IGNORE && psql -h prod <<SQL\nignorovany text\nIGNORE\nDROP TABLE users;\nSQL",
+      "expect": "deny",
+      "since": "M6 dva heredocy"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process pwsh -ArgumentList @('-enc', 'UmVtb3ZlLUl0ZW0gQzpc')",
+      "expect": "ask",
+      "since": "M7 ArgumentList pole"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process git -ArgumentList @('status')",
+      "expect": "allow",
+      "since": "M7 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \\\" ; git reset --hard",
+      "expect": "deny",
+      "since": "G1 bash escape uvozovky"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo `\" ; git reset --hard",
+      "expect": "deny",
+      "since": "G1 ps escape uvozovky"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"a\\\"b\" && git status",
+      "expect": "allow",
+      "since": "G1 bash escape v retezci"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo \"C:\\src\\\" ; git reset --hard",
+      "expect": "deny",
+      "since": "G1 ps zpetne lomitko v ceste"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo `\"foo\"` ; git reset --hard",
+      "expect": "deny",
+      "since": "G1 bash zpetny apostrof"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf \"W:\\dev\\src\"",
+      "expect": "deny",
+      "since": "G1 cesta se zachova"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ls \"W:\\dev\\src\"",
+      "expect": "allow",
+      "since": "G1 kontrola cesty"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git reset \\\n  --hard",
+      "expect": "deny",
+      "since": "G9 bash pokracovani radku"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git reset `\n  --hard",
+      "expect": "deny",
+      "since": "G9 ps pokracovani radku"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status \\\n  --short",
+      "expect": "allow",
+      "since": "G9 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod.db \\\n  <<SQL\nDROP TABLE users;\nSQL",
+      "expect": "deny",
+      "since": "G9 heredoc pres dva radky"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat \\\n  <<EOF\nobycejny text\nEOF",
+      "expect": "allow",
+      "since": "G9 heredoc kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo -u root rm -rf /srv",
+      "expect": "ask",
+      "since": "G2 sudo -u"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo -u root rm -rf /srv/data",
+      "expect": "deny",
+      "since": "G2 sudo -u cesta"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo -n git reset --hard",
+      "expect": "deny",
+      "since": "G2 sudo -n"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "nice -n 10 rm -rf src",
+      "expect": "deny",
+      "since": "G2 nice -n"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout -s KILL 30 rm -rf src",
+      "expect": "deny",
+      "since": "G2 timeout -s"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "command -p rm -rf src",
+      "expect": "deny",
+      "since": "G2 command -p"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo -u root ls -la /srv",
+      "expect": "allow",
+      "since": "G2 kontrola sudo"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "nice -n 10 dotnet test",
+      "expect": "allow",
+      "since": "G2 kontrola nice"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env",
+      "expect": "allow",
+      "since": "G2 kontrola env sam"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout -s KILL 30 psql -h prod.db <<SQL\nDROP TABLE users;\nSQL",
+      "expect": "deny",
+      "since": "G6 timeout -s pred psql"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout 30 psql -h localhost <<SQL\nSELECT 1;\nSQL",
+      "expect": "allow",
+      "since": "G6 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo . | xargs sh -c 'git reset --hard'",
+      "expect": "deny",
+      "since": "G3 xargs sh -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ls | xargs -I {} sh -c 'rm -rf /srv/data'",
+      "expect": "deny",
+      "since": "G3 xargs -I"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ls | xargs echo",
+      "expect": "allow",
+      "since": "G3 kontrola"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& { rm -rf src; }",
+      "expect": "deny",
+      "since": "G4 blok se strednikem"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& { git status; rm -rf src }",
+      "expect": "deny",
+      "since": "G4 blok dva prikazy"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& { Get-Date; Get-Location }",
+      "expect": "allow",
+      "since": "G4 kontrola"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo { ; git reset --hard",
+      "expect": "deny",
+      "since": "G4 nevyvazena zavorka"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -ec UmVtb3ZlLUl0ZW0=",
+      "expect": "ask",
+      "since": "G5 -ec"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -com \"git reset --hard\"",
+      "expect": "deny",
+      "since": "G5 -com"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -comm \"rm -rf src\"",
+      "expect": "deny",
+      "since": "G5 -comm"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -NoProfile -File build.ps1",
+      "expect": "allow",
+      "since": "G5 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout -- :/",
+      "expect": "deny",
+      "since": "G7 checkout :/"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git restore ':(top)'",
+      "expect": "deny",
+      "since": "G7 restore :(top)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout ./*",
+      "expect": "deny",
+      "since": "G7 checkout ./*"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git checkout -- src/app.ts",
+      "expect": "allow",
+      "since": "G7 kontrola soubor"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python <<EOF\nimport shutil\nshutil.rmtree('src')\nEOF",
+      "expect": "ask",
+      "since": "G8 python heredoc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh prod <<EOF\nrm -rf /srv\nEOF",
+      "expect": "ask",
+      "since": "G8 ssh heredoc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat > NOTES.md <<EOF\nrm -rf je nebezpecny\nEOF",
+      "expect": "allow",
+      "since": "G8 kontrola data"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".env",
+      "expect": "deny",
+      "since": "env",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".env.local",
+      "expect": "deny",
+      "since": "env.local",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".env.production.local",
+      "expect": "deny",
+      "since": "env.prod.local",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".envrc",
+      "expect": "deny",
+      "since": "envrc",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "certs/server.pem",
+      "expect": "deny",
+      "since": "pem",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "certs/server.key",
+      "expect": "deny",
+      "since": "key",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "certs/server.pfx",
+      "expect": "deny",
+      "since": "pfx",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "certs/server.p12",
+      "expect": "deny",
+      "since": "p12",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "certs/store.jks",
+      "expect": "deny",
+      "since": "jks",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "certs/putty.ppk",
+      "expect": "deny",
+      "since": "ppk",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "keys/key.asc",
+      "expect": "deny",
+      "since": "asc",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "keys/key.gpg",
+      "expect": "deny",
+      "since": "gpg",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.ssh/id_rsa",
+      "expect": "deny",
+      "since": "id_rsa",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.ssh/id_ed25519.pub",
+      "expect": "deny",
+      "since": "id_ed25519.pub",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.ssh/config",
+      "expect": "deny",
+      "since": "ssh slozka",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/AppData/Roaming/Microsoft/UserSecrets/abc/secrets.json",
+      "expect": "deny",
+      "since": "usersecrets",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "src/secrets.json",
+      "expect": "deny",
+      "since": "secrets.json",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "deploy/secrets.yaml",
+      "expect": "deny",
+      "since": "secrets.yaml",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "deploy/secrets.toml",
+      "expect": "deny",
+      "since": "secrets.toml",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "src/app.secrets.json",
+      "expect": "deny",
+      "since": "dot secrets.json",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "Properties/PublishProfiles/prod.pubxml",
+      "expect": "deny",
+      "since": "pubxml",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "deploy/prod.publishsettings",
+      "expect": "deny",
+      "since": "publishsettings",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.npmrc",
+      "expect": "deny",
+      "since": "npmrc",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.pypirc",
+      "expect": "deny",
+      "since": "pypirc",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.netrc",
+      "expect": "deny",
+      "since": "netrc",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.git-credentials",
+      "expect": "deny",
+      "since": "git-credentials",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.aws/credentials",
+      "expect": "deny",
+      "since": "aws credentials",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.azure/azureProfile.json",
+      "expect": "deny",
+      "since": "azure",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.kube/config",
+      "expect": "deny",
+      "since": "kube config",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:/Users/tomas/.docker/config.json",
+      "expect": "deny",
+      "since": "docker config",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "C:\\Users\\tomas\\.ssh\\id_rsa",
+      "expect": "deny",
+      "since": "zpetna lomitka",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "%APPDATA%\\Microsoft\\UserSecrets\\abc\\secrets.json",
+      "expect": "deny",
+      "since": "APPDATA promenna",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "~/.aws/credentials",
+      "expect": "deny",
+      "since": "tilda",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Write",
+      "cmd": ".env",
+      "expect": "deny",
+      "since": "zapis .env",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Edit",
+      "cmd": ".env",
+      "expect": "deny",
+      "since": "edit .env",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".env.example",
+      "expect": "allow",
+      "since": "env.example",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".env.sample",
+      "expect": "allow",
+      "since": "env.sample",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".env.template",
+      "expect": "allow",
+      "since": "env.template",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "src/Gsd.Api/appsettings.json",
+      "expect": "allow",
+      "since": "appsettings",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "src/Gsd.Api/appsettings.Development.json",
+      "expect": "allow",
+      "since": "appsettings.Dev",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "src/Gsd.Domain/Record.cs",
+      "expect": "allow",
+      "since": "bezny soubor",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "docs/logs/session/hl�sen�-01.md",
+      "expect": "allow",
+      "since": "cesta s ceskym nazvem",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".claude/settings.local.json",
+      "expect": "ask",
+      "since": "settings.local.json",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".env.staging",
+      "expect": "ask",
+      "since": "netrackovany env",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Write",
+      "cmd": ".claude/settings.json",
+      "expect": "ask",
+      "since": "zapis settings.json",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Edit",
+      "cmd": ".claude/settings.json",
+      "expect": "ask",
+      "since": "edit settings.json",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Write",
+      "cmd": ".claude/sinogard-hooks.json",
+      "expect": "ask",
+      "since": "zapis sinogard-hooks",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Edit",
+      "cmd": "hooks/hooks.json",
+      "expect": "ask",
+      "since": "edit hooks.json",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Edit",
+      "cmd": "hooks/config/defaults.json",
+      "expect": "ask",
+      "since": "edit config pluginu",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": ".claude/settings.json",
+      "expect": "allow",
+      "since": "cteni settings.json",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env",
+      "expect": "deny",
+      "since": "cat .env",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "type C:\\x\\.env",
+      "expect": "deny",
+      "since": "type .env",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content .\\.env.local",
+      "expect": "deny",
+      "since": "Get-Content .env.local",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "gc .env",
+      "expect": "deny",
+      "since": "gc .env",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Select-String -Path .env -Pattern KEY",
+      "expect": "deny",
+      "since": "Select-String -Path",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "findstr KEY .env",
+      "expect": "deny",
+      "since": "findstr",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "grep KEY .env",
+      "expect": "deny",
+      "since": "grep",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "head -5 .env",
+      "expect": "deny",
+      "since": "head",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "tail -5 .env",
+      "expect": "deny",
+      "since": "tail",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "less .env",
+      "expect": "deny",
+      "since": "less",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "more .env",
+      "expect": "deny",
+      "since": "more",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git show HEAD:.env",
+      "expect": "deny",
+      "since": "git show",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp .env /tmp/x",
+      "expect": "deny",
+      "since": "cp",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item .env C:\\tmp\\x",
+      "expect": "deny",
+      "since": "Copy-Item",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Compress-Archive -Path .env -DestinationPath x.zip",
+      "expect": "deny",
+      "since": "Compress-Archive",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "openssl < .env",
+      "expect": "deny",
+      "since": "presmerovani vstupu",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo x > .env",
+      "expect": "deny",
+      "since": "presmerovani vystupu",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo x >> .env",
+      "expect": "deny",
+      "since": "presmerovani append",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat ~/.ssh/id_rsa",
+      "expect": "deny",
+      "since": "cat id_rsa",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat ~/.aws/credentials",
+      "expect": "deny",
+      "since": "cat aws",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content id_rsa",
+      "expect": "deny",
+      "since": "M2 hole jmeno id_rsa",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat private.pem",
+      "expect": "deny",
+      "since": "M2 hole jmeno pem",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat client.p12",
+      "expect": "deny",
+      "since": "M2 hole jmeno p12",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat<.env",
+      "expect": "deny",
+      "since": "M22 presmerovani bez mezery",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.File]::ReadAllText('.env')",
+      "expect": "deny",
+      "since": "M23 IO.File literal",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python -c \"print(open('.env').read())\"",
+      "expect": "deny",
+      "since": "M24 python open",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content -Path:.env",
+      "expect": "deny",
+      "since": "Get-Content -Path:.env",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "gc -LiteralPath:.env",
+      "expect": "deny",
+      "since": "gc -LiteralPath:.env",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Select-String -Path:.env -Pattern:KEY",
+      "expect": "deny",
+      "since": "Select-String dvojtecka",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "printenv",
+      "expect": "ask",
+      "since": "printenv",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env",
+      "expect": "ask",
+      "since": "hole env",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "set",
+      "expect": "ask",
+      "since": "hole set",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem env:",
+      "expect": "ask",
+      "since": "Get-ChildItem env:",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "gci env:",
+      "expect": "ask",
+      "since": "gci env:",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "dir env:",
+      "expect": "ask",
+      "since": "dir env:",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "ls env:",
+      "expect": "ask",
+      "since": "ls env:",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content Env:*",
+      "expect": "ask",
+      "since": "Get-Content Env:*",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "gc env:*",
+      "expect": "ask",
+      "since": "gc env:*",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cat env:",
+      "expect": "ask",
+      "since": "cat env:",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:NVIDIA_API_KEY",
+      "expect": "ask",
+      "since": "echo $env:KEY",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $NVIDIA_API_KEY",
+      "expect": "ask",
+      "since": "bash $KEY",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Environment]::GetEnvironmentVariable(\"GITHUB_TOKEN\")",
+      "expect": "ask",
+      "since": "GetEnvironmentVariable",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Item env:GITHUB_TOKEN",
+      "expect": "ask",
+      "since": "Get-Item env:TOKEN",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $DB_PASSWORD",
+      "expect": "ask",
+      "since": "PASSWORD promenna",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:AZURE_CREDENTIAL",
+      "expect": "ask",
+      "since": "CREDENTIAL promenna",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .claude/settings.local.json",
+      "expect": "ask",
+      "since": "cteni settings.local",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content .en?",
+      "expect": "ask",
+      "since": "M21 glob .en?",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat *",
+      "expect": "ask",
+      "since": "M21 glob hvezdicka",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:PATH",
+      "expect": "allow",
+      "since": "echo PATH",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $HOME",
+      "expect": "allow",
+      "since": "echo HOME",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env FOO=1 npm test",
+      "expect": "allow",
+      "since": "env s prirazenim",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env.sample",
+      "expect": "allow",
+      "since": "cat .env.sample",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat src/Gsd.Api/appsettings.Development.json",
+      "expect": "allow",
+      "since": "cat appsettings",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status --porcelain",
+      "expect": "allow",
+      "since": "git status",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat README.md",
+      "expect": "allow",
+      "since": "cat bezny soubor",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ls *.md",
+      "expect": "allow",
+      "since": "M21 glob md",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "grep neco src/*.ts",
+      "expect": "allow",
+      "since": "M21 glob ts",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat Program.cs",
+      "expect": "allow",
+      "since": "M2 bezne jmeno",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $PWD",
+      "expect": "allow",
+      "since": "B2 PWD je adresar",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $keys",
+      "expect": "allow",
+      "since": "B2 keys",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $tokens",
+      "expect": "allow",
+      "since": "B2 tokens",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content $keyFile",
+      "expect": "allow",
+      "since": "B2 keyFile",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $monkey",
+      "expect": "allow",
+      "since": "B2 monkey",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:API_KEY",
+      "expect": "ask",
+      "since": "B2 kontrola API_KEY",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:DB_PWD",
+      "expect": "ask",
+      "since": "B2 kontrola DB_PWD",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:CLIENT_SECRET",
+      "expect": "ask",
+      "since": "B2 kontrola SECRET",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:GITHUB_TOKEN",
+      "expect": "ask",
+      "since": "B2 kontrola TOKEN",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ls config*",
+      "expect": "allow",
+      "since": "B3 glob config hvezda",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat config.json",
+      "expect": "allow",
+      "since": "B3 cat config.json",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .docker/config.json",
+      "expect": "deny",
+      "since": "B3 kontrola docker",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .kube/config",
+      "expect": "deny",
+      "since": "B3 kontrola kube",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .aws/credentials",
+      "expect": "deny",
+      "since": "B3 kontrola aws",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:API_KEYS",
+      "expect": "ask",
+      "since": "C6 API_KEYS",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:AZURE_CREDENTIALS",
+      "expect": "ask",
+      "since": "C6 AZURE_CREDENTIALS",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:DB_PASSWD",
+      "expect": "ask",
+      "since": "C6 DB_PASSWD",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:apiKey",
+      "expect": "ask",
+      "since": "C6 camelCase apiKey",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $secretKey",
+      "expect": "ask",
+      "since": "C6 camelCase secretKey",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:GITHUB_TOKENS",
+      "expect": "ask",
+      "since": "C6 TOKENS",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:USERPROFILE",
+      "expect": "allow",
+      "since": "C6 kontrola USERPROFILE",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ls cred*",
+      "expect": "allow",
+      "since": "C3 glob cred",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat credentials",
+      "expect": "allow",
+      "since": "C3 cat credentials",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $db_password",
+      "expect": "ask",
+      "since": "H1 db_password",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $api_key",
+      "expect": "ask",
+      "since": "H1 api_key",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:Mixed_Secret_Key",
+      "expect": "ask",
+      "since": "H1 Mixed_Secret_Key",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $db_port",
+      "expect": "allow",
+      "since": "H1 kontrola db_port",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:build_number",
+      "expect": "allow",
+      "since": "H1 kontrola build_num",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $user_name",
+      "expect": "allow",
+      "since": "H1 kontrola user_name",
+      "hook": "secrets"
     }
   ]}
