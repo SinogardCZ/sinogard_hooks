@@ -600,6 +600,53 @@ $amber4Cases = @(
 Test-Cases 'review Amber kolo 4 (G, H)' $amber4Cases
 
 # ================================================================================
+#  Council Metis, treti kolo (2026-09-06) - UZKA otazka: jen obaly, escapovani
+#  uvozovek a zkratky parametru PowerShellu (zadani Amber, kolo 4 bod 3).
+#
+#  Vratil 8 nalezu k obalum. ZMERENO: ctyri z nich (powershell -c, bash -lc,
+#  xargs -n, xargs -I) uz opravene BYLY - council je nemohl vedet, protoze dostal
+#  jen popis. Zbylych sedm tvaru (vcetne dvou nezavislych uvnitr jednoho nalezu)
+#  propoustelo doopravdy. Vsechny jsou tataz trida: prepinac obalu, ktery BERE
+#  HODNOTU a v tabulce nestal, takze se za prikaz vzala jeho HODNOTA.
+# ================================================================================
+
+$metis3Cases = @(
+    # N1 - `env -S` nese v hodnote celou PRIKAZOVOU RADKU, ne parametr
+    (Case 'N1 env -S'                   'env -S "rm -rf -- ./victim"' 'deny')
+    (Case 'N1 env --split-string='      'env --split-string="git reset --hard"' 'deny')
+    (Case 'N1 env -S v obalu'           'timeout --preserve-status --kill-after=5s 30s env -S "rm -rf -- ./victim"' 'deny')
+    (Case 'N1 kontrola'                 'env -S "dotnet build"' 'allow')
+
+    # N2 - GNU /usr/bin/time bere prepinace s hodnotou
+    (Case 'N2 time -o'                  'time -o ./timing.txt rm -rf -- ./victim' 'deny')
+    (Case 'N2 time -f'                  'time -f "%e" git reset --hard' 'deny')
+    (Case 'N2 kontrola'                 'time dotnet test' 'allow')
+
+    # N3 - dlouhe tvary prepinacu stdbuf
+    (Case 'N3 stdbuf --output'          'stdbuf --output L rm -rf -- ./victim' 'deny')
+    (Case 'N3 kontrola'                 'stdbuf -o L dotnet test' 'allow')
+
+    # N4 - dlouhe tvary prepinacu xargs
+    (Case 'N4 xargs --process-slot-var' 'xargs --process-slot-var SLOT rm -rf -- ./victim' 'deny')
+    (Case 'N4 xargs --arg-file'         'xargs --arg-file /dev/null rm -rf -- ./victim' 'deny')
+    (Case 'N4 xargs --max-args'         'xargs --max-args 1 git branch -D x' 'deny')
+    (Case 'N4 kontrola'                 'xargs --verbose ls -la' 'allow')
+
+    # N5 - `-okdir` je ctvrty tvar `-exec`
+    (Case 'N5 find -okdir'              "find . -okdir rm -rf -- ./victim '{}' ';'" 'deny')
+    (Case 'N5 kontrola'                 "find . -okdir grep -l TODO '{}' ';'" 'allow')
+
+    # Tvary, ktere council oznacil, ale opravene uz BYLY. Zustavaji v sade jako
+    # doklad, ze plati - ne jako nove nalezy.
+    (Case 'N6 powershell -c'            'powershell -c "Remove-Item -LiteralPath .\victim -Recurse -Force"' 'deny' 'PowerShell')
+    (Case 'N6 bash -lc'                 'bash -lc "rm -rf -- ./victim"' 'deny')
+    (Case 'N6 xargs -n'                 'xargs -n 1 rm -rf -- ./victim' 'deny')
+    (Case 'N6 xargs -I'                 'xargs -I X rm -rf -- ./victim' 'deny')
+)
+
+Test-Cases 'council Metis kolo 3 (2026-09-06)' $metis3Cases
+
+# ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)
 #
 #  Kazdy tvar, ktery kdy byl deny, jim ZUSTAVA - a kazdy tvar, ktery byl kdy

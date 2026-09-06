@@ -69,18 +69,23 @@ $script:WrapperValueFlags = @{
     'sudo'    = '^(-u|-g|-C|-p|-r|-t|-T|-U|--user|--group)$'
     'doas'    = '^(-u|-C)$'
     'nice'    = '^(-n|--adjustment)$'
-    'env'     = '^(-u|-C|-S|--unset|--chdir)$'
+    # `-S` je tu ZAMERNE ne: jeho hodnota neni parametr, ale prikazova radka.
+    # Preskocit ji znamenalo propustit `env -S "rm -rf src"` (nalez Metis 3).
+    'env'     = '^(-u|-C|--unset|--chdir)$'
     'timeout' = '^(-s|--signal|-k|--kill-after)$'
+    # GNU /usr/bin/time bere prepinace s hodnotou; `time -o log rm -rf src` davalo
+    # jako prikaz `log` (nalez Metis 3).
+    'time'    = '^(-o|-f|--output|--format)$'
     'docker'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
     'podman'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
-    'stdbuf'  = '^(-i|-o|-e)$'
+    'stdbuf'  = '^(-i|-o|-e|--input|--output|--error)$'
 }
-$script:PlainWrappers = '^(nohup|time|command|builtin|exec)$'
+$script:PlainWrappers = '^(nohup|command|builtin|exec)$'
 $script:ContainerWrappers = '^(docker|podman)$'
 
 # Odloupne z ARGV vsechny obaly a vrati zbytek - tedy skutecny prikaz vcetne jmena.
 # Kdyz zadny obal nesedi, vraci vstup nedotceny.
-function Get-WrapperTail($Argv) {
+function Get-WrapperTail($Argv, [int]$Depth = 0) {
     $arr = @($Argv)
     $i = 0
     $guard = 0
@@ -102,7 +107,26 @@ function Get-WrapperTail($Argv) {
             if ($i -lt $arr.Count -and $arr[$i] -match '^(exec|run)$') { $i++ }
         }
         while ($i -lt $arr.Count -and $arr[$i] -match '^-') {
-            if ($arr[$i] -cmatch $flagPattern) { $i += 2 } else { $i++ }
+            $t = [string]$arr[$i]
+            # Nalez Metis 3: `env -S "rm -rf src"` (a `--split-string`) nese v hodnote
+            # celou PRIKAZOVOU RADKU, ne parametr. Preskocit ji znamenalo, ze prikaz
+            # zmizel a zbyl obal bez cile -> allow. Hodnota se proto rozlozi na tokeny
+            # a pokracuje se v ni.
+            if ($name -eq 'env' -and $Depth -lt 4) {
+                $split = $null
+                $skip = 0
+                if (($t -eq '-S' -or $t -eq '--split-string') -and ($i + 1) -lt $arr.Count) {
+                    $split = [string]$arr[$i + 1]; $skip = 2
+                } elseif ($t -match '^(-S|--split-string)=(.*)$') {
+                    $split = $Matches[2]; $skip = 1
+                }
+                if ($null -ne $split) {
+                    $tail = @(Split-Arguments $split)
+                    if (($i + $skip) -lt $arr.Count) { $tail += @($arr[($i + $skip)..($arr.Count - 1)]) }
+                    return (Get-WrapperTail $tail ($Depth + 1))
+                }
+            }
+            if ($t -cmatch $flagPattern) { $i += 2 } else { $i++ }
         }
         if ($name -match $script:ContainerWrappers -and $i -lt $arr.Count) {
             $i++   # jmeno kontejneru nebo obrazu
@@ -577,7 +601,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             while ($i -lt $rest.Count) {
                 $t = $rest[$i]
                 if ($t -eq '--') { $i++; break }
-                if ($t -match '^-(n|I|i|P|L|s|d|E)$') { $i += 2; continue }
+                # Nalez Metis 3: DLOUHE tvary tychz prepinacu (`--arg-file`,
+                # `--process-slot-var`, `--replace`) v seznamu nestaly, takze se
+                # preskocil jen prepinac a jeho HODNOTA se vzala za prikaz -> allow.
+                if ($t -match '^-(n|I|i|P|L|s|d|E|a)$') { $i += 2; continue }
+                if ($t -cmatch '^--(max-args|replace|max-procs|max-lines|max-chars|delimiter|eof|arg-file|process-slot-var)$') { $i += 2; continue }
                 if ($t.StartsWith('-')) { $i++; continue }
                 break
             }
@@ -610,7 +638,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             $idx = -1
             for ($i = 0; $i -lt $rest.Count; $i++) {
-                if ($rest[$i] -eq '-exec' -or $rest[$i] -eq '-execdir' -or $rest[$i] -eq '-ok') { $idx = $i; break }
+                # `-okdir` je ctvrty tvar tehoz (nalez Metis 3) - GNU find ho zna.
+                if ($rest[$i] -cmatch '^-(exec|execdir|ok|okdir)$') { $idx = $i; break }
             }
             if ($idx -lt 0) { return $out }
             $tail = @($rest | Select-Object -Skip ($idx + 1) | Where-Object { $_ -ne ';' -and $_ -ne '+' -and $_ -ne '\;' })

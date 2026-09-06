@@ -3,6 +3,90 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.4] — 2026-09-06
+
+Čtvrté opravné kolo. Sjednocený skener z 0.1.3 nezavedl žádnou novou díru — ale
+**odhalil tři staré**, které minula všechna review i oba councily. Všech 15 tvarů bylo
+změřeno před opravou; jedna odchylka od zadání je přiznána níže.
+
+### Opraveno — kde končí řetězec (G1)
+
+🔴 Skener neznal **escape znak před uvozovkou**. `echo \" ; git reset --hard` v Bashi
+řetězec neotvírá, ale skener si myslel opak, spolkl zbytek řádku *do řetězce* a zbyl
+jediný list `echo` → **allow**. Netýká se to jednoho pravidla, ale toho, kde končí
+řetězec — tedy všeho. Proto samostatný commit.
+
+Escape znak je **jiný podle shellu** a záměna dělá novou díru opačným směrem — obě
+možnosti stojí v sadě jako kontrolní skupina: v PowerShellu `\` neescapuje
+(`echo "C:\src\" ; git reset --hard` je uzavřený řetězec), v Bashi zpětný apostrof
+neescapuje (je to substituce). Znak se proto bere z `tool_name`.
+
+### Opraveno — jeden zdroj pravdy pro obaly (G2, G6)
+
+Tabulka přepínačů obalů existovala **dvakrát**. Oprava E4 z kola 3 došla jen do jedné
+kopie, takže `sudo -u root rm -rf /srv/data`, `nice -n 10 rm -rf src` i
+`timeout -s KILL 30 rm -rf src` dávaly `argv[0]` jako `-u` / `-n` / `-s` → allow.
+Nově `Get-WrapperTail` nad jedinou tabulkou; čtyři větve `Get-CommandLeaf` se slily
+do jedné, která ji volá.
+
+### Opraveno — další tvary
+
+- **G3** `xargs` bere ARGV, ne příkazovou řádku — `xargs sh -c 'git reset --hard'`
+- **G4** `{ }` je zanoření jako `$( )` — `& { rm -rf src; }` (se středníkem)
+- **G5** `-ec` není předpona `encodedcommand`; `-com` je platná zkratka `-Command`
+- **G7** `:/`, `:(top)`, `./*` git chápe jako celý strom
+- **G8** tělo heredocu u `python` / `ssh` se **spustí** → `ask` (Z3), ne allow
+- **G9** pokračování řádku před heredocem
+- **H4** vnitřní hledání závorky v `Get-Substitution` neumělo uvozovky (`$(echo ')')`)
+
+### Opraveno — třetí council Métis (úzká otázka)
+
+Vrátil 8 nálezů k obalům. **Změřeno: čtyři z nich už opravené byly** — council dostal
+jen popis rozboru, ne kód. Zbylých **sedm tvarů propouštělo doopravdy** a všechny jsou
+táž třída: přepínač obalu, který bere hodnotu a v tabulce nestál, takže se za příkaz
+vzala jeho **hodnota**.
+
+- `env -S "rm -rf src"` — hodnota není parametr, ale **příkazová řádka**
+- `time -o log rm -rf src` — GNU `/usr/bin/time` bere `-o -f --output --format`
+- `stdbuf --output L rm -rf src` — chyběly dlouhé tvary
+- `xargs --process-slot-var` / `--arg-file` / `--max-args` — dlouhé tvary už známých
+- `find -okdir` — čtvrtý tvar `-exec`
+
+🔴 **Oblasti „escapování uvozovek" a „zkratky parametrů PowerShellu" council nevrátil.**
+Selhali poskytovatelé, ne otázka (codex CLI chybuje i po zkrácení, gemini vyčerpal denní
+kvótu, nvidia vrací HTTP 504); kontrolní otázka u codexu i gemini prošla. **Netvrdím, že
+ty dvě oblasti byly councilem prověřeny — nebyly.**
+
+### Přidáno — generátor invariantu (H2)
+
+`tests/_generate-invariants.ps1`. Soubor se na generátor odvolával, ale ten v repu
+nebyl. Invariant vzrostl ze **142 na 451** řádků a nově ho přehrává i sada `secrets`;
+všech 142 původních řádků je v souboru doslova a na svém místě. Generátor **jen
+přidává**; při sporu (týž tvar, jiné očekávání) nezapíše nic a skončí nenulově.
+
+### Změněno — konfigurace
+
+`gate.codeInterpreters` a `gate.remoteShells` v `hooks/config/defaults.json` (řídicí
+soubor; změna vyvolaná nálezem G8 v zadání kola 4).
+
+### Opraveno — nepravdivá věta v README (H3)
+
+🔴 „Chyba směřuje k falešnému `ask`, ne k falešnému `allow`" — G1–G3 to vyvrátily.
+Platí slabší a pravdivé: chyba v **pravidle** směřuje k `ask`, chyba ve **skeneru**
+může propustit.
+
+### Známá omezení (nově vypsána, vědomé rozhodnutí)
+
+- Příkaz uvnitř kontejneru se nerozebírá (`/tmp` v obrazu není pracovní strom).
+- Krátká absolutní cesta `/xxx` končí `ask` — od přepínače `cmd` k nerozeznání.
+  Proto Amberin příklad `sudo -u root rm -rf /srv` končí `ask`, ne `deny`; před opravou
+  to bylo `allow` a `deny` je doloženo týmž obalem nad `/srv/data`.
+
+### Sady
+
+gate 1420, secrets 588, resume-cost 27, notify 39 — vše 0 failed / 0 skipped na obou
+interpretech. Červená proti klonu `2e5354f`: gate **62 FAIL**. Invariant 142 → **451** řádků.
+
 ## [0.1.3] — 2026-09-06
 
 Třetí opravné kolo. Tentokrát ale hlavně **strukturální oprava společné příčiny**: tři kola

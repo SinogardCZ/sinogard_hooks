@@ -2781,5 +2781,119 @@
       "expect": "allow",
       "since": "H1 kontrola user_name",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env -S \"rm -rf -- ./victim\"",
+      "expect": "deny",
+      "since": "N1 env -S"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env --split-string=\"git reset --hard\"",
+      "expect": "deny",
+      "since": "N1 env --split-string="
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout --preserve-status --kill-after=5s 30s env -S \"rm -rf -- ./victim\"",
+      "expect": "deny",
+      "since": "N1 env -S v obalu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env -S \"dotnet build\"",
+      "expect": "allow",
+      "since": "N1 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "time -o ./timing.txt rm -rf -- ./victim",
+      "expect": "deny",
+      "since": "N2 time -o"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "time -f \"%e\" git reset --hard",
+      "expect": "deny",
+      "since": "N2 time -f"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "time dotnet test",
+      "expect": "allow",
+      "since": "N2 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "stdbuf --output L rm -rf -- ./victim",
+      "expect": "deny",
+      "since": "N3 stdbuf --output"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "stdbuf -o L dotnet test",
+      "expect": "allow",
+      "since": "N3 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "xargs --process-slot-var SLOT rm -rf -- ./victim",
+      "expect": "deny",
+      "since": "N4 xargs --process-slot-var"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "xargs --arg-file /dev/null rm -rf -- ./victim",
+      "expect": "deny",
+      "since": "N4 xargs --arg-file"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "xargs --max-args 1 git branch -D x",
+      "expect": "deny",
+      "since": "N4 xargs --max-args"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "xargs --verbose ls -la",
+      "expect": "allow",
+      "since": "N4 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find . -okdir rm -rf -- ./victim '{}' ';'",
+      "expect": "deny",
+      "since": "N5 find -okdir"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find . -okdir grep -l TODO '{}' ';'",
+      "expect": "allow",
+      "since": "N5 kontrola"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "powershell -c \"Remove-Item -LiteralPath .\\victim -Recurse -Force\"",
+      "expect": "deny",
+      "since": "N6 powershell -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -lc \"rm -rf -- ./victim\"",
+      "expect": "deny",
+      "since": "N6 bash -lc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "xargs -n 1 rm -rf -- ./victim",
+      "expect": "deny",
+      "since": "N6 xargs -n"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "xargs -I X rm -rf -- ./victim",
+      "expect": "deny",
+      "since": "N6 xargs -I"
     }
   ]}
