@@ -130,11 +130,14 @@ function Test-EncodedCommandFlag([string]$Token) {
 # nasel `<<` i uvnitr retezce (`echo "<<x>>"`) a zbytek prikazu se spolkl jako telo.
 function Test-HeredocOutsideQuotes([string]$Line) {
     if ([string]::IsNullOrEmpty($Line)) { return $false }
+    $esc = Get-ScannerEscape
     $inSingle = $false
     $inDouble = $false
     for ($i = 0; $i -lt $Line.Length - 1; $i++) {
         $c = $Line[$i]
         if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; continue }
+        # Escape pred uvozovkou uvozovku neotevira (nalez Amber G1).
+        if ($c -eq $esc) { $i++; continue }
         if ($c -eq "'" -and -not $inDouble) { $inSingle = $true; continue }
         if ($c -eq '"') { $inDouble = -not $inDouble; continue }
         if ($inDouble) { continue }
@@ -1161,6 +1164,10 @@ if ([string]::IsNullOrWhiteSpace($command)) {
     Write-HookStderr $script:InternalMessage
     exit 2
 }
+
+# Escape znak skeneru je jiny v Bashi (`\`) a v PowerShellu (zpetny apostrof) a zamena
+# dela diru obema smery - viz komentar u Set-ScannerEscape (nalez Amber G1).
+Set-ScannerEscape $toolName
 
 if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 

@@ -284,6 +284,11 @@ if ($known -notcontains $toolName) { Write-HookStderr $script:InternalMessage; e
 
 if (-not (Test-HookEnabled $config 'secrets')) { exit 0 }
 
+# Tyz skener jako brana, takze i tyz escape znak podle shellu (nalez Amber G1).
+# Pro nastroje nad souborem (Read/Edit/Write) je hodnota bez vyznamu - skener se
+# nepouzije - ale nastavit ji je levnejsi nez vetvit.
+Set-ScannerEscape $toolName
+
 $decision = $null
 if ($script:CmdTools -contains $toolName) {
     $command = [string](Get-Field $toolInput 'command' '')

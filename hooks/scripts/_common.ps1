@@ -169,8 +169,45 @@ function ConvertTo-NormalPath([string]$Path) {
 #
 # Pravidlo: nad prikazovou radkou se NEDELI regexem. Vsechno deli tahle funkce.
 
+# ------------------------------------------------------------ escape znak ---
+#
+# Nalez Amber G1: escape znak PRED uvozovkou je literal, ne prepnuti stavu retezce.
+# `echo \" ; git reset --hard` neotevira retezec, takze `;` deli - jenze skener o
+# escapu nevedel, cely zbytek radku spolkl "do retezce" a zbyl jediny list `echo`.
+#
+# Escape znak ale NENI stejny v obou shellech a zamenit je nelze - obe zamena dela
+# NOVOU diru presne opacnym smerem (obe jsou v kontrolni skupine):
+#   PowerShell  `echo "C:\src\" ; git reset --hard`  - `\` v PS neescapuje; kdyby ano,
+#               retezec by se nikdy nezavrel a `;` by nedelilo -> allow.
+#   Bash        echo `"foo"` ; git reset --hard      - zpetny apostrof v Bashi neescapuje
+#               (je to substituce); kdyby ano, druha `"` by retezec OTEVRELA -> allow.
+# Znak se proto bere podle `tool_name` vstupu hooku (Bash / PowerShell), ne globalne.
+#
+# Escapovana dvojice se do vystupu vklada CELA a doslova. Kdyby se escape zahazoval,
+# `C:\src` ve Split-Arguments by se zmenilo na `C:src` a shoda na chranene cesty by
+# prestala platit - tenhle escape resi VYHRADNE stav uvozovek, nic jineho.
+$script:ScannerEscape = '\'
+
+function Set-ScannerEscape([string]$ToolName) {
+    if ($ToolName -eq 'PowerShell') { $script:ScannerEscape = '`' } else { $script:ScannerEscape = '\' }
+}
+
+function Get-ScannerEscape { return $script:ScannerEscape }
+
 function Split-Unquoted([string]$Text, [string[]]$Separators) {
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
+
+    $r = Split-UnquotedCore $Text $Separators $true
+    # Sken skoncil s OTEVRENOU dvojitou uvozovkou => vstup je bud rozbity, nebo jsme
+    # si escapem zavreli oci (`echo "C:\src\"` je v Bashi opravdu neuzavreny retezec).
+    # Druhy pruchod BEZ escapu deli VIC, tedy smerem k deny; propustit kvuli tomu nic
+    # nejde, nanejvys se rozdeli neco, co se delit nemelo.
+    if ($r.Open) { $r = Split-UnquotedCore $Text $Separators $false }
+    return ,@($r.Parts)
+}
+
+function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEscape) {
+    $esc = $script:ScannerEscape
 
     $out = New-Object System.Collections.ArrayList
     $buf = New-Object System.Text.StringBuilder
@@ -190,6 +227,11 @@ function Split-Unquoted([string]$Text, [string[]]$Separators) {
             [void]$buf.Append($c)
             if ($c -eq "'") { $inSingle = $false }
             $i++; continue
+        }
+        # Escape plati MIMO jednoduche uvozovky (uvnitr nich escape neexistuje ani
+        # v jednom shellu). Oba znaky se opisuji doslova, stav uvozovek se nemeni.
+        if ($HonorEscape -and $c -eq $esc -and ($i + 1) -lt $n) {
+            [void]$buf.Append($c); [void]$buf.Append($Text[$i + 1]); $i += 2; continue
         }
         if ($c -eq "'" -and -not $inDouble) {
             $inSingle = $true; [void]$buf.Append($c); $i++; continue
@@ -225,7 +267,14 @@ function Split-Unquoted([string]$Text, [string[]]$Separators) {
     # `,` je nutna: PowerShell rozbaluje vracene pole a jednoprvkovy vysledek by
     # se vratil jako skalar, na kterem `.Count` pod StrictMode pada.
     # POZOR: na volajicim miste uz se kolem toho `@()` NEDAVA - zabalilo by to znovu.
-    return ,@($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    # POZOR: tady `@()` BEZ carky. Carka je potreba jen u NAVRATU z funkce (PowerShell
+    # by jednoprvkove pole rozbalil na skalar); hodnota v hashtable se nerozbaluje,
+    # takze `,@(...)` by pole zabalilo JESTE JEDNOU a Count by byl 1 misto poctu casti.
+    # Prave na tomhle spadly testy M6 a M7 hned po zavedeni escapu.
+    return @{
+        Parts = @($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        Open  = $inDouble
+    }
 }
 
 # Obsah vsech `$( ... )` v textu (kvotove korektne, vcetne zanoreni).
@@ -233,12 +282,15 @@ function Get-Substitution([string]$Text) {
     $out = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
 
+    $esc = $script:ScannerEscape
     $i = 0
     $n = $Text.Length
     $inSingle = $false
     while ($i -lt $n) {
         $c = $Text[$i]
         if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
+        # `\$(...)` v Bashi substituci NEPROVEDE (nalez Amber G1, tataz trida).
+        if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
         if ($c -eq "'") { $inSingle = $true; $i++; continue }
         # V dvojitych uvozovkach se substituce PROVADI, takze se prochazi dal.
         # Procesova substituce `<( ... )` a `>( ... )` je taky spusteny prikaz
@@ -337,6 +389,7 @@ function Split-CommandLine([string]$Command) {
 }
 
 function Split-Arguments([string]$Command) {
+    $esc = $script:ScannerEscape
     $items = New-Object System.Collections.ArrayList
     $buffer = New-Object System.Text.StringBuilder
     $i = 0
@@ -351,13 +404,26 @@ function Split-Arguments([string]$Command) {
             if ($c -eq "'") { $inSingle = $false } else { [void]$buffer.Append($c); $any = $true }
             $i++; continue
         }
+        # Escapovana dvojice se opisuje CELA (nalez Amber G1). Zahodit escape nelze:
+        # `C:\src` by se zmenilo na `C:src` a shoda na chranenou cestu by prestala platit.
+        # Escape pred koncem radku je pokracovani radku - to je jediny pripad, kdy se
+        # dvojice zahazuje, jinak by v argv zbyl token `\` a posunul pozicni argumenty.
+        if ($c -eq $esc -and ($i + 1) -lt $n) {
+            if ($Command[$i + 1] -eq "`n" -or $Command[$i + 1] -eq "`r") {
+                if ($any) { [void]$items.Add($buffer.ToString()); [void]$buffer.Clear(); $any = $false }
+                $i += 2; continue
+            }
+            [void]$buffer.Append($c); [void]$buffer.Append($Command[$i + 1]); $any = $true; $i += 2; continue
+        }
         if ($inDouble) {
             if ($c -eq '"') { $inDouble = $false } else { [void]$buffer.Append($c); $any = $true }
             $i++; continue
         }
         if ($c -eq "'") { $inSingle = $true; $any = $true; $i++; continue }
         if ($c -eq '"') { $inDouble = $true; $any = $true; $i++; continue }
-        if ($c -eq ' ' -or $c -eq "`t") {
+        # Konec radku je oddelovac argumentu stejne jako mezera - bez toho se
+        # `git reset` a `--hard` ze dvou radku slepily do jednoho tokenu.
+        if ($c -eq ' ' -or $c -eq "`t" -or $c -eq "`n" -or $c -eq "`r") {
             if ($any) { [void]$items.Add($buffer.ToString()); [void]$buffer.Clear(); $any = $false }
             $i++; continue
         }

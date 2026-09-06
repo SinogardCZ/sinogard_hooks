@@ -503,6 +503,41 @@ $metis2Cases = @(
 Test-Cases 'council Metis kolo 2 (2026-09-06)' $metis2Cases
 
 # ================================================================================
+#  Review Amber, kolo 4 - nalezy G (falesne allow) a H.
+#
+#  Sjednoceny skener z kola 3 zadnou novou diru nezavedl, ale ODHALIL tri stare,
+#  ktere minula vsechna review i oba councily. G1 je z nich nejnebezpecnejsi:
+#  netyka se jednoho pravidla, ale toho, kde konci retezec - tedy uplne vseho.
+# ================================================================================
+
+$amber4Cases = @(
+    # G1 - escape znak pred uvozovkou je LITERAL, ne otevreni retezce.
+    #      Znak je JINY v kazdem shellu a zamena dela diru opacnym smerem, takze
+    #      ke kazdemu pripadu stoji protipripad z toho DRUHEHO shellu.
+    (Case 'G1 bash escape uvozovky'     'echo \" ; git reset --hard' 'deny')
+    (Case 'G1 ps escape uvozovky'       'echo `" ; git reset --hard' 'deny' 'PowerShell')
+    (Case 'G1 bash escape v retezci'    'echo "a\"b" && git status' 'allow')
+    #      Protipripad 1: `\` v PowerShellu NEescapuje - `"C:\src\"` je uzavreny
+    #      retezec a `;` deli dal. Kdyby se escape bral globalne, bylo by z toho allow.
+    (Case 'G1 ps zpetne lomitko v ceste' 'echo "C:\src\" ; git reset --hard' 'deny' 'PowerShell')
+    #      Protipripad 2: zpetny apostrof v Bashi je SUBSTITUCE, ne escape.
+    (Case 'G1 bash zpetny apostrof'     'echo `"foo"` ; git reset --hard' 'deny')
+    #      Cesta s `\` musi projit skenerem nedotcena, jinak by `W:\dev\src` ztratilo
+    #      lomitka a shoda na chranenou cestu by prestala platit.
+    (Case 'G1 cesta se zachova'         'rm -rf "W:\dev\src"' 'deny')
+    (Case 'G1 kontrola cesty'           'ls "W:\dev\src"' 'allow')
+
+    # G9 - pokracovani radku. `git reset \<konec radku> --hard` je JEDEN prikaz;
+    #      driv se rozpadl na dva a `--hard` samo o sobe nic nespustilo -> allow.
+    (Case 'G9 bash pokracovani radku'   "git reset \`n  --hard" 'deny')
+    #      Tri zpetne apostrofy: dva davaji LITERALNI zpetny apostrof, treti s `n` konec radku.
+    (Case 'G9 ps pokracovani radku'     "git reset ```n  --hard" 'deny' 'PowerShell')
+    (Case 'G9 kontrola'                 "git status \`n  --short" 'allow')
+)
+
+Test-Cases 'review Amber kolo 4 (G, H)' $amber4Cases
+
+# ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)
 #
 #  Kazdy tvar, ktery kdy byl deny, jim ZUSTAVA - a kazdy tvar, ktery byl kdy
