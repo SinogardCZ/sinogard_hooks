@@ -3,6 +3,82 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.7] — 2026-09-06
+
+Kolo 6. Nálezy **Ady** (N19–N22) — sousední třída k obalům: ne *„co se rozebírá"*, ale
+**„kde se který průchod spouští"**. Plus jeden vlastní nález (N23), který z měření vypadl.
+
+### Opraveno — N19: řetěz průchodů se v zanoření nespouštěl
+
+Hlavní běh proháněl příkaz **třemi** průchody — `Split-Heredoc` → `Split-SqlPipeline` →
+`Split-CommandLine`. Rekurze (`bash -c`, `cmd /c`, `eval`, tělo bloku, tělo heredocu
+do shellu) volala **jen poslední článek**, takže dva speciální průchody v zanoření
+neexistovaly:
+
+| příkaz | 0.1.6 | 0.1.7 |
+|---|---|---|
+| `bash -c 'echo "DROP TABLE users" \| psql -h prod'` | allow | deny |
+| `sh -c "psql -h prod <<SQL … DROP TABLE x … SQL"` | allow | deny |
+| `eval 'echo "DROP TABLE x" \| psql -h prod'` | allow | deny |
+
+🔴 **Vzdálený `DROP` nemá zálohu v `permissions.deny`** — prefixové pravidlo rouru neumí —
+takže ho držel **jen hook**. Řetěz proto žije v jediné funkci (`Get-CommandLineLeaves`)
+a volají ji obě strany; čtvrtý průchod se do zanoření dostane sám.
+
+Kontrolní skupina: `bash -c 'git log | head'` = `allow`, `echo … | psql -h prod` (holý
+tvar) = `deny`, `bash -c 'psql -h prod -c "DROP TABLE x"'` = `deny`.
+**Mutant** (zanoření zpět na `Split-CommandLine`): první dva řádky tabulky zezelenají.
+
+### Opraveno — N20: přesměrování stdin do SQL klienta se nečetlo jako SQL
+
+| příkaz | 0.1.6 | 0.1.7 |
+|---|---|---|
+| `psql -h prod < drop.sql` | allow | ask |
+| `psql -h prod <<< $SQL` | allow | ask |
+| `psql -h prod <<< "DROP TABLE x"` | deny | deny |
+
+Obsah souboru ani proměnné v příkazu vidět není → platí Z3 (`__SQL_ZE_SOUBORU__` → `ask`),
+stejně jako u `-f` (známé omezení 10). **Literál** za `<<<` vidět je a čte se jako SQL.
+
+🔴 **Regexem to nejde:** `psql -c "SELECT * FROM t WHERE a < 5"` má `<` **uvnitř** řetězce
+a vzor nad surovým textem by z běžného dotazu udělal falešný `ask`. `Test-StdinRedirect`
+proto rozhoduje nad znaky **mimo uvozovky**, včetně escapu podle shellu.
+**Mutant** (funkce vrací vždy `$false`): oba první řádky zezelenají.
+
+### Opraveno — N22: `UPDATE … SET` bez `WHERE` (rozšíření rozsahu, rozhodl Tom T-9 A)
+
+Týž dopad jako `DELETE FROM` bez `WHERE` (T-1) a jako `TRUNCATE`: přepíše každý řádek.
+Mimo lokálního hostitele `deny`, na `localhost` `ask`; `UPDATE t SET a=1 WHERE id=1`
+zůstává `allow`. `WHERE` se hledá **v témž statementu**, ne kdekoli v textu.
+**Mutant** (podmínka vyřazena): oba tvary zezelenají.
+
+### Opraveno — N21: příkaz jako argument vzdáleného shellu
+
+`ssh host "rm -rf /"` a `ssh host "psql -c 'DROP TABLE x'"` → `ask` (Z3: běží na cizím
+stroji, kde pravidla nad cestami ani seznam lokálních hostů neplatí).
+Podmínka je úzká schválně: `ssh host` i `ssh -T git@github.com` zůstávají `allow`.
+
+### Opraveno — N23 (vlastní nález): jednočlánková roura v uvozovkách **shazovala hook**
+
+`bash -c 'git log | head'` končilo `interní chyba, blokováno`. Příčina: `Split-Pipe`
+vrací `return (Split-Unquoted …)`, což **zahodí čárku**, kterou si `Split-Unquoted` hlídá —
+jednoprvkový výsledek se rozbalí na **řetězec** a `.Count` nad ním pod `StrictMode`
+vyhodí výjimku. Fail-closed, takže ne díra — ale **falešný blok na úplně běžné práci**,
+a to je cesta k vypnuté bráně.
+
+🔴 **Opravou nebylo přidat `,@(…)` do `Split-Pipe`** — to jsem zkusila a změřila: kolem
+už zabaleného pole to přidá **další úroveň** a dvoučlánková roura vyjde jako jeden prvek
+(`count=1`), takže `echo … | psql -h prod` propadl na `allow`. Čárka patří tam, kde pole
+**vzniká**; volající si výsledek zabaluje `@(…)`.
+**Mutant** (`@()` odebráno): `bash -c 'git log | head'` zase spadne.
+
+### Poznámka k rozporu se zprávou Ady
+
+Ada uvedla u `bash -c 'echo … | psql -h prod'` a `eval '…'` výsledek **allow**. Naměřeno
+na `3ea4571`: **CRASH → fail-closed deny** (a padal i kontrolní `bash -c 'git log | head'`).
+Průchod to tedy nebyl; byl to N23. Nález N19 tím **neztrácí platnost** — dokládá ho
+`sh -c "psql … <<SQL"`, který `allow` skutečně byl, a po opravě N23 i zbylé dva tvary.
+
 ## [0.1.6] — 2026-09-06
 
 Kolo 5b. Rozsah dal Tom (rozhodnutí 2026-09-06/T36-F1 **T-7**): **jen K1 a L1**, plus K3,
@@ -491,6 +567,7 @@ První verze. Čtyři hooky, Windows-first, bez externích závislostí.
 - **`userConfig` pluginu se nepoužívá** — ukládá se do globálních user settings,
   tedy společně pro všechny projekty na stroji.
 
+[0.1.7]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.7
 [0.1.6]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.6
 [0.1.5]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.5
 [0.1.4]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.4

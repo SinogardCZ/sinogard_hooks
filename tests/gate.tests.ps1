@@ -749,6 +749,58 @@ $amber5bCases = @(
 Test-Cases 'review Amber kolo 5b (K, L)' $amber5bCases
 
 # ================================================================================
+#  REVIEW ADA, KOLO 6 - nalezy N19-N23 (2026-09-06)
+#
+#  Sousedni trida k obalum: NE "co se rozebira", ale "KDE SE KTERY PRUCHOD SPOUSTI".
+#  Hlavni beh mel tri pruchody (heredoc -> roura do SQL klienta -> prikazova radka),
+#  rekurze znala jen posledni. Vzdaleny DROP pritom nema zalozni siet v
+#  `permissions.deny` - prefixove pravidlo rouru neumi - takze ho drzel JEN hook.
+#
+#  N23 je muj vlastni nalez, ktery vypadl az z mereni N19: jednoclankova roura
+#  v uvozovkach shodila hook na `.Count` pod StrictMode. Fail-closed, ale falesny
+#  blok na uplne bezne praci.
+# ================================================================================
+
+$ada6Cases = @(
+    # N19 - specialni pruchody se musi spustit i v zanoreni
+    (Case 'N19 roura do psql v bash -c'  'bash -c ''echo "DROP TABLE users" | psql -h prod''' 'deny')
+    (Case 'N19 heredoc v sh -c'          ('sh -c "psql -h prod <<SQL' + $lf + 'DROP TABLE x;' + $lf + 'SQL"') 'deny')
+    (Case 'N19 roura do psql v eval'     'eval ''echo "DROP TABLE x" | psql -h prod''' 'deny')
+    # 🔴 kontrolni skupina: bezna roura v zanoreni MUSI projit
+    (Case 'N19 kontrola bezna roura'     'bash -c ''git log | head''' 'allow')
+    (Case 'N19 kontrola holy tvar drzi'  'echo "DROP TABLE users" | psql -h prod' 'deny')
+    (Case 'N19 kontrola -c v zanoreni'   'bash -c ''psql -h prod -c "DROP TABLE x"''' 'deny')
+
+    # N23 - jednoclankova roura v uvozovkach shazovala hook (fail-closed = falesny blok)
+    (Case 'N23 roura jen v uvozovkach'   'bash -c ''git log | head''' 'allow')
+    (Case 'N23 roura v -c retezci'       'psql -h localhost -c "SELECT ''a|b''"' 'allow')
+
+    # N20 - presmerovani stdin do SQL klienta
+    (Case 'N20 stdin ze souboru'         'psql -h prod < drop.sql' 'ask')
+    (Case 'N20 here-string z promenne'   'psql -h prod <<< $SQL' 'ask')
+    (Case 'N20 here-string literal'      'psql -h prod <<< "DROP TABLE x"' 'deny')
+    # 🔴 kontrolni skupina: `<` UVNITR retezce neni presmerovani
+    (Case 'N20 kontrola < v dotazu'      'psql -h prod -c "SELECT * FROM t WHERE a < 5"' 'allow')
+    (Case 'N20 kontrola -f drzi'         'psql -h prod -f drop.sql' 'ask')
+
+    # N22 - UPDATE ... SET bez WHERE (rozsireni rozsahu, rozhodl Tom T-9 A)
+    (Case 'N22 update bez where prod'    'psql -h prod -c "UPDATE users SET active=0"' 'deny')
+    (Case 'N22 update bez where local'   'psql -h localhost -c "UPDATE users SET active=0"' 'ask')
+    # 🔴 kontrolni skupina: s WHERE je to bezna prace
+    (Case 'N22 kontrola s where'         'psql -h prod -c "UPDATE t SET a=1 WHERE id=1"' 'allow')
+    (Case 'N22 kontrola delete drzi'     'psql -h prod -c "DELETE FROM t"' 'deny')
+
+    # N21 - prikaz jako argument vzdaleneho shellu
+    (Case 'N21 ssh s prikazem'           'ssh host "rm -rf /"' 'ask')
+    (Case 'N21 ssh s SQL prikazem'       'ssh host "psql -c ''DROP TABLE x''"' 'ask')
+    # 🔴 kontrolni skupina: ssh BEZ prikazu je bezna prace
+    (Case 'N21 kontrola ssh bez prikazu' 'ssh host' 'allow')
+    (Case 'N21 kontrola ssh -T'          'ssh -T git@github.com' 'allow')
+)
+
+Test-Cases 'review Ada kolo 6 (N19-N23)' $ada6Cases
+
+# ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)
 #
 #  Kazdy tvar, ktery kdy byl deny, jim ZUSTAVA - a kazdy tvar, ktery byl kdy

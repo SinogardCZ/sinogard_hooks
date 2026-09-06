@@ -217,7 +217,11 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
         # POZOR: bez `@()`. Split-Pipe uz vraci `,@(...)`, aby se jednoprvkovy vysledek
         # nerozbalil na skalar; dalsi `@()` kolem toho by pole zabalilo JESTE JEDNOU
         # a Count by byl 1 misto poctu clanku. Presne na tom tahle oprava poprve spadla.
-        $stages = Split-Pipe $stmt
+        # `@(...)` je tu POVINNE, ne kosmetika (nalez Hestia N23): jednoclankovy vysledek
+        # se z funkce vraci jako RETEZEC a `.Count` nad nim pod StrictMode shodi hook.
+        # Stavalo se to vzdycky, kdyz jedina roura v prikazu stala v uvozovkach -
+        # tedy u `bash -c 'git log | head'`, coz je uplne bezna prace.
+        $stages = @(Split-Pipe $stmt)
         if ($stages.Count -lt 2) { continue }
 
         $sink = $stages[$stages.Count - 1]
@@ -390,11 +394,51 @@ function Get-NestedShellLeaf([string]$Inner, [string]$ShellTool, [int]$Depth) {
     $prev = Get-ScannerEscape
     Set-ScannerEscape $ShellTool
     try {
-        foreach ($s in (Split-CommandLine $Inner)) {
-            foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
-        }
+        foreach ($l in (Get-CommandLineLeaves $Inner ($Depth + 1))) { [void]$out.Add($l) }
     } finally {
         Set-ScannerEscapeChar $prev
+    }
+    return $out
+}
+
+# Nalez Ada N19: hlavni beh proustel prikaz TREMI pruchody - Split-Heredoc,
+# Split-SqlPipeline a teprve pak Split-CommandLine. Rekurze (bash -c, cmd /c, eval,
+# telo bloku, telo heredocu do shellu) volala JEN posledni clanek, takze dva
+# specialni pruchody se v zanoreni nespoustely:
+#   bash -c 'echo "DROP TABLE users" | psql -h prod'   -> allow (hole = deny)
+#   sh -c "psql -h prod <<SQL ... SQL"                 -> allow
+# Vzdaleny DROP nema zalozni siet v `permissions.deny` - prefixove pravidlo rouru
+# neumi - takze ho drzel jen hook. Retez proto zije v JEDINE funkci a volaji ji
+# obe strany; kdyz pribude ctvrty pruchod, prijde do zanoreni sam od sebe.
+function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
+    $out = New-Object System.Collections.ArrayList
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $out }
+
+    # Tela heredocu se vytahnou PRED delenim - jinak by se telo stalo samostatnym
+    # podprikazem bez hosta a vzdalena operace by se cetla jako lokalni (Amber A4).
+    $hd = Split-Heredoc $Text
+    # Roura do SQL klienta se resi az nad zbytkem - heredoc uz je z nej pryc (Amber C1).
+    $pl = Split-SqlPipeline $hd.Rest $script:SqlClients
+
+    foreach ($sub in (Split-CommandLine $pl.Rest)) {
+        foreach ($l in (Get-CommandLeaf $sub $Depth)) { [void]$out.Add($l) }
+    }
+    foreach ($b in $hd.Bodies) {
+        [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
+                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+    }
+    # Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti (Z3 -> ask).
+    if ($hd.Unterminated) {
+        [void]$out.Add(@{ Kind = 'opaque'; Raw = $Text })
+    }
+    foreach ($b in $pl.Bodies) {
+        if ($b.Opaque) {
+            [void]$out.Add(@{ Kind = 'sqlPipeOpaque'; Exe = 'sql-pipe'; Args = @(); Raw = $b.Outer
+                              Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+        } else {
+            [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
+                              Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+        }
     }
     return $out
 }
@@ -466,9 +510,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         # Nalez Amber G4: vnitrek se rozebira jako PRIKAZOVA RADKA, ne jako jediny
         # prikaz - `& { git reset --hard; rm -rf src }` jsou dva prikazy a driv se
         # z nich cetl jen prvni. Skener uz `{ }` zna, takze se sem dostane cely blok.
-        foreach ($s in (Split-CommandLine $block.Body)) {
-            foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
-        }
+        # Nalez Ada N19: telo bloku prochazi tymz retezem jako hlavni beh.
+        foreach ($l in (Get-CommandLineLeaves $block.Body ($Depth + 1))) { [void]$out.Add($l) }
         # Nalez Amber K1: hlava pred zavorkou se ZAHAZOVALA. `rm -rf {src,lib}` neni
         # blok, ale jeden prikaz s literalnim argumentem - telo `src,lib` neznamena nic
         # a `return` po nem schoval mazani. Kdyz hlava neco nese, statement se rozebira
@@ -564,9 +607,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($file -eq '') { return $out }
             $inner = ($file + ' ' + $argList).Trim()
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $raw }); return $out }
-            foreach ($s in (Split-CommandLine $inner)) {
-                foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
-            }
+            # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
+            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
         '^(bash|sh|zsh|dash|ksh)$' {
@@ -619,17 +661,15 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
-            foreach ($s in (Split-CommandLine $inner)) {
-                foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
-            }
+            # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
+            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
         '^(eval)$' {
             $inner = (Join-CommandString $rest)
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
-            foreach ($s in (Split-CommandLine $inner)) {
-                foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
-            }
+            # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
+            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
         '^(xargs)$' {
@@ -980,6 +1020,60 @@ function Test-DeleteWithoutWhere([string]$Sql) {
     return $false
 }
 
+# Nalez Ada N22 (rozsireni rozsahu rozhodl Tom 2026-09-06/T36-F1 T-9 A): `UPDATE ... SET`
+# bez `WHERE` prepise KAZDY radek tabulky - tedy tyz dopad jako `DELETE FROM` bez `WHERE`
+# a jako TRUNCATE. `WHERE` se hleda v TOMTEZ statementu, ne kdekoli v textu; jinak by
+# jeden neskodny `WHERE` v davce omluvil vsechny ostatni prikazy.
+function Test-UpdateWithoutWhere([string]$Sql) {
+    if ([string]::IsNullOrWhiteSpace($Sql)) { return $false }
+    foreach ($stmt in [regex]::Split($Sql, ';')) {
+        if (-not [regex]::IsMatch($stmt, '\bupdate\s+\S+\s+set\b', 'IgnoreCase')) { continue }
+        if (-not [regex]::IsMatch($stmt, '\bwhere\b', 'IgnoreCase')) { return $true }
+    }
+    return $false
+}
+
+# Nalez Ada N20: je v prikazu presmerovani stdin s NELITERALNIM operandem?
+#
+# !! Regexem to nejde: `psql -c "SELECT * FROM t WHERE a < 5"` ma `<` UVNITR retezce
+# a vzor nad surovym textem by z bezneho dotazu udelal falesny ask. Rozhoduje se proto
+# nad znaky mimo uvozovky, tymz zpusobem jako skener - vcetne escapu podle shellu.
+#
+# Operand v uvozovkach ($true se nevraci) je LITERAL: ten uz vyzobne kontrola uvozovek
+# v Get-SqlText a cte se jako SQL. Nelliteralni operand (soubor, promenna) videt neni,
+# takze plati Z3 -> ask.
+function Test-StdinRedirect([string]$Text) {
+    $t = [string]$Text
+    if ($t -eq '') { return $false }
+    $esc = Get-ScannerEscape
+    $inSingle = $false
+    $inDouble = $false
+    $i = 0
+    $n = $t.Length
+    while ($i -lt $n) {
+        $c = $t[$i]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
+        if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
+        if ($c -eq '"') { $inDouble = -not $inDouble; $i++; continue }
+        if ($inDouble) { $i++; continue }
+        if ($c -eq "'") { $inSingle = $true; $i++; continue }
+        if ($c -eq '<') {
+            # Heredoc (`<<SLOVO`) sem nepatri - ten resi Split-Heredoc. Rozliseni je
+            # v tom, ze `<<<` je here-string, kdezto `<<` uvozuje telo.
+            $j = $i
+            while ($j -lt $n -and $t[$j] -eq '<') { $j++ }
+            $count = $j - $i
+            if ($count -eq 2) { $i = $j; continue }
+            while ($j -lt $n -and $t[$j] -eq ' ') { $j++ }
+            if ($j -ge $n) { return $false }
+            if ($t[$j] -eq '"' -or $t[$j] -eq "'") { $i = $j; continue }
+            return $true
+        }
+        $i++
+    }
+    return $false
+}
+
 # Text, ktery je SKUTECNE SQL - ne cely prikaz.
 #
 # Nalez Amber B4: vzory bezely nad surovym textem vcetne retezcu, takze
@@ -1019,6 +1113,14 @@ function Get-SqlText($Leaf, $SqlClients) {
             [void]$parts.Add('__SQL_ZE_SOUBORU__'); $i++
         }
     }
+
+    # Nalez Ada N20: SQL se do klienta dostane i PRESMEROVANIM stdin, ne jen prepinacem.
+    #   psql -h prod < drop.sql     obsah souboru v prikazu videt neni -> Z3, ask
+    #   psql -h prod <<< $SQL       obsah promenne taky ne          -> Z3, ask
+    #   psql -h prod <<< "DROP ..." literal JE videt                -> cte se jako SQL
+    # Literal za `<<<` chytnou uz uvozovky nize; tady se resi jen ten NElliteralni tvar,
+    # jinak by `<` u kazdeho dotazu vyrobilo falesny ask.
+    if (Test-StdinRedirect ([string]$Leaf.Raw)) { [void]$parts.Add('__SQL_ZE_SOUBORU__') }
     foreach ($m in [regex]::Matches([string]$Leaf.Raw, '"([^"]*)"|''([^'']*)''')) {
         foreach ($g in 1, 2) { if ($m.Groups[$g].Success) { [void]$parts.Add($m.Groups[$g].Value) } }
     }
@@ -1116,7 +1218,8 @@ function Test-DatabaseRule($Leaf, $Config) {
     if ($sql -ne '') {
         $sqlDestructive = ([regex]::IsMatch($sql, ('\bdrop' + $gap + '(table|database|schema)\b'), 'IgnoreCase')) -or
                           ([regex]::IsMatch($sql, '\btruncate\b', 'IgnoreCase')) -or
-                          (Test-DeleteWithoutWhere $sql)
+                          (Test-DeleteWithoutWhere $sql) -or
+                          (Test-UpdateWithoutWhere $sql)
     }
 
     $destructive = $sqlDestructive -or
@@ -1167,6 +1270,25 @@ function Test-Leaf($Leaf, $Config) {
         if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
         return @{ Decision = 'ask'
                   Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+    }
+
+    # Nalez Ada N21: prikaz jako ARGUMENT vzdaleneho shellu. `ssh host "rm -rf /"` se
+    # spusti na CIZIM stroji, kde pravidla nad cestami ani seznam lokalnich hostu
+    # neplati - rozebrat to nedokazeme a tvrdit "je to v poradku" uz vubec. Plati Z3.
+    # !! Uzka podminka schvalne: `ssh host` (interaktivni) a `ssh -T git@github.com`
+    # (jen prepinac a host) zustavaji allow, protoze prikaz nenesou. Falesny blok na
+    # `git push` pres ssh by branu vypnul rychleji, nez by cokoli ochranil.
+    if ($Leaf.Kind -eq 'leaf') {
+        $remote = @(Get-Field $gate 'remoteShells' @('ssh', 'plink'))
+        if ($remote -ccontains ([string]$Leaf.Exe).ToLowerInvariant()) {
+            $positional = @(@(Get-LeafField $Leaf 'Args' @()) | Where-Object { -not ([string]$_).StartsWith('-') })
+            if ($positional.Count -ge 2) {
+                $text = [string]$Leaf.Raw
+                if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
+                return @{ Decision = 'ask'
+                          Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+            }
+        }
     }
 
     # Nalez Amber C1: do SQL klienta tece neco, co v prikazu neni videt
@@ -1292,35 +1414,11 @@ if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 $script:PendingAsk = $null
 $decision = $null
 
-# Tela heredocu se vytahnou PRED delenim - jinak by se telo stalo samostatnym
-# podprikazem bez hosta a vzdalena operace by se cetla jako lokalni (Amber A4).
-$heredoc = Split-Heredoc $command
-
-# Roura do SQL klienta se resi az nad zbytkem - heredoc uz je z nej pryc (Amber C1).
-$sqlClientList = @(Get-Field (Get-Field $config 'gate') 'sqlClients' @('psql', 'pgcli', 'dropdb', 'sqlcmd'))
-$pipeline = Split-SqlPipeline $heredoc.Rest $sqlClientList
-
-$leaves = New-Object System.Collections.ArrayList
-foreach ($sub in (Split-CommandLine $pipeline.Rest)) {
-    foreach ($leaf in (Get-CommandLeaf $sub 0)) { [void]$leaves.Add($leaf) }
-}
-foreach ($b in $heredoc.Bodies) {
-    [void]$leaves.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                         Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
-}
-# Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti (Z3 -> ask).
-if ($heredoc.Unterminated) {
-    [void]$leaves.Add(@{ Kind = 'opaque'; Raw = $command })
-}
-foreach ($b in $pipeline.Bodies) {
-    if ($b.Opaque) {
-        [void]$leaves.Add(@{ Kind = 'sqlPipeOpaque'; Exe = 'sql-pipe'; Args = @(); Raw = $b.Outer
-                             Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
-    } else {
-        [void]$leaves.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                             Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
-    }
-}
+# Nalez Ada N19: retez pruchodu (heredoc -> roura do SQL klienta -> prikazova radka)
+# zije v Get-CommandLineLeaves a volaji ho i vsechny rekurze. Drive stal rozepsany
+# tady a zanoreni znalo jen posledni clanek.
+$script:SqlClients = @(Get-Field (Get-Field $config 'gate') 'sqlClients' @('psql', 'pgcli', 'dropdb', 'sqlcmd'))
+$leaves = Get-CommandLineLeaves $command 0
 
 foreach ($leaf in $leaves) {
     $r = Test-Leaf $leaf $config

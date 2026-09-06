@@ -147,37 +147,50 @@ aby si je nikdo nemusel objevit sám.
    `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
 10. **SQL, které v příkazu není vidět, končí `ask`.** `cat migrace.sql | psql`,
     `psql -f migrace.sql`, `sqlcmd -i migrace.sql` i `$sql | psql` — obsah souboru ani
-    roury hook nečte, takže rozsah nezná. Literál z `echo "…" | psql` se rozebere.
+    roury hook nečte, takže rozsah nezná. Od 0.1.7 sem patří i **přesměrování stdin** —
+    `psql -h prod < drop.sql` a `psql -h prod <<< $SQL` (nález Ada N20). Literál
+    z `echo "…" | psql` i z `psql <<< "DROP TABLE x"` se rozebere.
 11. **Příkaz uvnitř kontejneru se nerozebírá.** `docker exec` a `docker run` se odloupnou
     jen kvůli jménu klienta (`docker exec -i db psql …` je pořád `psql`), ale to, co se
     spustí *uvnitř* kontejneru, se pravidly nad cestami neposuzuje. Důvod je věcný:
     `/tmp` v obrazu není pracovní strom Toma, takže by pravidlo „mazání mimo povolené
     složky" blokovalo běžnou práci — a brána, která blokuje běžnou práci, se do týdne
     vypne. Vědomé rozhodnutí kola 4, ne opomenutí.
+    ⚠️ **Co ale kryté JE:** destrukce databáze se pozná podle `-h <host>` v příkazu,
+    takže `docker exec -i db psql -h prod -c "DROP TABLE x"` končí `deny` jako každý
+    jiný `psql`. Nekryté jsou **jen cesty uvnitř obrazu**.
 12. **Krátká absolutní cesta `/xxx` končí `ask`.** `rm -rf /srv` je od `/s` `/q` `/f`
     (přepínače `cmd`) k nerozeznání, takže se rozsah nezná. `rm -rf /srv/data` je `deny`.
     Důvod v hlášce mluví o rouře, ne o téhle nejednoznačnosti — vlastní tvar zprávy
-    je v backlogu **v0.2**.
+    je v backlogu **v0.2**. (Kosmetika hlášky, ne průchod: rozhodnutí `ask` je správné.)
 13. **Seznam interpretů je na dvou místech.** `gate.codeInterpreters` v konfiguraci čte
     větev heredocu; větev pro `-c` / `-e` v `Get-CommandLeaf` má týž seznam natvrdo.
     Dnes jsou shodné. Přidat do konfigurace `lua` znamená, že `lua <<EOF` se chytne
     a `lua -c` ne. `Get-CommandLeaf` konfiguraci nedostává; protažení je refaktor
     podpisů → **v0.2**.
-14. **Escapování uvozovek a zkratky parametrů PowerShellu nebyly prověřeny councilem.**
-    Otázka na ně se z poskytovatelů nevrátila (kvóta, chyby CLI). Opravy v těch dvou
-    oblastech stojí na review a na vlastních testech, ne na nezávislém protihráči →
-    **v0.2**, až kvóta naběhne.
-15. **`cmd /c` se rozebírá s escapem hostitelského shellu.** Skutečný escape `cmd.exe`
-    je `^` a ten skener nezná; `bash -c` a `pwsh -c` se přepínají správně (nález I2)
-    a od 0.1.6 i tělo heredocu (`bash <<'EOF'`, nález K3), `cmd` ne → **v0.2**.
+14. 🔴 **Escapování uvozovek a zkratky parametrů PowerShellu nebyly prověřeny councilem
+    — je to VERIFIKAČNÍ DLUH, ne odložená funkce.** Otázka na ně se z poskytovatelů
+    nevrátila (kvóta, chyby CLI). Opravy v těch dvou oblastech stojí jen na review
+    a na vlastních testech, ne na nezávislém protihráči. **Spustit hned, jak kvóta
+    naběhne** — ne až u v0.2.
+15. 🔴 **`cmd /c` se rozebírá s escapem hostitelského shellu — je to OBCHÁZENÍ
+    `deny` → `allow`, ne kosmetika.** Skutečný escape `cmd.exe` je `^` a ten skener
+    nezná, takže příkaz escapovaný po způsobu `cmd` může projít. `bash -c` a `pwsh -c`
+    se přepínají správně (nález I2) a od 0.1.6 i tělo heredocu (`bash <<'EOF'`,
+    nález K3), `cmd` ne → **v0.2**.
 16. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
     zkouška (skutečné okno na obrazovce) proběhne až při zapojení. Když se toast neukáže,
     správná odpověď je přepnout `notify.channel` na `none` s uvedeným důvodem, ne tvrdit,
     že upozornění fungují.
-17. **Blok s ocasem se nerozebírá.** Tělo `{ … }` se hledá jen tehdy, když jím statement
-    **končí**. `if ($x) { rm -rf src } else { git status }`, `try { … } catch { … }`
-    i `{ … } # poznámka` proto projdou nerozebrané. Stará díra (nález K2), ne regrese;
-    zavřít ji znamená rozebírat **všechny** bloky ve statementu → **v0.2**.
+17. 🔴 **Blok s ocasem se nerozebírá — OBCHÁZENÍ `deny` → `allow`.** Tělo `{ … }` se
+    hledá jen tehdy, když jím statement **končí**, takže
+    `if ($x) { rm -rf src } else { git status }`, `try { … } catch { … }`
+    i `{ … } # poznámka` projdou **nerozebrané, tedy `allow`**. Stará díra (nález K2),
+    ne regrese; zavřít ji znamená rozebírat **všechny** bloky ve statementu → **v0.2**.
+18. **Příkaz jako argument vzdáleného shellu končí `ask`, ne `deny`.** `ssh host "rm -rf /"`
+    se spustí na cizím stroji, kde pravidla nad cestami neplatí — rozhoduje proto člověk
+    (nález Ada N21, opraveno v 0.1.7). `ssh host` a `ssh -T git@github.com` zůstávají
+    `allow`, aby běžná práce přes ssh nekončila dotazem.
 
 ---
 

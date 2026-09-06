@@ -460,6 +460,14 @@ function Join-CommandString($Tokens) {
 }
 
 # Statementy = to, co je oddeleno `;`, `&&`, `||`, `&` nebo koncem radku. ROURA NE.
+# !! Nalez Hestia N23 (kolo 6): `return (Split-Unquoted ...)` zahodi carku, kterou si
+# Split-Unquoted hlida, takze JEDNOPRVKOVY vysledek se rozbali na RETEZEC. Volajici pak
+# sahne na `.Count`, coz pod StrictMode vyhodi vyjimku a hook fail-closed BLOKUJE:
+# `bash -c 'git log | head'` koncilo "interni chyba" - falesny blok na bezne praci.
+#
+# !! Opravou NENI pridat `,@(...)` sem: kolem uz zabaleneho pole to prida DALSI uroven
+# a dvouclankova roura pak vyjde jako jeden prvek (zmereno - `count=1`). Carka patri
+# tam, kde pole vznika (Split-Unquoted), a volajici si vysledek zabaluje `@(...)`.
 function Split-Statement([string]$Text) {
     return (Split-Unquoted $Text @('&&', '||', ';', '&', "`n", "`r"))
 }

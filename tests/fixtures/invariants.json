@@ -3179,5 +3179,125 @@
       "since": "cesta s ceskym nazvem",
       "hook": "secrets",
       "kind": "path"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'echo \"DROP TABLE users\" | psql -h prod'",
+      "expect": "deny",
+      "since": "N19 roura do psql v bash -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sh -c \"psql -h prod <<SQL\nDROP TABLE x;\nSQL\"",
+      "expect": "deny",
+      "since": "N19 heredoc v sh -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "eval 'echo \"DROP TABLE x\" | psql -h prod'",
+      "expect": "deny",
+      "since": "N19 roura do psql v eval"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'git log | head'",
+      "expect": "allow",
+      "since": "N19 kontrola bezna roura"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE users\" | psql -h prod",
+      "expect": "deny",
+      "since": "N19 kontrola holy tvar drzi"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'psql -h prod -c \"DROP TABLE x\"'",
+      "expect": "deny",
+      "since": "N19 kontrola -c v zanoreni"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h localhost -c \"SELECT 'a|b'\"",
+      "expect": "allow",
+      "since": "N23 roura v -c retezci"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod < drop.sql",
+      "expect": "ask",
+      "since": "N20 stdin ze souboru"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod <<< $SQL",
+      "expect": "ask",
+      "since": "N20 here-string z promenne"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod <<< \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "N20 here-string literal"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"SELECT * FROM t WHERE a < 5\"",
+      "expect": "allow",
+      "since": "N20 kontrola < v dotazu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -f drop.sql",
+      "expect": "ask",
+      "since": "N20 kontrola -f drzi"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"UPDATE users SET active=0\"",
+      "expect": "deny",
+      "since": "N22 update bez where prod"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h localhost -c \"UPDATE users SET active=0\"",
+      "expect": "ask",
+      "since": "N22 update bez where local"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"UPDATE t SET a=1 WHERE id=1\"",
+      "expect": "allow",
+      "since": "N22 kontrola s where"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"DELETE FROM t\"",
+      "expect": "deny",
+      "since": "N22 kontrola delete drzi"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh host \"rm -rf /\"",
+      "expect": "ask",
+      "since": "N21 ssh s prikazem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh host \"psql -c 'DROP TABLE x'\"",
+      "expect": "ask",
+      "since": "N21 ssh s SQL prikazem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh host",
+      "expect": "allow",
+      "since": "N21 kontrola ssh bez prikazu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -T git@github.com",
+      "expect": "allow",
+      "since": "N21 kontrola ssh -T"
     }
   ]}
