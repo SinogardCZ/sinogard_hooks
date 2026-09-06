@@ -39,13 +39,15 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 function Get-SuiteCases([string]$Suite) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Interpreter
-    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot ($Suite + '.tests.ps1')) + '"'
+    # Rezim sberu je PARAMETR, ne promenna prostredi (nalez Amber J2): promennou
+    # z okoli by sada spolkla tise a vydala zelenou nad necim, co vubec nemerila.
+    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot ($Suite + '.tests.ps1')) + '" -Collect'
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = $utf8
     $psi.WorkingDirectory = $repoRoot
-    $psi.EnvironmentVariables['SINOGARD_HOOKS_COLLECT'] = '1'
+    $psi.EnvironmentVariables['SINOGARD_HOOKS_COLLECT'] = ''
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEnd()
     [void]$p.StandardError.ReadToEnd()

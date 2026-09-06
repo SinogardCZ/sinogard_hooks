@@ -15,6 +15,7 @@
 #>
 param(
     [switch]$Full,
+    [switch]$Collect,
     [string]$Interpreter = 'powershell.exe'
 )
 
@@ -23,6 +24,8 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot '_harness.ps1')
 $script:Interpreter = $Interpreter
+Assert-NoCollectEnv
+Set-CollectMode ([bool]$Collect)
 
 if ($Full) {
     Write-Host ""
@@ -647,6 +650,57 @@ $metis3Cases = @(
 Test-Cases 'council Metis kolo 3 (2026-09-06)' $metis3Cases
 
 # ================================================================================
+#  Review Amber, kolo 5 - nalezy I a J.
+#
+#  I1 je REGRESE, kterou zavedla oprava G4: zanoreni slozenych zavorek drzelo blok
+#  pohromade i pres konce radku, ale rozbaleni bloku delal regex ukotveny na ZACATEK
+#  statementu. Viceradkovy blok za klicovym slovem tak schoval prikaz uplne - a pred
+#  0.1.4 to deny bylo. Doklad, ze regresni invariant musi rust s kazdym kolem.
+# ================================================================================
+
+# CRLF se v testu sklada ze znaku, ne z escapove sekvence v uvozovkach - `n je LF
+# a `r je CR, ale zaznam v souboru by se pri prevodu konců radku mohl zmenit.
+$cr = [string][char]13
+$lf = [string][char]10
+$bt = [string][char]96   # zpetny apostrof = escape v PowerShellu
+
+$amber5Cases = @(
+    # I1 - blok skriptu nemusi stat na zacatku statementu ani na jednom radku
+    (Case 'I1 viceradkovy if blok'      ("if (`$x) {" + $lf + "  git reset --hard" + $lf + '}') 'deny' 'PowerShell')
+    (Case 'I1 foreach blok'             'foreach ($x in $y) { git reset --hard }' 'deny' 'PowerShell')
+    (Case 'I1 while blok'               'while ($true) { rm -rf src }' 'deny' 'PowerShell')
+    (Case 'I1 viceradkovy & blok'       ('& {' + $lf + '  rm -rf src' + $lf + '}') 'deny' 'PowerShell')
+    # 🔴 kontrolni skupina: tytez tvary s neskodnym prikazem MUSI zustat allow,
+    #    jinak by z toho byl falesny blok na kazde smycce.
+    (Case 'I1 kontrola foreach'         'foreach ($x in $y) { git status }' 'allow' 'PowerShell')
+    (Case 'I1 kontrola viceradkovy'     ("if (`$x) {" + $lf + '  git status' + $lf + '}') 'allow' 'PowerShell')
+    (Case 'I1 kontrola hashtable'       "`$h = @{ Path = 'src' }" 'allow' 'PowerShell')
+    (Case 'I1 kontrola format'          'git log --format=''{%h}''' 'allow')
+
+    # I2 - escape znak patri tomu shellu, ktery text SPUSTI
+    (Case 'I2 pwsh -c z Bash nastroje'  ("pwsh -c 'echo " + $bt + '" ; git reset --hard''') 'deny')
+    (Case 'I2 bash -c z PS nastroje'    'bash -c ''echo \" ; git reset --hard''' 'deny' 'PowerShell')
+    (Case 'I2 kontrola pwsh'            'pwsh -c ''echo "a" ; git status''' 'allow')
+    (Case 'I2 kontrola bash'            'bash -c ''echo "a" ; git status''' 'allow' 'PowerShell')
+
+    # I3 - apostrof uvnitr dvojitych uvozovek neni uvozovka
+    (Case 'I3 apostrof v retezci'       'echo "it''s $(git reset --hard)"' 'deny')
+    (Case 'I3 kontrola'                 'echo "it''s fine"' 'allow')
+
+    # I4 - konec radku je na Windows CRLF, ne LF
+    (Case 'I4 CRLF pokracovani bash'    ('git reset \' + $cr + $lf + '  --hard') 'deny')
+    (Case 'I4 CRLF pokracovani PS'      ('git reset ' + $bt + $cr + $lf + '  --hard') 'deny' 'PowerShell')
+    (Case 'I4 kontrola'                 ('git status \' + $cr + $lf + '  --short') 'allow')
+
+    # J1 - H4 (uvozovky uvnitr substituce) byl opraven v 0.1.4 BEZ TESTU
+    (Case 'J1 uvozovka v substituci'    'echo $(rm -rf ")" src)' 'deny')
+    (Case 'J1 apostrof v substituci'    'echo $(git reset --hard '')'')' 'deny')
+    (Case 'J1 kontrola'                 'echo $(git status '')'')' 'allow')
+)
+
+Test-Cases 'review Amber kolo 5 (I, J)' $amber5Cases
+
+# ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)
 #
 #  Kazdy tvar, ktery kdy byl deny, jim ZUSTAVA - a kazdy tvar, ktery byl kdy
@@ -786,6 +840,48 @@ foreach ($f in (Get-ChildItem (Join-Path $script:RepoRoot 'hooks/scripts') -Filt
     $nonAscii = @($bytes | Where-Object { $_ -gt 127 }).Count
     Assert-Equal 0 $nonAscii ("[ascii] {0}" -f $f.Name)
 }
+
+# ================================================================================
+#  J2: rezim sberu z PROSTREDI musi sadu shodit, ne ji tise vyprazdnit.
+#  Meri se skutecnym procesem - tvrzeni je o tom, co udela CELA sada, ne o tom,
+#  co vraci jedna funkce.
+# ================================================================================
+
+Start-Case 'SINOGARD_HOOKS_COLLECT z prostredi sadu SHODI (nalez Amber J2)'
+$notifySuite = Join-Path $PSScriptRoot 'notify.tests.ps1'
+$psiJ2 = New-Object System.Diagnostics.ProcessStartInfo
+$psiJ2.FileName = $script:Interpreter
+$psiJ2.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $notifySuite + '"'
+$psiJ2.UseShellExecute = $false
+$psiJ2.RedirectStandardOutput = $true
+$psiJ2.RedirectStandardError = $true
+$psiJ2.WorkingDirectory = $script:RepoRoot
+$psiJ2.EnvironmentVariables['SINOGARD_HOOKS_COLLECT'] = '1'
+$pJ2 = [System.Diagnostics.Process]::Start($psiJ2)
+$outJ2 = $pJ2.StandardOutput.ReadToEnd()
+[void]$pJ2.StandardError.ReadToEnd()
+$pJ2.WaitForExit()
+Assert-Equal 1 $pJ2.ExitCode '[J2] sada s COLLECT v prostredi konci nenulove'
+Assert-True ($outJ2 -match 'SINOGARD_HOOKS_COLLECT') '[J2] duvod je v vystupu, ne jen v navratovem kodu'
+Assert-True ($outJ2 -notmatch 'passed /') '[J2] souhrnny radek se NEVYPISE - jinak by verdikt cetl zelenou'
+
+# 🔴 kontrolni skupina: tataz sada BEZ te promenne musi normalne dobehnout.
+# Bez ni by tvrzeni vyse platilo i tehdy, kdyby sada padala vzdycky.
+Start-Case 'kontrolni skupina k J2: bez promenne sada dobehne'
+$psiJ2b = New-Object System.Diagnostics.ProcessStartInfo
+$psiJ2b.FileName = $script:Interpreter
+$psiJ2b.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $notifySuite + '"'
+$psiJ2b.UseShellExecute = $false
+$psiJ2b.RedirectStandardOutput = $true
+$psiJ2b.RedirectStandardError = $true
+$psiJ2b.WorkingDirectory = $script:RepoRoot
+$psiJ2b.EnvironmentVariables['SINOGARD_HOOKS_COLLECT'] = ''
+$pJ2b = [System.Diagnostics.Process]::Start($psiJ2b)
+$outJ2b = $pJ2b.StandardOutput.ReadToEnd()
+[void]$pJ2b.StandardError.ReadToEnd()
+$pJ2b.WaitForExit()
+Assert-Equal 0 $pJ2b.ExitCode '[J2/kontrola] bez promenne sada konci nulou'
+Assert-True ($outJ2b -match 'passed /') '[J2/kontrola] souhrnny radek se vypise'
 
 Write-CollectedCases
 Assert-TimingBudget

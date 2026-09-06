@@ -16,6 +16,7 @@
 #>
 param(
     [switch]$Full,
+    [switch]$Collect,
     [string]$Interpreter = 'powershell.exe',
     [string]$GsdRepo = 'W:/dev/gsd/repo'
 )
@@ -25,6 +26,8 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot '_harness.ps1')
 $script:Interpreter = $Interpreter
+Assert-NoCollectEnv
+Set-CollectMode ([bool]$Collect)
 
 if ($Full) {
     Write-Host ""

@@ -2895,5 +2895,125 @@
       "cmd": "xargs -I X rm -rf -- ./victim",
       "expect": "deny",
       "since": "N6 xargs -I"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "if ($x) {\n  git reset --hard\n}",
+      "expect": "deny",
+      "since": "I1 viceradkovy if blok"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "foreach ($x in $y) { git reset --hard }",
+      "expect": "deny",
+      "since": "I1 foreach blok"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "while ($true) { rm -rf src }",
+      "expect": "deny",
+      "since": "I1 while blok"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& {\n  rm -rf src\n}",
+      "expect": "deny",
+      "since": "I1 viceradkovy & blok"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "foreach ($x in $y) { git status }",
+      "expect": "allow",
+      "since": "I1 kontrola foreach"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "if ($x) {\n  git status\n}",
+      "expect": "allow",
+      "since": "I1 kontrola viceradkovy"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$h = @{ Path = 'src' }",
+      "expect": "allow",
+      "since": "I1 kontrola hashtable"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git log --format='{%h}'",
+      "expect": "allow",
+      "since": "I1 kontrola format"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -c 'echo `\" ; git reset --hard'",
+      "expect": "deny",
+      "since": "I2 pwsh -c z Bash nastroje"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash -c 'echo \\\" ; git reset --hard'",
+      "expect": "deny",
+      "since": "I2 bash -c z PS nastroje"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -c 'echo \"a\" ; git status'",
+      "expect": "allow",
+      "since": "I2 kontrola pwsh"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash -c 'echo \"a\" ; git status'",
+      "expect": "allow",
+      "since": "I2 kontrola bash"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"it's $(git reset --hard)\"",
+      "expect": "deny",
+      "since": "I3 apostrof v retezci"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"it's fine\"",
+      "expect": "allow",
+      "since": "I3 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git reset \\\r\n  --hard",
+      "expect": "deny",
+      "since": "I4 CRLF pokracovani bash"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git reset `\r\n  --hard",
+      "expect": "deny",
+      "since": "I4 CRLF pokracovani PS"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status \\\r\n  --short",
+      "expect": "allow",
+      "since": "I4 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $(rm -rf \")\" src)",
+      "expect": "deny",
+      "since": "J1 uvozovka v substituci"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $(git reset --hard ')')",
+      "expect": "deny",
+      "since": "J1 apostrof v substituci"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $(git status ')')",
+      "expect": "allow",
+      "since": "J1 kontrola"
     }
   ]}

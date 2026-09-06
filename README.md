@@ -121,8 +121,11 @@ aby si je nikdo nemusel objevit sám.
    špatně určí, kde končí řetězec, spolkne zbytek řádku *do řetězce* — a to je
    falešné **allow**, ne `ask`. Platí tedy slabší a pravdivé tvrzení: chyba
    v **jednotlivém pravidle** směřuje k `ask`; chyba ve **skeneru** může propustit.
-   Proto je skener jediný (`Split-Unquoted`), proto má regresní invariant a proto
-   nad ním běží samostatné kolo councilu.
+   Proto je skener jediný (`Split-Unquoted`) a proto má regresní invariant.
+   Council nad ním **proběhl jen zčásti**: otázka na obaly se vrátila a všech sedm
+   nálezů je opravených, otázka na **escapování uvozovek a zkratky parametrů**
+   se nevrátila vůbec (poskytovatelé selhali — kvóta a chyby CLI, ne otázka).
+   Ta část tedy councilem prověřená **není**.
 5. **`git clean -X` bez `-x`** (tedy jen ignorované soubory) je `ask`, ne `deny` —
    `-fdX` je legitimní úklid buildu.
 6. **Hook čte text příkazu, ne to, co z něj shell vyrobí.** `psql -c ('TRUN' + 'CATE TABLE x')`
@@ -149,7 +152,21 @@ aby si je nikdo nemusel objevit sám.
     vypne. Vědomé rozhodnutí kola 4, ne opomenutí.
 12. **Krátká absolutní cesta `/xxx` končí `ask`.** `rm -rf /srv` je od `/s` `/q` `/f`
     (přepínače `cmd`) k nerozeznání, takže se rozsah nezná. `rm -rf /srv/data` je `deny`.
-13. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
+    Důvod v hlášce mluví o rouře, ne o téhle nejednoznačnosti — vlastní tvar zprávy
+    je v backlogu **v0.2**.
+13. **Seznam interpretů je na dvou místech.** `gate.codeInterpreters` v konfiguraci čte
+    větev heredocu; větev pro `-c` / `-e` v `Get-CommandLeaf` má týž seznam natvrdo.
+    Dnes jsou shodné. Přidat do konfigurace `lua` znamená, že `lua <<EOF` se chytne
+    a `lua -c` ne. `Get-CommandLeaf` konfiguraci nedostává; protažení je refaktor
+    podpisů → **v0.2**.
+14. **Escapování uvozovek a zkratky parametrů PowerShellu nebyly prověřeny councilem.**
+    Otázka na ně se z poskytovatelů nevrátila (kvóta, chyby CLI). Opravy v těch dvou
+    oblastech stojí na review a na vlastních testech, ne na nezávislém protihráči →
+    **v0.2**, až kvóta naběhne.
+15. **`cmd /c` se rozebírá s escapem hostitelského shellu.** Skutečný escape `cmd.exe`
+    je `^` a ten skener nezná; `bash -c` a `pwsh -c` se přepínají správně (nález I2),
+    `cmd /c` ne → **v0.2**.
+16. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
     zkouška (skutečné okno na obrazovce) proběhne až při zapojení. Když se toast neukáže,
     správná odpověď je přepnout `notify.channel` na `none` s uvedeným důvodem, ne tvrdit,
     že upozornění fungují.

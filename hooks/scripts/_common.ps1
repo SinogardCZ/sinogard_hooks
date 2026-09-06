@@ -194,6 +194,56 @@ function Set-ScannerEscape([string]$ToolName) {
 
 function Get-ScannerEscape { return $script:ScannerEscape }
 
+# Nalez Amber I2: pri sestupu do VNORENEHO shellu se escape znak neprepnul, takze
+# `pwsh -c 'echo <zpetny apostrof>" ; git reset --hard'` psane z Bash nastroje se
+# rozebiralo bashovymi pravidly a propadlo. Znak patri k tomu shellu, ktery ten
+# text SPUSTI, ne k tomu, ktery ho predal dal.
+function Set-ScannerEscapeChar([string]$Char) { $script:ScannerEscape = $Char }
+
+# Telo bloku skriptu `{ ... }` - kvotove a escape korektne, bez ohledu na to,
+# co pred nim stoji. Vraci $null, kdyz statement blokem nekonci.
+#
+# Nalez Amber I1: rozbaleni bloku delal regex ukotveny na ZACATEK statementu, takze
+# `& { rm -rf src }` se rozebralo, ale `if ($x) { git reset --hard }` uz ne - a po
+# zavedeni zanoreni slozenych zavorek (G4) se to navic drzelo pohromade i pres konce
+# radku, takze viceradkovy blok schoval prikaz uplne.
+function Get-ScriptBlockBody([string]$Text) {
+    $t = ([string]$Text).Trim()
+    if ($t.Length -lt 2 -or -not $t.EndsWith('}')) { return $null }
+
+    $esc = $script:ScannerEscape
+    $inSingle = $false
+    $inDouble = $false
+    $open = -1
+    $depth = 0
+    $i = 0
+    $n = $t.Length
+    while ($i -lt $n) {
+        $c = $t[$i]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
+        if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
+        if ($c -eq '"') { $inDouble = -not $inDouble; $i++; continue }
+        if ($inDouble) { $i++; continue }
+        if ($c -eq "'") { $inSingle = $true; $i++; continue }
+        if ($c -eq '{') {
+            if ($open -lt 0) { $open = $i }
+            $depth++
+        } elseif ($c -eq '}') {
+            $depth--
+            # Uzavreni PRVNI otevrene zavorky. Kdyz za nim jeste neco stoji, neni to
+            # obal, ale text s zavorkou uprostred - a ten se sem uz nevejde.
+            if ($depth -eq 0 -and $open -ge 0) {
+                if ($i -ne ($n - 1)) { return $null }
+                $len = $i - $open - 1
+                if ($len -le 0) { return $null }
+                return $t.Substring($open + 1, $len)
+            }
+        }
+        $i++
+    }
+    return $null
+}
+
 function Split-Unquoted([string]$Text, [string[]]$Separators) {
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
 
@@ -235,7 +285,15 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
         # Escape plati MIMO jednoduche uvozovky (uvnitr nich escape neexistuje ani
         # v jednom shellu). Oba znaky se opisuji doslova, stav uvozovek se nemeni.
         if ($HonorEscape -and $c -eq $esc -and ($i + 1) -lt $n) {
-            [void]$buf.Append($c); [void]$buf.Append($Text[$i + 1]); $i += 2; continue
+            [void]$buf.Append($c); [void]$buf.Append($Text[$i + 1])
+            $i += 2
+            # Nalez Amber I4: konec radku je na Windows CRLF. Escape spolkl jen CR
+            # a LF zustalo jako separator, takze `git reset \<CRLF>--hard` se rozpadlo
+            # na dva prikazy a `--hard` samo nic nespoustelo -> allow.
+            if ($Text[$i - 1] -eq "`r" -and $i -lt $n -and $Text[$i] -eq "`n") {
+                [void]$buf.Append($Text[$i]); $i++
+            }
+            continue
         }
         if ($c -eq "'" -and -not $inDouble) {
             $inSingle = $true; [void]$buf.Append($c); $i++; continue
@@ -328,12 +386,18 @@ function Get-Substitution([string]$Text) {
     $i = 0
     $n = $Text.Length
     $inSingle = $false
+    $inDouble = $false
     while ($i -lt $n) {
         $c = $Text[$i]
         if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
         # `\$(...)` v Bashi substituci NEPROVEDE (nalez Amber G1, tataz trida).
         if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
-        if ($c -eq "'") { $inSingle = $true; $i++; continue }
+        # Nalez Amber I3: apostrof UVNITR dvojitych uvozovek neni uvozovka, ale znak.
+        # `echo "it's $(git reset --hard)"` otevrel "retezec" na apostrofu a substituce
+        # se uz nenasla -> allow. Stav dvojitych uvozovek se proto sleduje taky - ale
+        # jen kvuli apostrofu: substituce se v nich PROVADI, takze se prochazi dal.
+        if ($c -eq '"') { $inDouble = -not $inDouble; $i++; continue }
+        if ($c -eq "'" -and -not $inDouble) { $inSingle = $true; $i++; continue }
         # V dvojitych uvozovkach se substituce PROVADI, takze se prochazi dal.
         # Procesova substituce `<( ... )` a `>( ... )` je taky spusteny prikaz
         # (nalez Metis 5, kolo 2) - bere se stejne jako `$( ... )`.
@@ -434,7 +498,10 @@ function Split-Arguments([string]$Command) {
         if ($c -eq $esc -and ($i + 1) -lt $n) {
             if ($Command[$i + 1] -eq "`n" -or $Command[$i + 1] -eq "`r") {
                 if ($any) { [void]$items.Add($buffer.ToString()); [void]$buffer.Clear(); $any = $false }
-                $i += 2; continue
+                $i += 2
+                # CRLF je dva znaky (nalez Amber I4).
+                if ($Command[$i - 1] -eq "`r" -and $i -lt $n -and $Command[$i] -eq "`n") { $i++ }
+                continue
             }
             [void]$buffer.Append($c); [void]$buffer.Append($Command[$i + 1]); $any = $true; $i += 2; continue
         }

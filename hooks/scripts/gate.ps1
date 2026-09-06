@@ -378,6 +378,27 @@ function Get-RestTokens($Tokens) {
     return ,@($arr[1..($arr.Count - 1)])
 }
 
+# Rozebere text, ktery spusti JINY shell, nez ze ktereho prisel prikaz.
+#
+# Nalez Amber I2: escape znak se pri sestupu neprepnul, takze
+#   z Bash nastroje  `pwsh -c 'echo <zpetny apostrof>" ; git reset --hard'`
+#   z PS nastroje    `bash -c 'echo \" ; git reset --hard'`
+# se rozebiraly pravidly VNEJSIHO shellu a oba propadly na allow. Znak se proto na
+# dobu rozboru prepne a pak vrati zpatky - `finally`, aby ho nezmenila ani vyjimka.
+function Get-NestedShellLeaf([string]$Inner, [string]$ShellTool, [int]$Depth) {
+    $out = New-Object System.Collections.ArrayList
+    $prev = Get-ScannerEscape
+    Set-ScannerEscape $ShellTool
+    try {
+        foreach ($s in (Split-CommandLine $Inner)) {
+            foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
+        }
+    } finally {
+        Set-ScannerEscapeChar $prev
+    }
+    return $out
+}
+
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.
 # Obal s literalem -> rozebrat vnitrek. Obal s promennou -> 'opaque' (= ask).
 function Get-CommandLeaf([string]$Sub, [int]$Depth) {
@@ -432,17 +453,23 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # se rozebere na `Get-Date` a ten neni destruktivni.
     # Nalez Metis 3 (kolo 2): stejny obal delaji SLOZENE zavorky - `& { git reset --hard }`
     # je blok skriptu, ktery se spusti. Bez nej vychazelo exe `{` a zadne pravidlo nesedlo.
-    $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
-    if (-not $paren.Success) {
-        $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?\{\s*(.*?)\s*\}\s*$')
-    }
-    if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
+    # Nalez Amber I1: blok `{ ... }` nemusi stat na zacatku statementu. Regex ukotveny
+    # na zacatek nechal `if ($x) { git reset --hard }` i viceradkovou variantu projit
+    # jako exe `if` -> allow. Telo se proto hleda kvotove korektne kdekoli.
+    $blockBody = Get-ScriptBlockBody $stripped
+    if ($null -ne $blockBody -and $blockBody.Trim() -ne '') {
         # Nalez Amber G4: vnitrek se rozebira jako PRIKAZOVA RADKA, ne jako jediny
         # prikaz - `& { git reset --hard; rm -rf src }` jsou dva prikazy a driv se
         # z nich cetl jen prvni. Skener uz `{ }` zna, takze se sem dostane cely blok.
-        foreach ($s in (Split-CommandLine $paren.Groups[1].Value)) {
+        foreach ($s in (Split-CommandLine $blockBody)) {
             foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
         }
+        return $out
+    }
+
+    $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
+    if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
+        foreach ($l in (Get-CommandLeaf $paren.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
         return $out
     }
 
@@ -544,9 +571,10 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             $inner = $rest[$idx + 1]
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
-            foreach ($s in (Split-CommandLine $inner)) {
-                foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
-            }
+            # Nalez Amber I2: escape znak patri tomu shellu, ktery text SPUSTI, ne tomu,
+            # ktery ho predal dal. Bez prepnuti se `bash -c 'echo \" ; git reset --hard'`
+            # psane z PowerShell nastroje rozebiralo PS pravidly a propadlo na allow.
+            foreach ($l in (Get-NestedShellLeaf $inner 'Bash' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(pwsh|powershell)$' {
@@ -570,9 +598,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
             if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
-            foreach ($s in (Split-CommandLine $inner)) {
-                foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
-            }
+            # Nalez Amber I2, opacny smer: `pwsh -c '...'` psane z Bash nastroje.
+            foreach ($l in (Get-NestedShellLeaf $inner 'PowerShell' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(cmd)$' {

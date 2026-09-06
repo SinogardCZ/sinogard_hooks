@@ -16,6 +16,7 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot '_harness.ps1')
 $script:Interpreter = $Interpreter
+Assert-NoCollectEnv
 
 if ($Full) {
     Write-Host ""

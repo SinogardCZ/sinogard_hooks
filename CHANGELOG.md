@@ -3,6 +3,67 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.5] — 2026-09-06
+
+Páté opravné kolo, poslední před nasazením. Nejdůležitější věc není nový tvar, ale to,
+že **jedna z oprav minulého kola sama otevřela díru** — a chytilo to až review, ne
+regresní invariant. Proto invariant roste o oba tvary.
+
+### Opraveno — I1: regrese po G4
+
+🔴 G4 naučila skener držet `{ … }` pohromadě **i přes konce řádků**, ale rozbalení bloku
+dělal regex ukotvený na **začátek** statementu. Víceřádkový blok za klíčovým slovem tak
+příkaz schoval úplně:
+
+```powershell
+if ($x) {
+  git reset --hard
+}
+```
+
+→ jeden statement, `exe = if` → **allow**. Před 0.1.4 to bylo `deny`. Jednořádkové
+`foreach (…) { git reset --hard }` byla stará díra téže třídy. Nově se tělo bloku hledá
+kvótově korektně **kdekoli** (`Get-ScriptBlockBody`), takže na pozici bloku nezáleží;
+`if ($x) { git status }` i hashtable `@{ Path = 'src' }` zůstávají `allow`.
+
+### Opraveno — I2: escape se nepřepínal při sestupu do vnořeného shellu
+
+Escape znak patří tomu shellu, který text **spustí**, ne tomu, který ho předal dál.
+Bez přepnutí propadly oba směry:
+
+| nástroj | příkaz |
+|---|---|
+| Bash | ``pwsh -c 'echo `" ; git reset --hard'`` |
+| PowerShell | `bash -c 'echo \" ; git reset --hard'` |
+
+Nově `Get-NestedShellLeaf`: znak se na dobu rozboru přepne a v `finally` vrátí.
+`cmd /c` se dál rozebírá escapem hostitele (skutečný escape `cmd.exe` je `^`) → v0.2.
+
+### Opraveno — I3, I4
+
+- **I3** apostrof **uvnitř** dvojitých uvozovek není uvozovka:
+  `echo "it's $(git reset --hard)"` → substituce se nenašla → allow.
+- **I4** konec řádku je na Windows **CRLF**. Escape spolkl jen CR a LF zůstalo
+  separátorem, takže `git reset \`+CRLF+`--hard` se rozpadlo na dva příkazy.
+
+### Změněno — J2: režim sběru je parametr, ne proměnná prostředí
+
+🔴 **Potřetí táž třída „hodnota z okolí"** (po `W:` a po `DRYRUN`). `SINOGARD_HOOKS_COLLECT=1`
+nastavený globálně vyprázdnil sady **tiše**: bloky mimo případová pole běžely dál, `passed`
+zůstalo nenulové, verdikt zelený — a **nic z ~1500 tvarů se nezměřilo**. Nově se režim
+zapíná parametrem `-Collect`; proměnná prostředí sadu **shodí** (a `_ci-verdict.ps1` ji
+odmítne jako druhá závora). Souhrn v režimu sběru navíc říká, že nic netvrdí.
+
+### Přidáno — testy k J1
+
+H4 (uvozovky uvnitř substituce) byl v 0.1.4 opraven **bez testu**, ačkoli ho CHANGELOG
+hlásil opravený. Doplněno včetně kontrolní skupiny.
+
+### Sady
+
+gate 1485 → s rozšířeným invariantem, secrets 588, resume-cost 27, notify 39 — vše
+0 failed / 0 skipped na obou interpretech. Invariant **451 → 471** řádků.
+
 ## [0.1.4] — 2026-09-06
 
 Čtvrté opravné kolo. Sjednocený skener z 0.1.3 nezavedl žádnou novou díru — ale

@@ -26,6 +26,15 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Nalez Amber J2: rezim sberu nespousti hook vubec. Kdyby ho nekdo mel v prostredi,
+# sada by vydala nenulovy `passed` z bloku mimo pripadova pole a verdikt by byl zeleny
+# nad necim, co se vubec nezmerilo. Sada uz to sama odmita; tady je druha zavora,
+# protoze verdikt je posledni misto, kde se zelena vydava.
+if ($env:SINOGARD_HOOKS_COLLECT -eq '1') {
+    Write-Host ("VERDIKT {0}: SINOGARD_HOOKS_COLLECT=1 je v prostredi - rezim sberu nic nemeri" -f $Suite) -ForegroundColor Red
+    exit 1
+}
+
 $suitePath = Join-Path $PSScriptRoot ($Suite + '.tests.ps1')
 if (-not [System.IO.File]::Exists($suitePath)) {
     Write-Host ("VERDIKT {0}: sada {1} neexistuje" -f $Suite, $suitePath) -ForegroundColor Red

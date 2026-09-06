@@ -70,6 +70,11 @@ function Write-TestSummary {
               else       { "{0} passed / {1} failed / {2} skipped   (detail: -Full)" }
     Write-Host ""
     Write-Host "-------------------------------------------"
+    # V rezimu sberu se hook nespousti, takze souhrn NIC netvrdi. Musi to byt videt
+    # v logu, ne jen v hlave toho, kdo sadu spoustel (nalez Amber J2).
+    if ($script:CollectMode) {
+        Write-Host "REZIM SBERU (-Collect): hook se nespoustel, tento souhrn nic netvrdi." -ForegroundColor Yellow
+    }
     Write-Host ($format -f $script:Pass, $script:Fail, $script:Skip) `
         -ForegroundColor $(if ($script:Fail) { 'Red' } else { 'Green' })
     Write-Host ""
@@ -214,9 +219,30 @@ function Add-HookTime([int]$Ms) { [void]$script:Times.Add($Ms) }
 # secrets), kazdy svuj pripad ohlasi. resume-cost a notify zadne rozhodnuti nevydavaji
 # (SessionStart pridava kontext, Notification strili toast), takze pro ne invariant
 # nema co drzet - to je duvod, ne opomenuti.
+#
+# Nalez Amber J2 (POTRETI tataz trida "hodnota z okoli" - po W: a po DRYRUN): rezim
+# sberu se driv bral z promenne prostredi. Kdyby ji mel nekdo nastavenou globalne,
+# sady by se vyprazdnily TISE - bloky mimo `Test-Cases` bezi dal, takze `passed`
+# zustane nenulove, souhrn vyjde zeleny a NIC z ~1400 tvaru se nezmeri. Rezim je
+# proto PARAMETR sady; promenna prostredi se jen kontroluje a odmita.
 $script:CollectedCases = New-Object System.Collections.ArrayList
+$script:CollectMode = $false
 
-function Test-CollectOnly { return ($env:SINOGARD_HOOKS_COLLECT -eq '1') }
+function Set-CollectMode([bool]$On) { $script:CollectMode = $On }
+
+function Test-CollectOnly { return $script:CollectMode }
+
+# Zavola se hned po dot-source. Promenna prostredi rezim NEZAPINA - kdyz ji nekdo
+# ma nastavenou, sada skonci nenulove misto toho, aby tise nezmerila nic.
+function Assert-NoCollectEnv {
+    if ($env:SINOGARD_HOOKS_COLLECT -eq '1') {
+        Write-Host ''
+        Write-Host 'CHYBA: SINOGARD_HOOKS_COLLECT=1 je v prostredi.' -ForegroundColor Red
+        Write-Host 'Rezim sberu se zapina parametrem -Collect, ne promennou prostredi.' -ForegroundColor Red
+        Write-Host 'Sada konci, aby nevydala zelenou nad nezmerenymi tvary.' -ForegroundColor Red
+        exit 1
+    }
+}
 
 function Add-CollectedCase([string]$Hook, [string]$Kind, [string]$Tool, [string]$Value,
                            [string]$Expect, [string]$Since) {
