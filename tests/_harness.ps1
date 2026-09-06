@@ -72,8 +72,15 @@ function Write-TestSummary {
     Write-Host "-------------------------------------------"
     # V rezimu sberu se hook nespousti, takze souhrn NIC netvrdi. Musi to byt videt
     # v logu, ne jen v hlave toho, kdo sadu spoustel (nalez Amber J2).
+    # Nalez Amber L3: varovani nestacilo. Souhrnny radek `N passed / M failed` se
+    # tiskl dal a verdikt cte prave jeho - takze rezim, ktery nic nemeri, uměl
+    # vydat zelenou. V rezimu sberu ten radek proto NEVZNIKNE a verdikt hlasi
+    # "souhrnny radek CHYBI".
     if ($script:CollectMode) {
-        Write-Host "REZIM SBERU (-Collect): hook se nespoustel, tento souhrn nic netvrdi." -ForegroundColor Yellow
+        Write-Host "REZIM SBERU (-Collect): hook se nespoustel, souhrnny radek se netiskne." -ForegroundColor Yellow
+        Write-Host ("sebrano {0} pripadu" -f $script:CollectedCases.Count) -ForegroundColor Yellow
+        Write-Host ""
+        return
     }
     Write-Host ($format -f $script:Pass, $script:Fail, $script:Skip) `
         -ForegroundColor $(if ($script:Fail) { 'Red' } else { 'Green' })

@@ -3,6 +3,93 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.6] — 2026-09-06
+
+Kolo 5b. Rozsah dal Tom (rozhodnutí 2026-09-06/T36-F1 **T-7**): **jen K1 a L1**, plus K3,
+pokud vyjde na pár řádků — vyšlo. Obě 🔴 jsou **regrese po opravě I1** a jdou **proti
+sobě**: jedna propouštěla, druhá blokovala běžnou práci. To je podruhé za sebou, kdy
+oprava zavedla regresi, takže do invariantu jdou tvary z **obou** směrů.
+
+### Opraveno — K1: `{` není blok všude a hlava se nesmí zahazovat
+
+Oprava I1 hledala tělo bloku u **první** `{` kdekoli a po jeho rozboru se vracela, takže
+text před závorkou zmizel. Naměřeno na `f8a8032`, ve všech případech **0.1.4 rozhodovala
+správně**:
+
+| příkaz | 0.1.4 | 0.1.5 | 0.1.6 |
+|---|---|---|---|
+| `git stash drop stash@{0}` | deny | **allow** | deny |
+| `git reset --hard HEAD@{1}` | deny | **allow** | deny |
+| `git reset --hard @{u}` | deny | **allow** | deny |
+| `rm -rf ${DIR}` | ask | **allow** | ask |
+| `rm -rf src/${x}` | ask | **allow** | ask |
+| `rm -rf {src,lib}` | deny | **allow** | deny |
+| `if ($a -eq ${env:X}) { git reset --hard }` | allow | allow | **deny** |
+
+Dvě změny, každá zavírá jinou půlku:
+
+- **Pozice.** `{` za `@`, `$`, písmenem nebo číslicí je hashtable (`@{ … }`), proměnná
+  (`${DIR}`) nebo revize (`stash@{0}`) — do zanoření se **počítá**, blok ale neotevírá.
+  Kdyby jen „bailovala", zůstal by poslední řádek tabulky propustný.
+- **Hlava.** Když před závorkou něco stojí, statement se po rozboru těla rozebírá
+  **dál jako běžný příkaz**. `rm -rf {src,lib}` je jeden příkaz s literálním argumentem;
+  tělo `src,lib` neznamená nic. Rozbalení složených závorek Bashe hook nedělá, takže
+  `rm -rf {bin,obj}` je `deny` — tak to bylo i v 0.1.4.
+
+### Opraveno — L1: tělo bloku je výraz, ne příkaz v pozici proměnné
+
+Protisměrná regrese: od I1 se tělo bloku rozebírá vždycky, a **nejběžnější idiom
+PowerShellu** tím začal končit na `ask` (v bypassu `deny`).
+
+| příkaz | 0.1.4 | 0.1.5 | 0.1.6 |
+|---|---|---|---|
+| `Get-ChildItem \| Where-Object { $_.Name -like '*.cs' }` | allow | **ask** | allow |
+| `Get-ChildItem \| ForEach-Object { $_.x }` | allow | **ask** | allow |
+| `Get-ChildItem \| Sort-Object { $_.Length }` | allow | **ask** | allow |
+| `foreach ($f in $files) { $i++ }` | allow | **ask** | allow |
+
+Z3 („proměnná v pozici příkazu → `ask`") míří na tvar `$VAR arg`, kde se **obsah
+proměnné spustí**. Čtení vlastnosti ani `$i++` nespouští nic. `Test-ExpressionStatement`
+proto propustí `$_`, `$var.Prop`, `$var[…]`, `$i++` a porovnání operátorem —
+a **jakákoli závorka výjimku ruší**, protože `$_.Delete()` maže a
+`… -or (git reset --hard)` spustí podvýraz. Pravidlo platí **jen v PowerShellu**
+(řídí se escapem skeneru): v Bashi je `$cmd -rf src` příkaz.
+
+Kontrolní skupina drží: `foreach ($f in $files) { git branch -D $f }` = `deny`,
+`{ $_.Delete() }` a `{ $_ | Remove-Item -Recurse -Force }` = `ask`,
+`$_.Name -like "*.cs"` z **Bash** nástroje = `ask`.
+
+### Opraveno — K3: escape se nepřepínal ani u heredocu
+
+Táž třída jako I2, jen jiná větev. `bash <<'EOF' … EOF` psaný z PowerShellu se rozebíral
+s backtickem místo `\`:
+
+| nástroj | tělo heredocu | 0.1.5 | 0.1.6 |
+|---|---|---|---|
+| PowerShell | `bash`, `echo \" ; git reset --hard` | allow | deny |
+| Bash | `pwsh`, ``echo `" ; git reset --hard`` | allow | deny |
+| PowerShell | `bash`, `git reset \`+konec řádku+`--hard` | allow | deny |
+
+Poslední řádek je bonus: `Split-Heredoc` slepuje pokračování řádku vnějším escapem,
+takže se tělo rozpadlo na dva příkazy. Přepnutí escapu zavírá i to. `cmd` zůstává na
+escapu hostitele — známé omezení 12.
+
+### Opraveno — L2, L3, L4 (drobnosti z téže třídy)
+
+- **L3** souhrn v režimu sběru tiskl `N passed / M failed` a **verdikt čte právě ten
+  řádek** — režim, který nic neměří, uměl vydat zelenou. Nově řádek v režimu sběru
+  **nevznikne** a verdikt hlásí „souhrnný řádek CHYBÍ". Je to čtvrtý výskyt třídy
+  „hodnota z okolí", tentokrát zevnitř.
+- **L2** `.DESCRIPTION` generátoru invariantu jmenoval `SINOGARD_HOOKS_COLLECT=1` jako
+  způsob, jak režim zapnout. Ta proměnná od 0.1.5 sadu naopak **shodí**.
+- **L4** doplněny odkazy `[0.1.4]` a `[0.1.5]`.
+
+### Neopraveno vědomě
+
+**K2** — blok s ocasem (`if {…} else {…}`, `try {…} catch {…}`, `{…} # poznámka`) se
+nerozebírá vůbec: `Get-ScriptBlockBody` chce, aby statement závorkou **končil**. Je to
+stará díra, ne regrese, a leží mimo rozsah, který Tom dal. → známé omezení 16 a TASK-106.
+
 ## [0.1.5] — 2026-09-06
 
 Páté opravné kolo, poslední před nasazením. Nejdůležitější věc není nový tvar, ale to,
@@ -25,6 +112,10 @@ if ($x) {
 `foreach (…) { git reset --hard }` byla stará díra téže třídy. Nově se tělo bloku hledá
 kvótově korektně **kdekoli** (`Get-ScriptBlockBody`), takže na pozici bloku nezáleží;
 `if ($x) { git status }` i hashtable `@{ Path = 'src' }` zůstávají `allow`.
+
+> 🔴 **Oprava zápisu (0.1.6):** věta „na pozici bloku nezáleží" je **nepravdivá** a byla
+> příčinou nálezů K1 a L1. Na pozici záleží: `{` za `@`, `$` nebo písmenem blok
+> neotevírá a hlava před blokem se musí rozebrat taky. Viz [0.1.6].
 
 ### Opraveno — I2: escape se nepřepínal při sestupu do vnořeného shellu
 
@@ -378,6 +469,9 @@ První verze. Čtyři hooky, Windows-first, bez externích závislostí.
 - **`userConfig` pluginu se nepoužívá** — ukládá se do globálních user settings,
   tedy společně pro všechny projekty na stroji.
 
+[0.1.6]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.6
+[0.1.5]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.5
+[0.1.4]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.4
 [0.1.3]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.3
 [0.1.2]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.1

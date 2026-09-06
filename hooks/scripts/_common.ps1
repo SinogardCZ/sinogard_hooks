@@ -200,13 +200,29 @@ function Get-ScannerEscape { return $script:ScannerEscape }
 # text SPUSTI, ne k tomu, ktery ho predal dal.
 function Set-ScannerEscapeChar([string]$Char) { $script:ScannerEscape = $Char }
 
-# Telo bloku skriptu `{ ... }` - kvotove a escape korektne, bez ohledu na to,
-# co pred nim stoji. Vraci $null, kdyz statement blokem nekonci.
+# Nalez Amber K1: `{` neotevira blok vsude. Za `@` je to hashtable nebo revize
+# (`@{ Path = 'src' }`, `stash@{0}`, `HEAD@{1}`), za `$` promenna (`${DIR}`),
+# za pismenem nebo cislici cast slova. Takova zavorka se do zanoreni POCITA -
+# jinak by `${env:X}` uzavrelo blok, ktery nikdy neotevrelo - ale blok neotevira.
+function Test-BlockOpenPosition([string]$Text, [int]$Index) {
+    if ($Index -le 0) { return $true }
+    $prev = $Text[$Index - 1]
+    if ($prev -eq '@' -or $prev -eq '$') { return $false }
+    if ([char]::IsLetterOrDigit($prev) -or $prev -eq '_') { return $false }
+    return $true
+}
+
+# Blok skriptu `{ ... }` - kvotove a escape korektne. Vraci hashtable s HLAVOU
+# (text pred zavorkou) a TELEM, nebo $null, kdyz statement blokem nekonci.
 #
 # Nalez Amber I1: rozbaleni bloku delal regex ukotveny na ZACATEK statementu, takze
 # `& { rm -rf src }` se rozebralo, ale `if ($x) { git reset --hard }` uz ne - a po
 # zavedeni zanoreni slozenych zavorek (G4) se to navic drzelo pohromade i pres konce
 # radku, takze viceradkovy blok schoval prikaz uplne.
+#
+# Nalez Amber K1: oprava I1 pak brala PRVNI `{` kdekoli a hlavu zahazovala, takze
+# `git stash drop stash@{0}` vyslo jako telo `0` -> allow. Hlava se proto vraci
+# volajicimu a ten ji rozebira taky.
 function Get-ScriptBlockBody([string]$Text) {
     $t = ([string]$Text).Trim()
     if ($t.Length -lt 2 -or -not $t.EndsWith('}')) { return $null }
@@ -226,7 +242,7 @@ function Get-ScriptBlockBody([string]$Text) {
         if ($inDouble) { $i++; continue }
         if ($c -eq "'") { $inSingle = $true; $i++; continue }
         if ($c -eq '{') {
-            if ($open -lt 0) { $open = $i }
+            if ($open -lt 0 -and (Test-BlockOpenPosition $t $i)) { $open = $i }
             $depth++
         } elseif ($c -eq '}') {
             $depth--
@@ -236,7 +252,7 @@ function Get-ScriptBlockBody([string]$Text) {
                 if ($i -ne ($n - 1)) { return $null }
                 $len = $i - $open - 1
                 if ($len -le 0) { return $null }
-                return $t.Substring($open + 1, $len)
+                return @{ Head = $t.Substring(0, $open).Trim(); Body = $t.Substring($open + 1, $len) }
             }
         }
         $i++
@@ -560,5 +576,35 @@ function Test-Unexpandable([string]$Text) {
     if ($Text -match '\$\(') { return $true }
     if ($Text -match '\$\{?[A-Za-z_][A-Za-z0-9_:]*') { return $true }
     if ($Text -match '%[A-Za-z_][A-Za-z0-9_]*%') { return $true }
+    return $false
+}
+
+# Operatory PowerShellu. Za nimi uz nestoji prikaz, ale druhy operand.
+$script:PsOperators = '(?:c|i)?(?:eq|ne|lt|le|gt|ge|like|notlike|match|notmatch|contains|notcontains|in|notin|is|isnot|and|or|xor|not|band|bor|bxor|bnot|shl|shr|replace|split|join|as|f)'
+
+# Nalez Amber L1: v PowerShellu je `$_.Name -like '*.cs'` VYRAZ, ne prikaz.
+# Z3 ("promenna v pozici prikazu -> ask") mysli tvar `$VAR arg`, kde se obsah
+# promenne SPUSTI. Cteni vlastnosti ani `$i++` nespousti nic - jenze od opravy I1
+# se telo bloku rozebira vzdycky, takze KAZDY bezny `Where-Object { ... }` koncil
+# na ask a v bypassu na deny. Falesny blok na bezne praci branu do tydne vypne.
+#
+# Zavorka kdekoli rusi vyjimku: `$_.Delete()` maze a `$x -or (git reset --hard)`
+# spousti podvyraz. Radsi falesny ask nez slepe misto.
+#
+# Volajici tohle smi uplatnit JEN v PowerShellu - `$cmd -rf src` je v Bashi prikaz.
+function Test-ExpressionStatement([string]$Text) {
+    $t = ([string]$Text).Trim()
+    if ($t -eq '' -or -not $t.StartsWith('$')) { return $false }
+    if ($t.Contains('(')) { return $false }
+
+    # `$i++`, `$i--`
+    if ($t -match '^\$[\w:]+\s*(?:\+\+|--)\s*$') { return $true }
+    # `$_`, `$_ -eq 'x'`, `$x -like '*.cs'`
+    if ($t -match '^\$_\s*$') { return $true }
+    if ($t -match ('^\$(?:_|[A-Za-z_][\w:]*)\s+-' + $script:PsOperators + '\b')) { return $true }
+    # `$_.Name`, `$_.Name -like '*.cs'`, `$files[0].Length` - pristup k vlastnosti
+    # nebo index, za nim uz jen konec, operator nebo dalsi clen vyrazu. Bare slovo
+    # za retezcem clenu ZUSTAVA prikazem (`$x.Cmd arg`).
+    if ($t -match ('^\$(?:_|[A-Za-z_][\w:]*)(?:\.[A-Za-z_]\w*|\[[^\]]*\])+\s*(?:$|-' + $script:PsOperators + '\b|[|,;+*/])')) { return $true }
     return $false
 }

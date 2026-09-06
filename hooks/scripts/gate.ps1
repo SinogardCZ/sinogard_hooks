@@ -447,6 +447,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         return $out
     }
 
+    # Nalez Amber L1: cteni vlastnosti ani `$i++` neni prikaz. Detail a duvod, proc
+    # to nesmi platit v Bashi, jsou u Test-ExpressionStatement; escape skeneru je
+    # jediny spolehlivy ukazatel jazyka (prepina ho i sestup do vnorenneho shellu).
+    if ((Get-ScannerEscape) -eq '`' -and (Test-ExpressionStatement $stripped)) { return $out }
+
     # Nalez Amber C7b (zmereno): zavorkovy obal `(git reset --hard)` dal argv[0] = `(git`,
     # z toho exe `(git`, a zadne pravidlo se nechytilo -> allow. Obal se strhne a vnitrek
     # se rozebere stejne jako u `&`. Kontrolni skupina `(Get-Date)` zustava allow, protoze
@@ -456,15 +461,19 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # Nalez Amber I1: blok `{ ... }` nemusi stat na zacatku statementu. Regex ukotveny
     # na zacatek nechal `if ($x) { git reset --hard }` i viceradkovou variantu projit
     # jako exe `if` -> allow. Telo se proto hleda kvotove korektne kdekoli.
-    $blockBody = Get-ScriptBlockBody $stripped
-    if ($null -ne $blockBody -and $blockBody.Trim() -ne '') {
+    $block = Get-ScriptBlockBody $stripped
+    if ($null -ne $block -and $block.Body.Trim() -ne '') {
         # Nalez Amber G4: vnitrek se rozebira jako PRIKAZOVA RADKA, ne jako jediny
         # prikaz - `& { git reset --hard; rm -rf src }` jsou dva prikazy a driv se
         # z nich cetl jen prvni. Skener uz `{ }` zna, takze se sem dostane cely blok.
-        foreach ($s in (Split-CommandLine $blockBody)) {
+        foreach ($s in (Split-CommandLine $block.Body)) {
             foreach ($l in (Get-CommandLeaf $s ($Depth + 1))) { [void]$out.Add($l) }
         }
-        return $out
+        # Nalez Amber K1: hlava pred zavorkou se ZAHAZOVALA. `rm -rf {src,lib}` neni
+        # blok, ale jeden prikaz s literalnim argumentem - telo `src,lib` neznamena nic
+        # a `return` po nem schoval mazani. Kdyz hlava neco nese, statement se rozebira
+        # DAL jako bezny prikaz; rekurze tu neni, blok uz v `$out` je.
+        if ($block.Head -eq '') { return $out }
     }
 
     $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
@@ -1182,14 +1191,17 @@ function Test-Leaf($Leaf, $Config) {
         # git reset --hard / EOF` je telo, ktere se SPUSTI - a zahazovalo se.
         # Kdyz je uvozujici prikaz shell, telo je prikazova radka a rozebere se.
         if ($shells -ccontains $oe) {
+            # Nalez Amber K3: tataz trida jako I2 - telo heredocu spousti UVOZUJICI
+            # shell, ne ten, ktery prikaz predal. Bez prepnuti propadl `bash <<'EOF'`
+            # s bashovym escapem psany z PowerShellu (a naopak) na allow.
+            # `cmd` zustava na escapu hostitele - to je zname omezeni (README).
+            $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
             $worst = $null
-            foreach ($sub in (Split-CommandLine ([string]$Leaf.Raw))) {
-                foreach ($inner in (Get-CommandLeaf $sub 0)) {
-                    $r = Test-Leaf $inner $Config
-                    if ($null -eq $r) { continue }
-                    if ($r.Decision -eq 'deny') { return $r }
-                    if ($null -eq $worst) { $worst = $r }
-                }
+            foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
+                $r = Test-Leaf $inner $Config
+                if ($null -eq $r) { continue }
+                if ($r.Decision -eq 'deny') { return $r }
+                if ($null -eq $worst) { $worst = $r }
             }
             return $worst
         }

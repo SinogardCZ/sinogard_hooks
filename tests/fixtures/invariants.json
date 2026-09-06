@@ -3015,5 +3015,169 @@
       "cmd": "echo $(git status ')')",
       "expect": "allow",
       "since": "J1 kontrola"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf bin/hlášení",
+      "expect": "allow",
+      "since": "ceska cesta allow"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf bin/hlášení/*",
+      "expect": "ask",
+      "since": "ceska cesta ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git stash drop stash@{0}",
+      "expect": "deny",
+      "since": "K1 stash@{0}"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git reset --hard HEAD@{1}",
+      "expect": "deny",
+      "since": "K1 HEAD@{1}"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git reset --hard @{u}",
+      "expect": "deny",
+      "since": "K1 @{u}"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf ${DIR}",
+      "expect": "ask",
+      "since": "K1 ${DIR}"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf src/${x}",
+      "expect": "ask",
+      "since": "K1 src/${x}"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf {src,lib}",
+      "expect": "deny",
+      "since": "K1 slozena zavorka jako arg"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "if ($a -eq ${env:X}) { git reset --hard }",
+      "expect": "deny",
+      "since": "K1 neblokova zavorka driv"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& { rm -rf src }",
+      "expect": "deny",
+      "since": "K1 kontrola & blok"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "@{ Path = 'src' }",
+      "expect": "allow",
+      "since": "K1 kontrola hashtable sama"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "if ($x) { git status }",
+      "expect": "allow",
+      "since": "K1 kontrola neskodny blok"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem | Where-Object { $_.Name -like '*.cs' }",
+      "expect": "allow",
+      "since": "L1 Where-Object"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem | ForEach-Object { $_.x }",
+      "expect": "allow",
+      "since": "L1 ForEach-Object"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem | Sort-Object { $_.Length }",
+      "expect": "allow",
+      "since": "L1 Sort-Object"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "foreach ($f in $files) { $i++ }",
+      "expect": "allow",
+      "since": "L1 citac ve smycce"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "foreach ($f in $files) { git branch -D $f }",
+      "expect": "deny",
+      "since": "L1 kontrola prikaz v bloku"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem | ForEach-Object { $_.Delete() }",
+      "expect": "ask",
+      "since": "L1 kontrola volani metody"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Where-Object { $_.Name -eq 'x' -or (git reset --hard) }",
+      "expect": "ask",
+      "since": "L1 kontrola podvyraz"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force }",
+      "expect": "ask",
+      "since": "L1 kontrola roura z $_"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "$_.Name -like \"*.cs\"",
+      "expect": "ask",
+      "since": "L1 kontrola Bash zustava"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash <<'EOF'\necho \\\" ; git reset --hard\nEOF",
+      "expect": "deny",
+      "since": "K3 bash heredoc z PS"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh <<'EOF'\necho `\" ; git reset --hard\nEOF",
+      "expect": "deny",
+      "since": "K3 pwsh heredoc z Bash"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash <<'EOF'\ngit reset \\\n  --hard\nEOF",
+      "expect": "deny",
+      "since": "K3 pokracovani radku v tele"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash <<'EOF'\ngit reset --hard\nEOF",
+      "expect": "deny",
+      "since": "K3 kontrola bez escapu"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash <<'EOF'\ngit status\nEOF",
+      "expect": "allow",
+      "since": "K3 kontrola neskodne telo"
+    },
+    {
+      "tool": "Read",
+      "cmd": "docs/logs/session/hlášení-01.md",
+      "expect": "allow",
+      "since": "cesta s ceskym nazvem",
+      "hook": "secrets",
+      "kind": "path"
     }
   ]}

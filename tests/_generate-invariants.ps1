@@ -8,9 +8,13 @@
   v repu nebyl. Pri pristim rustu sady by ho nikdo nezopakoval, invariant by
   zkamenel na 142 radcich a prestal by delat to, kvuli cemu vznikl.
 
-  Postup: sady se spusti v rezimu SBERU (SINOGARD_HOOKS_COLLECT=1) - pripady se
-  jen ohlasi, hook se nespousti, takze to trva sekundy. Vysledek se PRIDA
+  Postup: sady se spusti v rezimu SBERU (parametr -Collect) - pripady se jen
+  ohlasi, hook se nespousti, takze to trva sekundy. Vysledek se PRIDA
   k existujicim radkum.
+
+  Nalez Amber L2: tenhle odstavec jmenoval promennou prostredi SINOGARD_HOOKS_COLLECT.
+  Ta rezim od opravy J2 nezapina, naopak sadu SHODI - popis by navadel na presny
+  opak toho, co plati.
 
   Soubor je APPEND-ONLY. Generator existujici radky NIKDY nemeni ani neodebira -
   jen doplni ty, ktere v nem jeste nejsou. To je zamer: radek odsud odchazi jen

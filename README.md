@@ -139,6 +139,10 @@ aby si je nikdo nemusel objevit sám.
 8. **Proměnná v pozici příkazu končí `ask`, i když jde o výraz.** `[Math]::Truncate($x)`
    se nerozebere, takže rozhoduje člověk. Přiřazení `$x = <příkaz>` je výjimka: rozebere
    se jeho pravá strana, protože jinak by `ask` končila každá druhá řádka běžné práce.
+   Druhá výjimka (nález L1, **jen PowerShell**): čtení hodnoty — `$_`, `$var.Prop`,
+   `$var[…]`, `$i++`, porovnání operátorem — nic nespouští a projde. Jakákoli **závorka**
+   výjimku ruší, protože `$_.Delete()` maže. V Bashi výjimka neplatí: `$cmd -rf src`
+   je tam příkaz.
 9. **`*.json` se ptá.** Zástupný znak, který může padnout na chráněné jméno (`secrets.json`,
    `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
 10. **SQL, které v příkazu není vidět, končí `ask`.** `cat migrace.sql | psql`,
@@ -164,12 +168,16 @@ aby si je nikdo nemusel objevit sám.
     oblastech stojí na review a na vlastních testech, ne na nezávislém protihráči →
     **v0.2**, až kvóta naběhne.
 15. **`cmd /c` se rozebírá s escapem hostitelského shellu.** Skutečný escape `cmd.exe`
-    je `^` a ten skener nezná; `bash -c` a `pwsh -c` se přepínají správně (nález I2),
-    `cmd /c` ne → **v0.2**.
+    je `^` a ten skener nezná; `bash -c` a `pwsh -c` se přepínají správně (nález I2)
+    a od 0.1.6 i tělo heredocu (`bash <<'EOF'`, nález K3), `cmd` ne → **v0.2**.
 16. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
     zkouška (skutečné okno na obrazovce) proběhne až při zapojení. Když se toast neukáže,
     správná odpověď je přepnout `notify.channel` na `none` s uvedeným důvodem, ne tvrdit,
     že upozornění fungují.
+17. **Blok s ocasem se nerozebírá.** Tělo `{ … }` se hledá jen tehdy, když jím statement
+    **končí**. `if ($x) { rm -rf src } else { git status }`, `try { … } catch { … }`
+    i `{ … } # poznámka` proto projdou nerozebrané. Stará díra (nález K2), ne regrese;
+    zavřít ji znamená rozebírat **všechny** bloky ve statementu → **v0.2**.
 
 ---
 

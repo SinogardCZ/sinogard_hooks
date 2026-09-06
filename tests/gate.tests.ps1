@@ -701,6 +701,55 @@ $amber5Cases = @(
 Test-Cases 'review Amber kolo 5 (I, J)' $amber5Cases
 
 # ================================================================================
+#  REVIEW AMBER, KOLO 5b - nalezy K a L (2026-09-06)
+#
+#  OBE JSOU REGRESE PO OPRAVE I1, a jdou proti sobe:
+#    K1 propousti  - `{` se bralo za blok kdekoli, hlava se zahazovala
+#    L1 blokuje    - telo bloku s `$_` se cetlo jako prikaz v pozici promenne
+#  Zmereno na f8a8032 pred opravou i na klonu f25a8d2 (0.1.4) - vsech deset tvaru
+#  se v 0.1.4 chovalo spravne. To je uz druhe kolo po sobe, kdy oprava zavedla
+#  regresi; proto do invariantu jdou tvary Z OBOU SMERU, ne jen ty propoustejici.
+# ================================================================================
+
+$amber5bCases = @(
+    # K1 - `{` za `@`, `$` nebo pismenem neni blok; hlava pred blokem se rozebira
+    (Case 'K1 stash@{0}'                'git stash drop stash@{0}' 'deny')
+    (Case 'K1 HEAD@{1}'                 'git reset --hard HEAD@{1}' 'deny')
+    (Case 'K1 @{u}'                     'git reset --hard @{u}' 'deny')
+    (Case 'K1 ${DIR}'                   'rm -rf ${DIR}' 'ask')
+    (Case 'K1 src/${x}'                 'rm -rf src/${x}' 'ask')
+    (Case 'K1 slozena zavorka jako arg' 'rm -rf {src,lib}' 'deny')
+    (Case 'K1 neblokova zavorka driv'   'if ($a -eq ${env:X}) { git reset --hard }' 'deny' 'PowerShell')
+    # 🔴 kontrolni skupina: blok se MUSI dal rozebirat (jinak by K1 vratilo I1)
+    (Case 'K1 kontrola blok dal plati'  ("if (`$x) {" + $lf + '  git reset --hard' + $lf + '}') 'deny' 'PowerShell')
+    (Case 'K1 kontrola & blok'          '& { rm -rf src }' 'deny' 'PowerShell')
+    (Case 'K1 kontrola hashtable sama'  "@{ Path = 'src' }" 'allow' 'PowerShell')
+    (Case 'K1 kontrola neskodny blok'   'if ($x) { git status }' 'allow' 'PowerShell')
+
+    # L1 - telo bloku je VYRAZ, ne prikaz v pozici promenne (Z3 mysli `$VAR arg`)
+    (Case 'L1 Where-Object'             'Get-ChildItem | Where-Object { $_.Name -like ''*.cs'' }' 'allow' 'PowerShell')
+    (Case 'L1 ForEach-Object'           'Get-ChildItem | ForEach-Object { $_.x }' 'allow' 'PowerShell')
+    (Case 'L1 Sort-Object'              'Get-ChildItem | Sort-Object { $_.Length }' 'allow' 'PowerShell')
+    (Case 'L1 citac ve smycce'          'foreach ($f in $files) { $i++ }' 'allow' 'PowerShell')
+    # 🔴 kontrolni skupina: vyraz smi projit, PRIKAZ v tele bloku ne
+    (Case 'L1 kontrola prikaz v bloku'  'foreach ($f in $files) { git branch -D $f }' 'deny' 'PowerShell')
+    (Case 'L1 kontrola volani metody'   'Get-ChildItem | ForEach-Object { $_.Delete() }' 'ask' 'PowerShell')
+    (Case 'L1 kontrola podvyraz'        'Where-Object { $_.Name -eq ''x'' -or (git reset --hard) }' 'ask' 'PowerShell')
+    (Case 'L1 kontrola roura z $_'      'Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force }' 'ask' 'PowerShell')
+    # 🔴 v BASHi vyrazove pravidlo NEPLATI - `$cmd -rf src` se tam spousti
+    (Case 'L1 kontrola Bash zustava'    '$_.Name -like "*.cs"' 'ask')
+
+    # K3 - tataz trida jako I2, ale pro telo heredocu
+    (Case 'K3 bash heredoc z PS'        ("bash <<'EOF'" + $lf + 'echo \" ; git reset --hard' + $lf + 'EOF') 'deny' 'PowerShell')
+    (Case 'K3 pwsh heredoc z Bash'      ("pwsh <<'EOF'" + $lf + 'echo ' + $bt + '" ; git reset --hard' + $lf + 'EOF') 'deny')
+    (Case 'K3 pokracovani radku v tele' ("bash <<'EOF'" + $lf + 'git reset \' + $lf + '  --hard' + $lf + 'EOF') 'deny' 'PowerShell')
+    (Case 'K3 kontrola bez escapu'      ("bash <<'EOF'" + $lf + 'git reset --hard' + $lf + 'EOF') 'deny' 'PowerShell')
+    (Case 'K3 kontrola neskodne telo'   ("bash <<'EOF'" + $lf + 'git status' + $lf + 'EOF') 'allow' 'PowerShell')
+)
+
+Test-Cases 'review Amber kolo 5b (K, L)' $amber5bCases
+
+# ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)
 #
 #  Kazdy tvar, ktery kdy byl deny, jim ZUSTAVA - a kazdy tvar, ktery byl kdy
