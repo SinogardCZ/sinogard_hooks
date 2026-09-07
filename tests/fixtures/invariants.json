@@ -1,6 +1,7 @@
 {
   "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli sad, ne rucnim vyberem - generator je tests/_generate-invariants.ps1 (nalez Amber H2: soubor se na generator odvolaval, ale ten v repu nebyl). Radek bez klice 'hook'/'kind' je z prvniho vydani, kdy byl invariant jen pro branu nad prikazy; chybejici klic znamena 'gate' / 'cmd' a dopisovat ho zpetne by znamenalo prepsat 142 radku, ktere prepsat nemam.",
   "_odebrano": "2026-09-05: tvar 'echo DROP | TABLE users | psql' - radek nikdy neplatil. 'DROP | TABLE' neni platne SQL, takze deny bylo MOJE chybne ocekavani z tehoz kola, ne drivejsi chovani. Nahrazeno tvarem, ktery roury i stredniky v retezci testuje na platnem SQL.",
+  "_zmeneno": "2026-09-07, rozhodnuti Toma T36-O5 = A (audit misto dotazu u nerozebratelnych tvaru): 11 radkum se zmenilo ocekavani z \"ask\" na \"allow\". Radek z invariantu NEODESEL zadny. Seznam: $tool build - bash -c \"$x\" - cmd /c %X% - eval $cmd - $TOOL git push - [Math]::Truncate($x) - neukonceny heredoc (bash <<EOF / git status) - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq (x) -or (git reset --hard) } - $_.Name -like \"*.cs\" (Bash) - bash -c \"$CMD\". Vsechny jsou trida \"nerozebratelne\" (pricina variable, interpreter nebo heredocUnterminated); od 0.1.10 o nich rozhoduje vrstva opravneni Claude Code, ne plugin. NEZMENILY se: & $cmd, pwsh -enc, ssh host \"cmd\", ssh prod <<EOF, git -c alias., python -c s destruktivnim tokenem - a ZADNY radek s \"deny\".",
   "rows": [
     {
       "tool": "Bash",
@@ -587,7 +588,7 @@
     {
       "tool": "PowerShell",
       "cmd": "$tool build",
-      "expect": "ask",
+      "expect": "allow",
       "since": "B1 Z3 zustava"
     },
     {
@@ -869,25 +870,25 @@
     {
       "tool": "Bash",
       "cmd": "bash -c \"$x\"",
-      "expect": "ask",
+      "expect": "allow",
       "since": "bash -c s promennou"
     },
     {
       "tool": "Bash",
       "cmd": "cmd /c %X%",
-      "expect": "ask",
+      "expect": "allow",
       "since": "cmd /c s promennou"
     },
     {
       "tool": "Bash",
       "cmd": "eval $cmd",
-      "expect": "ask",
+      "expect": "allow",
       "since": "eval s promennou"
     },
     {
       "tool": "Bash",
       "cmd": "$TOOL git push",
-      "expect": "ask",
+      "expect": "allow",
       "since": "promenna misto exe"
     },
     {
@@ -1259,7 +1260,7 @@
     {
       "tool": "PowerShell",
       "cmd": "[Math]::Truncate($x)",
-      "expect": "ask",
+      "expect": "allow",
       "since": "B4 Math Truncate promenna"
     },
     {
@@ -1457,7 +1458,7 @@
     {
       "tool": "Bash",
       "cmd": "bash <<EOF\ngit status",
-      "expect": "ask",
+      "expect": "allow",
       "since": "E2 neukonceny heredoc"
     },
     {
@@ -3120,13 +3121,13 @@
     {
       "tool": "PowerShell",
       "cmd": "Get-ChildItem | ForEach-Object { $_.Delete() }",
-      "expect": "ask",
+      "expect": "allow",
       "since": "L1 kontrola volani metody"
     },
     {
       "tool": "PowerShell",
       "cmd": "Where-Object { $_.Name -eq 'x' -or (git reset --hard) }",
-      "expect": "ask",
+      "expect": "allow",
       "since": "L1 kontrola podvyraz"
     },
     {
@@ -3138,7 +3139,7 @@
     {
       "tool": "Bash",
       "cmd": "$_.Name -like \"*.cs\"",
-      "expect": "ask",
+      "expect": "allow",
       "since": "L1 kontrola Bash zustava"
     },
     {
@@ -3461,7 +3462,7 @@
     {
       "tool": "Bash",
       "cmd": "bash -c \"$CMD\"",
-      "expect": "ask",
+      "expect": "allow",
       "since": "T10 zustava obal s promennou"
     },
     {

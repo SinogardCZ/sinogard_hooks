@@ -260,22 +260,34 @@ function Get-ScriptBlockBody([string]$Text) {
     return $null
 }
 
-function Split-Unquoted([string]$Text, [string[]]$Separators) {
+# `KeepSeparators`: separatory, ktere maji z deleni PREZIT a pripojit se
+# k NASLEDUJICIMU segmentu. Vznik: `&` je v PowerShellu operator SPUSTENI, ne
+# oddelovac - jenze delenim se z `& $cmd` stal `$cmd` a informace, ze se obsah
+# promenne spousti, se ztratila (0.1.9 to zaznamenala v CHANGELOGu jako fakt,
+# ktery brani otevrit `$sql | psql`). Do 0.1.9 to nevadilo, protoze KAZDA
+# nerozebratelna vec byla `ask`; od 0.1.10 na tom rozdilu zalezi.
+#
+# !! Vychozi hodnota je PRAZDNA schvalne. `secrets.ps1` deli tymz skenerem a segment
+# zacinajici na `&` by mu posunul argv[0] - `& cat secrets.json` by prestal byt videt.
+# Marker si proto vyzada jen ten volajici, ktery ho umi zpracovat (`Get-CommandLeaf`
+# vedouci `&` strhava hned na zacatku).
+function Split-Unquoted([string]$Text, [string[]]$Separators, [string[]]$KeepSeparators = @()) {
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
 
-    $r = Split-UnquotedCore $Text $Separators $true $true
+    $r = Split-UnquotedCore $Text $Separators $true $true $KeepSeparators
     # Nevyvazena slozena zavorka => zanoreni se nikdy nevratilo na nulu a nedelilo by
     # se uz vubec nic. Druhy pruchod ji ignoruje.
-    if ($r.BraceOpen) { $r = Split-UnquotedCore $Text $Separators $true $false }
+    if ($r.BraceOpen) { $r = Split-UnquotedCore $Text $Separators $true $false $KeepSeparators }
     # Sken skoncil s OTEVRENOU dvojitou uvozovkou => vstup je bud rozbity, nebo jsme
     # si escapem zavreli oci (`echo "C:\src\"` je v Bashi opravdu neuzavreny retezec).
     # Druhy pruchod BEZ escapu deli VIC, tedy smerem k deny; propustit kvuli tomu nic
     # nejde, nanejvys se rozdeli neco, co se delit nemelo.
-    if ($r.Open) { $r = Split-UnquotedCore $Text $Separators $false $false }
+    if ($r.Open) { $r = Split-UnquotedCore $Text $Separators $false $false $KeepSeparators }
     return ,@($r.Parts)
 }
 
-function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEscape, [bool]$HonorBrace) {
+function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEscape, [bool]$HonorBrace,
+                            [string[]]$KeepSeparators = @()) {
     $esc = $script:ScannerEscape
 
     $out = New-Object System.Collections.ArrayList
@@ -345,7 +357,10 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
             }
         }
         if ($null -ne $hit) {
-            [void]$out.Add($buf.ToString()); [void]$buf.Clear(); $i += $hit.Length; continue
+            [void]$out.Add($buf.ToString()); [void]$buf.Clear()
+            # -ccontains: porovnani separatoru je ordinalni jako vsude jinde ve skeneru.
+            if ($KeepSeparators -ccontains $hit) { [void]$buf.Append($hit) }
+            $i += $hit.Length; continue
         }
 
         [void]$buf.Append($c); $i++
@@ -477,23 +492,23 @@ function Split-Pipe([string]$Statement) {
     return (Split-Unquoted $Statement @('|'))
 }
 
-function Split-CommandLine([string]$Command) {
+function Split-CommandLine([string]$Command, [string[]]$KeepSeparators = @()) {
     if ([string]::IsNullOrWhiteSpace($Command)) { return ,@() }
 
     $result = New-Object System.Collections.ArrayList
-    foreach ($seg in (Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r"))) {
+    foreach ($seg in (Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r") $KeepSeparators)) {
         [void]$result.Add($seg)
     }
 
     # Substituce se rozebiraji navic - `echo $(git branch -D x)` je i to vnitrni.
     foreach ($e in (Get-Substitution $Command)) {
-        foreach ($sub in (Split-CommandLine $e)) { [void]$result.Add($sub) }
+        foreach ($sub in (Split-CommandLine $e $KeepSeparators)) { [void]$result.Add($sub) }
     }
 
     # Pary zpetnych apostrofu = substituce v Bashi. V PowerShellu je zpetny apostrof
     # escape, takze prevzeti obsahu je nanejvys falesne pozitivni, nikdy negativni.
     foreach ($m in [regex]::Matches($Command, '`([^`]+)`')) {
-        foreach ($sub in (Split-CommandLine $m.Groups[1].Value)) { [void]$result.Add($sub) }
+        foreach ($sub in (Split-CommandLine $m.Groups[1].Value $KeepSeparators)) { [void]$result.Add($sub) }
     }
 
     return ,@($result | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
