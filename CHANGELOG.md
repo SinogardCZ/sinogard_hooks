@@ -3,6 +3,146 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.10] — 2026-09-07
+
+**Rozhodnutí Toma 2026-09-07/`T36-O5 = A`:** *„chci, abychom budovali automatizaci,
+ne že se vše zasekne, protože musím 50× potvrdit; udělej to dle best practices
+s cílem na automatizaci a výkon."* Volbu varianty (audit + vrstva Claude Code)
+udělala Amber v jeho pověření.
+
+Přehodnocuje **T-10 A** z 0.1.9, kde se u nerozebratelného obalu rozhodlo *„nechat
+ask"*. To padlo nad session, kde plugin měl **0** dotazů. Nad reálnými čísly ze
+7. 9. (tři sessions — GSD, HRMS, Útraty) to vypadá jinak: **45 dotazů ze 46** byla
+třída „nejde rozebrat", a skutečné zásahy §6 mezi nimi byly **dva**.
+
+### Změněno — „nerozebratelné" už není jedna třída
+
+Nerozebratelný list nese **příčinu** a politiku k ní určuje `gate.opaque`:
+
+| příčina | co to je | 0.1.9 | 0.1.10 |
+|---|---|---|---|
+| `variable` | proměnná v pozici příkazu, obal s proměnnou (`bash -c "$x"`, `cmd /c %X%`, `"EXIT=$code"`) | ask | **audit** |
+| `interpreter` | `python -c` / `node -e`, tělo heredocu interpretu | ask | **audit** (s výjimkou níže) |
+| `heredocUnterminated` | neukončený heredoc | ask | **audit** |
+| `depth` | zanoření hlubší než 5 | ask | **audit** |
+| `invoked` | `& $cmd` — obsah proměnné se **spustí** | ask | **ask** |
+| `encoded` | `-EncodedCommand` a jeho zkratky | ask | **ask** |
+
+🔴 **`audit` znamená, že hook MLČÍ** — zapíše řádek do
+`${CLAUDE_PLUGIN_DATA}/gate-audit.jsonl` (`opaque:<příčina>`) a **nevydá rozhodnutí**.
+Není to `permissionDecision: allow`: ten by přeskočil vrstvu oprávnění Claude Code
+(klasifikátor auto režimu, `permissions.*`), a právě ta má nadále rozhodovat.
+Plugin přestává být **poslední** instancí parseru a stává se první — viz README
+*„Tři rozhodnutí, ne dvě"*. Sada ten rozdíl tvrdí **prázdným stdout**, ne slovem
+„allow"; jinak by mutant *„vracej `allow` místo ticha"* prošel.
+
+Hodnoty jsou `audit | ask`; **cokoli jiného se čte jako `ask`** (fail-closed — překlep
+v projektovém override nesmí bránu tiše otevřít). Projektový override nahrazuje celý
+klíč `gate` (mělké slučování).
+
+### Přidáno — destruktivní token v kódu interpretu → `ask` (`gate.interpreterDestructiveTokens`)
+
+Kód interpretu se nerozebírá, ale **jméno destruktivního volání v něm vidět je**.
+Prostý **case-sensitivní** výskyt tokenu v těle vrací `ask` (tvar
+`interpreterDestructive`), takže `python -c "shutil.rmtree('x')"` se ptá dál, kdežto
+`python -c "print(1)"` projde. Je to test na **token, ne parser jazyka**.
+
+`.rmSync(`, `.rmdirSync(` a `.unlinkSync(` jsou v seznamu proto, že Node se píše
+`require('fs').rmSync(`, ne `fs.rmSync` — seznam postavený jen na druhém tvaru by
+minul invariantní řádek `node -e "require('fs').rmSync('src')"`.
+
+**Kontrolní skupina:** 15 příkazů HRMS a Útrat ze 7. 9. (`pathlib`,
+`read_text`/`write_text`, `io.open`, `node -e require(…)`) nenese ani jeden token
+a končí auditem.
+
+### Přidáno — `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory/DeleteFile` = mazání ⑤
+
+Druhé jméno téže operace jako `[IO.Directory]::Delete`. Do 0.1.9 propadalo do třídy
+„nerozebratelné" — a jakmile ta třída přestala být dotazem, byla by z toho **díra**:
+jsou to **jediné dva pravé zásahy §6** ze 46 dotazů 7. 9. Prochází teď stávajícím
+pravidlem: cíl v proměnné → `ask` (`netDeleteVariable`), literál mimo povolené složky
+→ `deny`, literál v `bin` → `allow`.
+
+`SendToRecycleBin` se **nerozlišuje** — brána §6 zní „mazání", ne „nevratné mazání";
+rozlišení je rozhodnutí zadavatele, ne pluginu.
+
+### Beze změny — co ask zůstává
+
+`& $cmd` · `-enc` / `-EncodedCommand` · `ssh host "příkaz"` i `ssh prod <<EOF` ·
+`git -c alias.…` · krátká absolutní cesta `/xxx` · mazání z roury · čtení
+`.claude/settings.local.json`.
+
+🔴 `ssh prod <<EOF` a `python <<EOF` sdílely do 0.1.9 **jednu podmínku**. Rozdělily se:
+kód interpretu jde politikou `opaque.interpreter`, cizí stroj zůstává `ask` — pravidla
+nad cestami tam neplatí a audit na našem stroji o cizím stroji netvrdí nic.
+
+### Regresní invariant — 11 řádků změnilo očekávání
+
+Soubor je append-only a řádek z něj odchází **jen s citovaným rozhodnutím**. Tady
+neodešel žádný: jedenácti řádkům se změnilo `expect` z `ask` na `allow`, seznam
+i citace jsou v hlavičce `tests/fixtures/invariants.json` (klíč `_zmeneno`).
+**Žádný řádek s `deny` se nezměnil** — doklad je prázdný výstup
+`git diff tests/fixtures/invariants.json | grep '^-.*"deny"'`, celý diff je
+`12 vložených / 11 odebraných` řádků.
+
+🔴 **Dva z těch jedenácti stojí za pojmenování**, protože je zadání nejmenovalo:
+`Get-ChildItem | ForEach-Object { $_.Delete() }` a
+`Where-Object { $_.Name -eq 'x' -or (git reset --hard) }`. Obojí je třída `variable`,
+takže po téhle změně je plugin nezastaví. Je to **důsledek `T36-O5 A`**, ne díra
+navíc — ale patří to do textu, ne jen do součtu.
+
+### Opraveno — `&` přežije dělení příkazové řádky (jinak by `invoked` byla mrtvá větev)
+
+Změřeno při implementaci: `Split-CommandLine '& $cmd'` vracelo `$cmd` — `&` je
+v seznamu oddělovačů, takže informace „obsah proměnné se **spustí**" se ztrácela
+ještě před rozborem. Do 0.1.9 to nevadilo (obojí končilo `ask`); od 0.1.10 na tom
+rozdílu stojí celá kontrolní skupina, a bez opravy padlo `& $cmd` z `ask` na audit.
+CHANGELOG 0.1.9 tenhle mechanismus popsal (*„informace o `&` se ztrácí už ve
+`Split-CommandLine`"*) — teď je opravený, ne jen zaznamenaný.
+
+`Split-Unquoted` / `Split-CommandLine` proto přijímají `KeepSeparators`: oddělovač
+z toho seznamu **přežije a připojí se k následujícímu segmentu**. 🔴 Výchozí hodnota
+je **prázdná** a `secrets.ps1` ji nemění — segment začínající na `&` by mu posunul
+`argv[0]` a `& cat secrets.json` by přestal být vidět. Marker si vyžádá jen
+`Get-CommandLineLeaves`, protože `Get-CommandLeaf` vedoucí `&` strhává hned na
+začátku. Kontrolní skupina: `& { rm -rf src }`, `& { git status; rm -rf src }`,
+`& (git reset --hard)` a `foo & rm -rf src` zůstávají `deny`, `& { Get-Date }`
+a `dotnet test &` zůstávají bez rozhodnutí.
+
+### Dokumentováno — mělké slučování + rostoucí klíč `gate` (nález K2-1 review Amber)
+
+`Get-HookConfig` nahrazuje **celý** top-level klíč. Override, který nese jen jednu
+hodnotu z `gate`, tedy zahodí `denyPatterns`, `askPatterns`, `allowedRemoveRoots`,
+`shapes`, `sqlClients`, `codeInterpreters` i `interpreterDestructiveTokens`. Je to
+**stará vlastnost** (0.1.x), ale 0.1.10 do `gate` přidává dva klíče a README dosud
+takový částečný override sám předváděl.
+
+Změřeno s override `{"gate":{"opaque":{"variable":"audit"}}}`:
+
+| příkaz | bez override | s ním |
+|---|---|---|
+| `git reset --hard`, `git branch -D x`, `git filter-branch` | `deny` | **žádné rozhodnutí** |
+| `rm -rf bin` (povolená složka) | žádné rozhodnutí | **`deny`** |
+| `rm -rf src`, `psql -h prod -c "DROP TABLE x"`, `& $cmd` | deny / deny / ask | beze změny |
+
+🔴 Jde to **oběma směry**: brána ztratí tvary, které měla držet, a zároveň začne
+blokovat běžnou práci. Pravidla žijící v kódu drží dál — proto se ztráta nepozná podle
+toho, že by „přestalo fungovat všechno".
+
+**Kód se nemění.** README §Konfigurace dostal vlastní 🔴 sekci s tou tabulkou a příklad
+už částečný `gate` nepředvádí; sada nese sedm případů jako **doklad omezení**
+(`K2-1: override gate bez denyPatterns`), včetně kontrolní skupiny pro pravidla v kódu.
+Tvar hlubšího slučování (per podklíč `gate.*`, nebo `opaque` a
+`interpreterDestructiveTokens` na top-level) je rozhodnutí do **v0.2** — nese ho
+TASK-106 bod 10.
+
+### Přidáno — fixtura `tests/fixtures/ask-vypis-2026-09-07.json`
+
+Všech **46** příkazů, na které se 0.1.9 ptal v sessions 7. 9. (GSD 31, HRMS 5,
+Útraty 10), doslovně. Naměřeno nad `9e4720b`: **45 ask, 1 ticho** (to jedno je blok
+*„Inventura MCP"* — tam se ptal hook `secrets`, ne `gate`). Po 0.1.10:
+**44 × ticho, 2 × ask**.
+
 ## [0.1.9] — 2026-09-07
 
 **Rozhodnutí Toma 2026-09-07/T36-F1 T-10 A** nad čísly ze sekce *Dotazy a bloky*

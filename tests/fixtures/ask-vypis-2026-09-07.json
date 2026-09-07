@@ -1,0 +1,330 @@
+{
+  "_pozn": "Vsech 46 prikazu, na ktere se plugin 0.1.9 ptal v sessions 7. 9. 2026 (GSD 31, HRMS 5, Utraty 10). Zdroj: amber/tasks/drafts/hooks/2026-09-07-ask-vypis-{gsd,hrms,utraty}.txt, vytazeno skriptem, prikaz je DOSLOVNY vcetne konců radku. Ocekavani plati pro branu gate.ps1 od 0.1.10 (rozhodnuti Toma 2026-09-07/T36-O5 = A).",
+  "_expect": "silent = hook MLCI (prazdny stdout + exit 0), tedy plati normalni tok opravneni Claude Code. NENI to permissionDecision:allow - to by vrstvu Claude Code preskocilo, a sada ten rozdil tvrdi. ask = vynuceny souhlas cloveka.",
+  "_mereni_pred": "Nad 9e4720b (v0.1.9) merenim vyslo: 45 ask, 1 ticho. To jedno ticho je blok \"Inventura MCP per projekt\" (gsd/2) - tam se ptal hook secrets (selfProtect), ne gate. Cervenych tvrzeni nad 9e4720b je proto 45: 43 x rozhodnuti ask misto ticha + 2 x duvod \"nejde rozebrat\" misto tvaru netDeleteVariable.",
+  "_dva_zasahy": "gsd/7 a gsd/8 jsou jedine prave zasahy par. 6: [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, ...). Cil je promenna, takze rozsah nezname -> ask (tvar netDeleteVariable). SendToRecycleBin se NEROZLISUJE: brana par. 6 zni \"mazani\", ne \"nevratne mazani\"; rozliseni je rozhodnuti Toma, ne pluginu.",
+  "rows": [
+    {
+      "source": "gsd",
+      "order": 1,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$p = \"$env:USERPROFILE\\.claude\\settings.json\"; \"=== $p ===\"; if (Test-Path $p) { Get-Content $p -Raw } else { \"NEEXISTUJE\" }"
+    },
+    {
+      "source": "gsd",
+      "order": 2,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$c = \"$env:USERPROFILE\\.claude.json\"\n$j = Get-Content $c -Raw | ConvertFrom-Json\n\"=== per-project mcpServers (jen jmena) ===\"\nforeach ($p in $j.projects.PSObject.Properties) {\n  $m = $p.Value.mcpServers\n  if ($m -and $m.PSObject.Properties.Name.Count -gt 0) { \"{0}  ->  {1}\" -f $p.Name, (($m.PSObject.Properties.Name) -join ', ') }\n}\n\"=== globalni settings.local.json ===\"\n$l = \"$env:USERPROFILE\\.claude\\settings.local.json\"; if (Test-Path $l) { (Get-Content $l -Raw) -replace '(?i)(\"[^\"]*(key|token|secret)[^\"]*\"\\s*:\\s*\")[^\"]*', '$1<redigovano>' } else { \"NEEXISTUJE\" }\n\"=== projektovy settings.local.json (jen klice) ===\"\n$pl = \"W:\\dev\\gsd\\repo\\.claude\\settings.local.json\"; if (Test-Path $pl) { ((Get-Content $pl -Raw | ConvertFrom-Json).PSObject.Properties.Name) -join ', ' } else { \"NEEXISTUJE\" }\n\"=== .claude/sinogard-hooks.json v repu? ===\"\nif (Test-Path \"W:\\dev\\gsd\\repo\\.claude\\sinogard-hooks.json\") { \"existuje\" } else { \"NEEXISTUJE\" }"
+    },
+    {
+      "source": "gsd",
+      "order": 3,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$org = 'https://dev.azure.com/wittenberger'; $proj = 'GSD'\n$sha = '01ad14d8f7b76d4a5f7c71a91753a7eef4bbdd08'\n$runs = az pipelines runs list --organization $org --project $proj --top 20 --query-order QueueTimeDesc --output json | ConvertFrom-Json\n$run = $runs | Where-Object { $_.sourceVersion -eq $sha } | Sort-Object id -Descending | Select-Object -First 1\nif ($run) { \"NALEZEN: $($run.buildNumber)  id=$($run.id)  status=$($run.status)  result=$($run.result)  branch=$($run.sourceBranch)  queue=$($run.queueTime)  finish=$($run.finishTime)\" }\nelse { \"ZADNY beh pro $sha ve 20 nejnovejsich\"; \"--- nejnovejsich 8 ---\"; $runs | Select-Object -First 8 buildNumber,id,status,result,sourceBranch,@{n='sha';e={$_.sourceVersion.Substring(0,7)}} | Format-Table -AutoSize }"
+    },
+    {
+      "source": "gsd",
+      "order": 4,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\gsd\\repo\\docs\\logs\\session\\2026-09-07-task-36-plugin-sinogard-hooks-hlaseni-09.md\"\n$b = [System.IO.File]::ReadAllBytes($f)\n\"prvni 3 bajty: {0:X2} {1:X2} {2:X2}  (BOM EF BB BF?)\" -f $b[0],$b[1],$b[2]\n\"delka: $($b.Length)\"\n\"posledni 2 bajty: {0:X2} {1:X2}\" -f $b[$b.Length-2],$b[$b.Length-1]"
+    },
+    {
+      "source": "gsd",
+      "order": 5,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\gsd\\repo\\docs\\logs\\session\\2026-09-07-task-36-plugin-sinogard-hooks-hlaseni-09.md\"\n$lines = @(\n  ''\n  '---'\n  ''\n  '## ➕ Dovětek 2026-09-07 12:xx (session TASK-105, krok 0 bod 5) — CI verdikt `01ad14d`'\n  ''\n  'Doplněno **dovětkem, ne přepisem**: hlášení 09 vzniklo v 09:33, tedy dřív, než běh'\n  'pro `01ad14d` doběhl (10:35). Verdikt proto v původním textu chybět **musel**.'\n  ''\n  'Čteno podle `sourceVersion`, ne podle pořadí (`docs/technical/dev-prostredi.md` §1):'\n  ''\n  '```powershell'\n  \"`$org = 'https://dev.azure.com/wittenberger'; `$proj = 'GSD'\"\n  \"`$sha = '01ad14d8f7b76d4a5f7c71a91753a7eef4bbdd08'\"\n  'az pipelines runs list --organization $org --project $proj --top 20 `'\n  '  --query-order QueueTimeDesc --output json | ConvertFrom-Json |'\n  '  Where-Object { $_.sourceVersion -eq $sha } | Sort-Object id -Descending | Select-Object -First 1'\n  '```'\n  ''\n  '| Údaj | Hodnota |'\n  '|---|---|'\n  '| `buildNumber` | `20260907.3` |'\n  '| `id` | **187** |'\n  '| `status` | `completed` |'\n  '| `result` | ✔ **`succeeded`** |'\n  '| `sourceBranch` | `refs/heads/main` |'\n  '| `queueTime` | 2026-09-07 10:25:07 |'\n  '| `finishTime` | 2026-09-07 10:35:04 |'\n  ''\n  '🔴 **Jednotka: jeden push = jeden verdikt.** Tenhle řádek je verdikt pro `01ad14d`'\n  '(HEAD `main` po dodávce TASK-36), ne pro celý TASK-36 — dřívější commity mají verdikty'\n  'vlastní. Časy jsou **lokální** (`az pipelines runs show` je vydává v lokálním čase,'\n  '`dev-prostredi.md` ř. 258).'\n  ''\n  '🕐 Dovětek zapsán 2026-09-07 13:0x — přesný čas nese ledger session TASK-105.'\n)\n$text = ($lines -join \"`r`n\") + \"`r`n\"\n[System.IO.File]::AppendAllText($f, $text, (New-Object System.Text.UTF8Encoding($false)))\n\"--- diff numstat ---\"\ngit -C W:\\dev\\gsd\\repo diff --numstat -- $f"
+    },
+    {
+      "source": "gsd",
+      "order": 6,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$now = Get-Date -Format 'yyyy-MM-dd HH:mm'\n$hm  = Get-Date -Format 'HH:mm'\n$f = \"W:\\dev\\gsd\\repo\\docs\\logs\\session\\2026-09-07-task-36-plugin-sinogard-hooks-hlaseni-09.md\"\n$raw = [System.IO.File]::ReadAllText($f)\n$raw = $raw.Replace('## ➕ Dovětek 2026-09-07 12:xx (session TASK-105, krok 0 bod 5)', \"## ➕ Dovětek $now (session TASK-105, krok 0 bod 5)\")\n$raw = $raw.Replace('🕐 Dovětek zapsán 2026-09-07 13:0x — přesný čas nese ledger session TASK-105.', \"🕐 Dovětek zapsán $now.\")\n[System.IO.File]::WriteAllText($f, $raw, (New-Object System.Text.UTF8Encoding($false)))\n\"cas: $now\"\ngit -C W:\\dev\\gsd\\repo diff --numstat -- $f\n\"--- kontrola BOM a CRLF ---\"\n$b=[System.IO.File]::ReadAllBytes($f); \"prvni3: {0:X2} {1:X2} {2:X2}  posledni2: {3:X2} {4:X2}\" -f $b[0],$b[1],$b[2],$b[$b.Length-2],$b[$b.Length-1]"
+    },
+    {
+      "source": "gsd",
+      "order": 7,
+      "tool": "PowerShell",
+      "expect": "ask",
+      "cmd": "Add-Type -AssemblyName Microsoft.VisualBasic\n$base = \"C:\\Users\\tomas\\AppData\\Local\\Temp\\claude\\W--dev-gsd-repo\\37436679-5e08-4363-8f49-5f176298a0a5\\scratchpad\"\nforeach ($n in @('base-0104','red-0105','red-016','red-017','mutant')) {\n  $p = Join-Path $base $n\n  [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, 'DoNotDeletesomethingWrong')\n}"
+    },
+    {
+      "source": "gsd",
+      "order": 8,
+      "tool": "PowerShell",
+      "expect": "ask",
+      "cmd": "Add-Type -AssemblyName Microsoft.VisualBasic\n$base = \"C:\\Users\\tomas\\AppData\\Local\\Temp\\claude\\W--dev-gsd-repo\\37436679-5e08-4363-8f49-5f176298a0a5\\scratchpad\"\nforeach ($n in @('base-0104','red-0105','red-016','red-017','mutant')) {\n  $p = Join-Path $base $n\n  [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)\n  \"odeslano do kose: $n\"\n}"
+    },
+    {
+      "source": "gsd",
+      "order": 9,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$base = \"C:\\Users\\tomas\\AppData\\Local\\Temp\\claude\\W--dev-gsd-repo\\37436679-5e08-4363-8f49-5f176298a0a5\\scratchpad\"\n$d = Get-ChildItem $base -Force -Directory; $f = Get-ChildItem $base -Force -File\n\"adresaru ted: $($d.Count)  (pred smazanim 11, mazalo se 5 -> ceka se 6)\"\n\"souboru ted:  $($f.Count)  (soubory se nemazaly)\"\n\"zbyle adresare: \" + (($d.Name) -join ', ')"
+    },
+    {
+      "source": "gsd",
+      "order": 10,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n$log = \"C:\\Users\\tomas\\AppData\\Local\\Temp\\claude\\W--dev-gsd-repo\\98dfb232-4510-4d44-ae76-2760c59c6890\\scratchpad\\gate-krok0.log\"\n& pwsh -File scripts\\ci-local.ps1 *>&1 | Tee-Object -FilePath $log | Out-Null\n$code = $LASTEXITCODE\n\"EXIT=$code\"\n\"--- souhrn ---\"\nSelect-String -Path $log -Pattern 'passed|failed|skipped|SELHALO|Brána|BRÁNA|OK$' | Select-Object -Last 30 | ForEach-Object { $_.Line }"
+    },
+    {
+      "source": "gsd",
+      "order": 11,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n. .\\scripts\\dev-common.ps1; Import-DevEnvironmentFile; $env:GSD_TEST_PG = Get-PgConnectionString\ndotnet build tests/Gsd.IntegrationTests/Gsd.IntegrationTests.csproj -c Release --nologo 2>&1 | Select-Object -Last 20\n\"BUILD EXIT=$LASTEXITCODE\""
+    },
+    {
+      "source": "gsd",
+      "order": 12,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n. .\\scripts\\dev-common.ps1; Import-DevEnvironmentFile; $env:GSD_TEST_PG = Get-PgConnectionString\n$out = dotnet test tests/Gsd.IntegrationTests/Gsd.IntegrationTests.csproj -c Release --no-build --nologo --filter \"FullyQualifiedName~CsrfCookieTests\" 2>&1\n$code = $LASTEXITCODE\n$out | Select-String -Pattern 'Failed |Passed!|Failed!|Error Message|Assert|neposlal|Expected|Actual' | ForEach-Object { $_.Line }\n\"EXIT=$code\""
+    },
+    {
+      "source": "gsd",
+      "order": 13,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n. .\\scripts\\dev-common.ps1; Import-DevEnvironmentFile; $env:GSD_TEST_PG = Get-PgConnectionString\ndotnet build Gsd.slnx -c Release --nologo 2>&1 | Select-String -Pattern 'error|warning|Build succeeded|Error\\(s\\)|Warning\\(s\\)' | Select-Object -First 20\n\"BUILD EXIT=$LASTEXITCODE\""
+    },
+    {
+      "source": "gsd",
+      "order": 14,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n. .\\scripts\\dev-common.ps1; Import-DevEnvironmentFile; $env:GSD_TEST_PG = Get-PgConnectionString\n$out = dotnet test tests/Gsd.IntegrationTests/Gsd.IntegrationTests.csproj -c Release --no-build --nologo --filter \"FullyQualifiedName~CsrfCookieTests|FullyQualifiedName~IdentityGuardTests|FullyQualifiedName~AuthenticationTests\" 2>&1\n$code = $LASTEXITCODE\n$out | Select-String -Pattern 'Failed |Passed!|Failed!|Error Message|Assert|Expected|Actual' | ForEach-Object { $_.Line }\n\"EXIT=$code\""
+    },
+    {
+      "source": "gsd",
+      "order": 15,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n. .\\scripts\\dev-common.ps1; Import-DevEnvironmentFile; $env:GSD_TEST_PG = Get-PgConnectionString\ndotnet build Gsd.slnx -c Release --nologo 2>&1 | Select-String -Pattern 'Build succeeded|error' | Select-Object -First 5\nif ($LASTEXITCODE -ne 0) { \"BUILD SELHAL - sonda nemeri nic\"; exit 1 }\n$out = dotnet test tests/Gsd.IntegrationTests/Gsd.IntegrationTests.csproj -c Release --no-build --nologo --filter \"FullyQualifiedName~CsrfCookieTests\" 2>&1\n$out | Select-String -Pattern 'Failed Gsd|Passed!|Failed!|Expected:|Actual:' | ForEach-Object { $_.Line }"
+    },
+    {
+      "source": "gsd",
+      "order": 16,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\\web\nnpm run typecheck 2>&1 | Select-Object -Last 10\n\"TYPECHECK EXIT=$LASTEXITCODE\""
+    },
+    {
+      "source": "gsd",
+      "order": 17,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n. .\\scripts\\dev-common.ps1; Import-DevEnvironmentFile; $env:GSD_TEST_PG = Get-PgConnectionString\ndotnet build Gsd.slnx -c Release --nologo 2>&1 | Select-String -Pattern 'Build succeeded|error|Warning\\(s\\)' | Select-Object -First 5\n$out = dotnet test tests/Gsd.IntegrationTests/Gsd.IntegrationTests.csproj -c Release --no-build --nologo --filter \"FullyQualifiedName~CsrfCookieTests|FullyQualifiedName~IdentityGuardTests|FullyQualifiedName~AuthenticationTests\" 2>&1\n$out | Select-String -Pattern 'Failed Gsd|Passed!|Failed!' | ForEach-Object { $_.Line }\n\"EXIT=$LASTEXITCODE\"\n\"=== drift OpenAPI kontraktu ===\"\ngit diff --stat -- docs/technical/api\n\"(prazdne = zadny drift)\""
+    },
+    {
+      "source": "gsd",
+      "order": 18,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n. .\\scripts\\dev-common.ps1; Import-DevEnvironmentFile; $env:GSD_TEST_PG = Get-PgConnectionString\ndotnet build Gsd.slnx -c Release --nologo 2>&1 | Select-String -Pattern 'Build succeeded|error|Warning\\(s\\)' | Select-Object -First 5\n$out = dotnet test tests/Gsd.IntegrationTests/Gsd.IntegrationTests.csproj -c Release --no-build --nologo --filter \"FullyQualifiedName~CsrfCookieTests|FullyQualifiedName~IdentityGuardTests|FullyQualifiedName~AuthenticationTests\" 2>&1\n$out | Select-String -Pattern 'Failed Gsd|Passed!|Failed!' | ForEach-Object { $_.Line }\n\"EXIT=$LASTEXITCODE\"\n\"=== drift OpenAPI kontraktu ===\"\ngit diff --stat -- docs/technical/api\n\"(prazdne = zadny drift)\""
+    },
+    {
+      "source": "gsd",
+      "order": 19,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n\"=== generat slovniku: rezim -Check ===\"\nif (Test-Path scripts\\generate-autorizacni-slovnik.ps1) {\n  pwsh -NoProfile -File scripts\\generate-autorizacni-slovnik.ps1 -Check 2>&1 | Select-Object -Last 15\n  \"EXIT=$LASTEXITCODE\"\n} else { Get-ChildItem scripts -Filter '*slovnik*' -Recurse | Select-Object FullName }\n\"=== sada brany ===\"\npwsh -NoProfile -File tests\\scripts\\autorizacni_slovnik.tests.ps1 2>&1 | Select-String -Pattern 'FAIL|passed / ' | ForEach-Object { $_.Line }\n\"EXIT=$LASTEXITCODE\"\n\"=== drift slovniku proti main ===\"\ngit diff --stat -- docs/technical/autorizacni-slovnik.json\n\"(prazdne = 0 rozdilu)\""
+    },
+    {
+      "source": "gsd",
+      "order": 20,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n$f = 'docs\\tasks\\TASK-105.md'\n$lines = @(\n''\n'- **2026-09-07** — **zpověď a rozhodnutí Toma; celek doručen** (session `feature/task-105-csrf-cookie`).'\n''\n'  🔴 **Varianta 1 téhle kostry („`/auth/me` vrací token\") byla NESPLNITELNÁ.** Server'\n'  plaintext tokenu **nemá** — v `AuthSession.CsrfTokenHash` leží jen SHA-256'\n'  (`AuthenticationService.cs` ř. 77, `Entities.cs` ř. 267). Nebylo co vracet. Šla by jen'\n'  s plaintextem v DB, nebo s rotací tokenu při každém `GET /me` — tedy `GET` se'\n'  side-efektem, kde druhá záložka zneplatní první. Kostra to tušit nemohla; zpověď to'\n'  změřila. Varianta 2 („double-submit cookie\") se ukázala jako **správná v jádru**'\n'  a **nepřesná v popisu**: není to double-submit, protože server cookie nečte.'\n''\n'  **Rozhodnutí Toma 2026-09-07:**'\n'  - **`T105-O1 = A`** — token jde **i do druhé cookie `__Host-gsd_csrf`** (`Secure`,'\n'    `SameSite=Lax`, `Path=/`, bez `Domain`, `Expires` shodné s cookie relace,'\n'    **bez `HttpOnly`**); klient ji čte před každým zápisem; **ověření na serveru beze'\n'    změny** — hlavička proti hashi v řádku relace. Zamítnuto: plaintext v DB · rotace'\n'    přes `/auth/csrf` · `sessionStorage` (nepřežije novou záložku) · zrušení vrstvy ④.'\n'  - **`T105-O2 = A`** — `logout` stojí jen na vrstvách ①–③; vrstva ④ se u něj'\n'    **nevyhodnocuje**. Je to přiznaná úniková cesta: relace žije, token chybí.'\n''\n'  🔴 **Výjimka je vlastnost ENDPOINTU** (`CsrfTokenExemptMetadata`,'\n'  `AuthorizationMetadata.cs`), ne řetězec cesty a ne hodnota hlavičky. Vlastní značka,'\n'  **ne** `AnonymousSurface` — ta je na čtyřech endpointech a vyjmout podle ní by změnilo'\n'  i login. Fail-closed: `GetEndpoint() == null` ⇒ vrstva ④ platí.'\n''\n'  ⚠ **Login z ④ vyňatý NENÍ** — jen ho bez relace nepotká (`AuthPipeline.cs`,'\n'  `session is not null`). Loginová výjimka je *podmíněná*, logoutová *nepodmíněná*.'\n'  Řádek smyčky výše („Přihlásit → chybné údaje\") byl ④ na loginu **nad živou relací**.'\n''\n'  **Doklad (TDD, integrační šev nad `WebApplicationFactory`):**'\n''\n'  | Fáze | Výsledek |'\n'  |---|---|'\n'  | červená nad `main` (`aa96115`) | `Failed: 3, Passed: 6, Skipped: 0, Total: 9` — červené **T1, T2, T4** |'\n'  | zelená po implementaci | `Failed: 0, Passed: 23` (CsrfCookie + IdentityGuard + Authentication) |'\n'  | mutant „výjimka přeskočí celou kontrolu\" | zčervenaly **právě T5, T5b, T5c** (`Expected: Forbidden / Actual: NoContent`) |'\n''\n'  🔴 **Oprava klasifikace zadání:** zadání řadilo **T5b a T5c mezi červené na `main`**.'\n'  Změřeno, že tam **zelené jsou a být musejí**: jejich mutant („výjimka přeskočí i ② a ③\")'\n'  na `main` neexistuje, protože tam žádná výjimka není. Červenou proto dokládá **mutant'\n'  implementace**, ne `main` — mutace musí mířit na tvrzení, které se dokládá.'\n''\n'  **Relace z doby před nasazením** cookie tokenu nemají: jejich zápisy skončí `403` až do'\n'  odhlášení, `Odhlásit` funguje. Je to **očekávané chování** (`T105-O2 = A` v praxi), ne nález.'\n''\n'  **Mimo scope, jako nález pro Toma:** `csrfToken` v těle `LoginResponse` je po cookie'\n'  **redundantní**, ale odebrání mění kontrakt v1 (`gsd-api-v1.json`, `Contracts.cs` ř. 15,'\n'  testovací klient). Nerozhodnuto — táž třída jako [TASK-81](TASK-81.md).'\n)\n$text = ($lines -join \"`r`n\") + \"`r`n\"\n[System.IO.File]::AppendAllText((Join-Path (Get-Location) $f), $text, (New-Object System.Text.UTF8Encoding($false)))\ngit diff --numstat -- $f"
+    },
+    {
+      "source": "gsd",
+      "order": 21,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n$f = 'docs\\backlog.md'\n$all = [System.IO.File]::ReadAllLines((Join-Path (Get-Location) $f))\n\"pred: radku = $($all.Count); vyskytu 'id=\\\"task-106\\\"' = \" + (($all | Select-String -Pattern 'id=\"task-106\"' -SimpleMatch).Count)\n# smaz radek 226 (index 225) = duplicitni TASK-106 pod TASK-107\n$keep = @(); for ($i=0; $i -lt $all.Count; $i++) { if ($i -ne 225) { $keep += $all[$i] } }\n[System.IO.File]::WriteAllLines((Join-Path (Get-Location) $f), $keep, (New-Object System.Text.UTF8Encoding($false)))\n\"po:   radku = $($keep.Count)\"\ngit diff --numstat -- $f"
+    },
+    {
+      "source": "gsd",
+      "order": 22,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n$f = Join-Path (Get-Location) 'docs\\backlog.md'\n$all = [System.IO.File]::ReadAllLines($f)\n$pattern = 'id=' + [char]34 + 'task-106' + [char]34\n'pred: radku = {0}; vyskytu TASK-106 = {1}' -f $all.Count, (($all | Select-String -Pattern $pattern -SimpleMatch).Count)\n$keep = @(); for ($i=0; $i -lt $all.Count; $i++) { if ($i -ne 225) { $keep += $all[$i] } }\n[System.IO.File]::WriteAllLines($f, $keep, (New-Object System.Text.UTF8Encoding($false)))\n$after = [System.IO.File]::ReadAllLines($f)\n'po:   radku = {0}; vyskytu TASK-106 = {1}' -f $after.Count, (($after | Select-String -Pattern $pattern -SimpleMatch).Count)\ngit diff --numstat -- docs/backlog.md"
+    },
+    {
+      "source": "gsd",
+      "order": 23,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n\"=== kostry: soubory L2 se stavem 'kostra' ===\"\n(Get-ChildItem docs\\tasks\\TASK-*.md | Where-Object { (Get-Content $_ -Raw) -match '\\*\\*Stav\\*\\*.*kostra' }).Count\n\"=== radky sekce Kostry v indexu ===\"\n$t = Get-Content docs\\backlog.md\n$start = ($t | Select-String -Pattern '^## Kostry' ).LineNumber\n$end   = ($t | Select-String -Pattern '^## .*Mlhy' ).LineNumber\n$sekce = $t[($start)..($end-2)]\n\"radku s odkazem na L2: \" + (($sekce | Select-String -Pattern '\\]\\(tasks/TASK-\\d+\\.md\\) \\|').Count)\n\"kotev <a id=task-: \" + (($sekce | Select-String -Pattern '<a id=\"task-' -SimpleMatch).Count)\n\"=== V reseni ===\"\n$vr = ($t | Select-String -Pattern '^## V řešení').LineNumber\n$bl = ($t | Select-String -Pattern '^## Blokováno').LineNumber\n\"radku V reseni: \" + ((($t[($vr)..($bl-2)]) | Select-String -Pattern '^\\| .*\\]\\(tasks/TASK-\\d+\\.md\\)').Count)\n\"=== Ke zpracovani ===\"\n$kz = ($t | Select-String -Pattern '^## Ke zpracování').LineNumber\n\"radku Ke zpracovani: \" + ((($t[($kz)..($start-2)]) | Select-String -Pattern '^\\| .*\\]\\(tasks/TASK-\\d+\\.md\\)').Count)"
+    },
+    {
+      "source": "gsd",
+      "order": 24,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "cd /w/dev/gsd/repo\necho \"=== TASK-36 Stav ===\"; grep -n '\\*\\*Stav\\*\\*' docs/tasks/TASK-36.md\necho \"=== TASK-105 Stav ===\"; grep -n '\\*\\*Stav\\*\\*' docs/tasks/TASK-105.md\necho \"=== TASK-107 Stav ===\"; grep -n '\\*\\*Stav\\*\\*' docs/tasks/TASK-107.md\necho \"=== ktere L2 maji 'kostra' a pritom nejsou v sekci Kostry ===\"\nfor f in docs/tasks/TASK-*.md; do\n  n=$(basename \"$f\" .md)\n  if grep -q '\\*\\*Stav\\*\\*.*kostra' \"$f\"; then\n    if ! grep -q \"\\[$n\\](tasks/$n.md)\" <(sed -n '/^## Kostry/,/^## .*Mlhy/p' docs/backlog.md); then echo \"  $n\"; fi\n  fi\ndone"
+    },
+    {
+      "source": "gsd",
+      "order": 25,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n\"kostry (soubory L2): \" + (Get-ChildItem docs\\tasks\\TASK-*.md | Where-Object { (Get-Content $_ -Raw) -match '\\*\\*Stav\\*\\*.*kostra' }).Count\n$t = Get-Content docs\\backlog.md\n$start = ($t | Select-String -Pattern '^## Kostry').LineNumber\n$end   = ($t | Select-String -Pattern '^## .*Mlhy').LineNumber\n$sekce = $t[$start..($end-2)]\n\"kostry (radky indexu): \" + (($sekce | Select-String -Pattern '\\]\\(tasks/TASK-\\d+\\.md\\) \\|').Count)\n\"kotvy v sekci Kostry:  \" + (($sekce | Select-String -Pattern '<a id=\"task-' -SimpleMatch).Count)\n$vr = ($t | Select-String -Pattern '^## V řešení').LineNumber\n$bl = ($t | Select-String -Pattern '^## Blokováno').LineNumber\n\"V reseni:              \" + ((($t[$vr..($bl-2)]) | Select-String -Pattern '^\\| .*\\]\\(tasks/TASK-\\d+\\.md\\)').Count)\n$kz = ($t | Select-String -Pattern '^## Ke zpracování').LineNumber\n\"Ke zpracovani:         \" + ((($t[$kz..($start-2)]) | Select-String -Pattern '^\\| .*\\]\\(tasks/TASK-\\d+\\.md\\)').Count)"
+    },
+    {
+      "source": "gsd",
+      "order": 26,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n$f = Join-Path (Get-Location) 'docs\\tasks\\TASK-105.md'\n$lines = @(\n''\n'  ℹ **Pole `Stav` přepsáno** z *„kostra (ne zadání)\"* na *„dodáno\"* — zpověď proběhla,'\n'  zadání v3 existuje, celek je doručený. Původní znění drží git; sem se nekopíruje'\n'  **schválně**: příkaz, kterým se v indexu počítají kostry, hledá slovo `kostra`'\n'  na řádku `**Stav**`, takže citace starého znění by položku počítala dál jako kostru.'\n'  *(Kdo dokumentuje zrušení pojmu, ten pojem zapíše — persona §22.)*'\n)\n[System.IO.File]::AppendAllText($f, (($lines -join \"`r`n\") + \"`r`n\"), (New-Object System.Text.UTF8Encoding($false)))\n\"kostry (soubory L2): \" + (Get-ChildItem docs\\tasks\\TASK-*.md | Where-Object { (Get-Content $_ -Raw) -match '\\*\\*Stav\\*\\*.*kostra' }).Count\ngit diff --numstat -- docs/tasks/TASK-105.md"
+    },
+    {
+      "source": "gsd",
+      "order": 27,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\nforeach ($p in 5180,5373,5433) {\n  $r = Test-NetConnection -ComputerName 127.0.0.1 -Port $p -InformationLevel Quiet -WarningAction SilentlyContinue\n  \"port {0,-5} obsazen: {1}\" -f $p, $r\n}\n\"=== .logs ===\"\nGet-ChildItem .logs -ErrorAction SilentlyContinue | Select-Object Name,Length,LastWriteTime | Format-Table -AutoSize\n\"=== PID soubory ===\"\nGet-ChildItem .logs -Filter '*.pid' -ErrorAction SilentlyContinue | ForEach-Object { \"$($_.Name): $(Get-Content $_.FullName -Raw)\" }"
+    },
+    {
+      "source": "gsd",
+      "order": 28,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\npwsh -File scripts\\stop-dev.ps1 *>&1 | Out-String -Width 200\n\"EXIT=$LASTEXITCODE\"\n\"=== doklad: volne porty (ne navratovy kod) ===\"\nforeach ($p in 5180,5373) {\n  $l = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue\n  \"port {0}: {1}\" -f $p, $(if ($l) { \"PORAD DRZI (pid $($l.OwningProcess -join ','))\" } else { \"volny\" })\n}"
+    },
+    {
+      "source": "gsd",
+      "order": 29,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\ngit checkout feature/task-105-csrf-cookie 2>&1 | Out-String -Width 200\ngit --no-optional-locks log --oneline -1\n$log = \"C:\\Users\\tomas\\AppData\\Local\\Temp\\claude\\W--dev-gsd-repo\\98dfb232-4510-4d44-ae76-2760c59c6890\\scratchpad\\start-dev-vetev.log\"\nStart-Process -FilePath 'pwsh' -ArgumentList '-NoProfile','-File','scripts\\start-dev.ps1' -WorkingDirectory (Get-Location) -RedirectStandardOutput $log -RedirectStandardError \"$log.err\" -WindowStyle Hidden\n\"start-dev spusten na pozadi, log: $log\""
+    },
+    {
+      "source": "gsd",
+      "order": 30,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "cd W:\\dev\\gsd\\repo\n$log = \"C:\\Users\\tomas\\AppData\\Local\\Temp\\claude\\W--dev-gsd-repo\\98dfb232-4510-4d44-ae76-2760c59c6890\\scratchpad\\ci-final.log\"\n& pwsh -File scripts\\ci-local.ps1 *>&1 | Tee-Object -FilePath $log | Out-Null\n\"EXIT=$LASTEXITCODE\"\n\"--- souhrny ---\"\nSelect-String -Path $log -Pattern 'passed / |Passed!|Failed!|SELHALO|Červené brány|Všechny brány|FAIL ' | ForEach-Object { $_.Line }"
+    },
+    {
+      "source": "gsd",
+      "order": 31,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$org = 'https://dev.azure.com/wittenberger'; $proj = 'GSD'\n$deadline = (Get-Date).AddMinutes(25)\ndo {\n  Start-Sleep -Seconds 30\n  $runs = az pipelines runs list --organization $org --project $proj --top 20 --query-order QueueTimeDesc --output json | ConvertFrom-Json\n  $vetev = $runs | Where-Object { $_.sourceVersion -eq 'cab6d76eafb318643fe974a0c291892545aeb025' } | Sort-Object id -Descending | Select-Object -First 1\n  $main  = $runs | Where-Object { $_.sourceVersion -eq 'aa96115' -or $_.sourceVersion -like 'aa96115*' } | Sort-Object id -Descending | Select-Object -First 1\n} while ((Get-Date) -lt $deadline -and $vetev.status -ne 'completed')\n\"VETEV cab6d76: $($vetev.buildNumber) id=$($vetev.id) status=$($vetev.status) result=$($vetev.result) branch=$($vetev.sourceBranch)\"\nif ($main) { \"MAIN  aa96115: $($main.buildNumber) id=$($main.id) status=$($main.status) result=$($main.result) branch=$($main.sourceBranch)\" } else { \"MAIN  aa96115: beh nenalezen ve 20 nejnovejsich\" }"
+    },
+    {
+      "source": "hrms",
+      "order": 1,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "python -c \"\nimport io\nout=io.open(r'C:\\Users\\tomas\\AppData\\Local\\Temp\\claude\\W--dev-hrms\\b73a6c70-8758-4a24-bc23-d687381869b3\\scratchpad\\probe.txt','w',encoding='utf-8')\np1=r'W:\\dev\\hrms\\docs\\persona-changelog.md'\ns=io.open(p1,'r',encoding='utf-8',newline='').read()\ni=s.find(u'\\u010dten\\u00edch')\nout.write(repr(s[i-40:i+40])+'\\n')\np2=r'W:\\dev\\hrms\\docs\\tasks\\task-377.md'\nt=io.open(p2,'r',encoding='utf-8',newline='').read()\nj=t.find(u'syrov\\u00fd disk')\nout.write(repr(t[j-50:j+60])+'\\n')\nout.close()\n\" && cat \"C:/Users/tomas/AppData/Local/Temp/claude/W--dev-hrms/b73a6c70-8758-4a24-bc23-d687381869b3/scratchpad/probe.txt\""
+    },
+    {
+      "source": "hrms",
+      "order": 2,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "cd \"C:/Users/tomas/AppData/Local/Temp/claude/W--dev-hrms/b73a6c70-8758-4a24-bc23-d687381869b3/scratchpad\" && python -c \"\nimport io\ns=io.open(r'W:\\dev\\hrms\\hestia_persona.md',encoding='utf-8',newline='').read()\ni=s.find('dosah, ne diff')\nio.open('probe2.txt','w',encoding='utf-8').write(repr(s[i-70:i+30]))\n\" && cat probe2.txt"
+    },
+    {
+      "source": "hrms",
+      "order": 3,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "cd \"C:/Users/tomas/AppData/Local/Temp/claude/W--dev-hrms/b73a6c70-8758-4a24-bc23-d687381869b3/scratchpad\" && python -c \"\nimport io\ns=io.open(r'W:\\dev\\hrms\\hestia_persona.md',encoding='utf-8',newline='').read()\ni=s.find('dosah, ne diff')\nseg=s[i-50:i+20]\nio.open('probe3.txt','w',encoding='utf-8').write(' '.join('%04X'%ord(c) for c in seg))\n\" && cat probe3.txt"
+    },
+    {
+      "source": "hrms",
+      "order": 4,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "cd \"C:/Users/tomas/AppData/Local/Temp/claude/W--dev-hrms/b73a6c70-8758-4a24-bc23-d687381869b3/scratchpad\" && python -c \"\nimport io\np='changelog236.py'\ns=io.open(p,encoding='utf-8').read()\nn=s.count('\\\\\\\\ud83d\\\\\\\\udd34')\ns=s.replace('\\\\\\\\ud83d\\\\\\\\udd34','\\\\\\\\U0001F534')\nio.open(p,'w',encoding='utf-8').write(s)\nprint('nahrazeno surrogatu:', n)\n\" && ls -la \"W:/dev/hrms/docs/persona-changelog.md.tmp\" 2>/dev/null; python changelog236.py; echo \"--- exit=$? ---\"; cat cl236.log"
+    },
+    {
+      "source": "hrms",
+      "order": 5,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "cd \"W:/dev/hrms\" && echo -n \"bran v scripts.check: \"; node -e \"const c=require('./web/package.json').scripts.check;console.log(c.match(/node (\\.\\.\\/)?scripts\\/[A-Za-z0-9_.-]+\\.mjs/g).length)\"; echo -n \"helper existuje: \"; ls scripts/testbin_header.mjs 2>/dev/null || echo \"NE\"; echo \"=== 2.232 volne? ===\"; grep -c '^| 2\\.232 ' docs/backlog-changelog.md"
+    },
+    {
+      "source": "utraty",
+      "order": 1,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "python - <<'PY'\nimport pathlib\np=pathlib.Path(r\"W:\\dev\\bank_spending\\repo\\backend\\tests\\test_seed.py\")\ns=p.read_text(encoding=\"utf-8\")\ns=s.replace(\"\"\"<<<<<<< HEAD\nimport pytest\nfrom sqlalchemy import func, select\n=======\nfrom sqlalchemy import func, select, text\n>>>>>>> feature/TASK-13-kategorie-splity\n\"\"\",\"\"\"import pytest\nfrom sqlalchemy import func, select, text\n\"\"\")\ns=s.replace(\"\"\"<<<<<<< HEAD\nfrom app.models import Account, Transaction\nfrom app.seed import SYNTETICKY_FIO_TOKEN, seed\n=======\nfrom app.models import Account, Category, SplitTag, Tag, Transaction, TransactionSplit\nfrom app.seed import seed\nfrom app.services.transactions import find_split_violations\n>>>>>>> feature/TASK-13-kategorie-splity\n\"\"\",\"\"\"from app.models import Account, Category, SplitTag, Tag, Transaction, TransactionSplit\nfrom app.seed import SYNTETICKY_FIO_TOKEN, seed\nfrom app.services.transactions import find_split_violations\n\"\"\")\nassert \"<<<<<<<\" not in s\np.write_text(s,encoding=\"utf-8\")\nprint(\"ok\")\nPY"
+    },
+    {
+      "source": "utraty",
+      "order": 2,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "python - <<'PY'\nimport pathlib\np=pathlib.Path(r\"W:\\dev\\bank_spending\\repo\\docs\\backlog.md\")\ns=p.read_text(encoding=\"utf-8\")\ns=s.replace(\"\"\"<<<<<<< HEAD\n| TASK-12 | Záloha databáze | F1 | 🟡 | 🚧 | — |\n| TASK-13 | Schéma kategorií, štítků a splitů + invariant | F2 | 🔴 | ⏳ | — |\n=======\n| TASK-12 | Záloha databáze | F1 | 🟡 | ⏳ | — |\n| TASK-13 | Schéma kategorií, štítků a splitů + invariant | F2 | 🔴 | 🚧 | — |\n>>>>>>> feature/TASK-13-kategorie-splity\n\"\"\",\"\"\"| TASK-12 | Záloha databáze | F1 | 🟡 | 🚧 | — |\n| TASK-13 | Schéma kategorií, štítků a splitů + invariant | F2 | 🔴 | 🚧 | — |\n\"\"\")\nassert \"<<<<<<<\" not in s\np.write_text(s,encoding=\"utf-8\")\nprint(\"ok\")\nPY"
+    },
+    {
+      "source": "utraty",
+      "order": 3,
+      "tool": "Bash",
+      "expect": "silent",
+      "cmd": "python - <<'PY'\nimport pathlib\np=pathlib.Path(r\"W:\\dev\\bank_spending\\repo\\docs\\technical\\tooling.md\")\ns=p.read_text(encoding=\"utf-8\")\nstary='| **N-23** \\U0001f7e1 | **\\u010cesk\\xe9 znaky v logu aplikace'\nassert s.count(stary)==1, s.count(stary)\ns=s.replace(stary,'| **N-30** \\U0001f7e1 | **\\u010cesk\\xe9 znaky v logu aplikace')\np.write_text(s,encoding=\"utf-8\")\nprint(\"ok\")\nPY"
+    },
+    {
+      "source": "utraty",
+      "order": 4,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\bank_spending\\worktrees\\TASK-20\\backend\\app\\services\\transactions.py\"\n$orig = Get-Content $f -Raw\n$probe = $orig.Replace(\"    if not transaction.is_manual:`r`n        raise ManualTransactionError(CHYBA_Z_BANKY)`r`n\", \"\")\nif ($probe -eq $orig) { \"SONDA SE NEZAPSALA - vzor nesedi\" } else { Set-Content -Path $f -Value $probe -NoNewline; \"sonda zapsana\" }"
+    },
+    {
+      "source": "utraty",
+      "order": 5,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\bank_spending\\worktrees\\TASK-20\\backend\\app\\services\\transactions.py\"\n$orig = Get-Content $f -Raw\n$probe = $orig -replace \"(?m)^    if not transaction\\.is_manual:\\r?\\n        raise ManualTransactionError\\(CHYBA_Z_BANKY\\)\\r?\\n\", \"\"\nif ($probe -eq $orig) { \"SONDA SE NEZAPSALA\" } else { Set-Content -Path $f -Value $probe -NoNewline; \"sonda zapsana\" }"
+    },
+    {
+      "source": "utraty",
+      "order": 6,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\bank_spending\\worktrees\\TASK-20\\backend\\app\\api\\transactions.py\"\n$o = Get-Content $f -Raw\n$p = $o.Replace(\"    is_manual: bool`n\", \"    raw: dict | None`n    is_manual: bool`n\").Replace(\"    is_manual: bool`r`n\", \"    raw: dict | None`r`n    is_manual: bool`r`n\")\nif ($p -eq $o) { \"SONDA SE NEZAPSALA\" } else { Set-Content -Path $f -Value $p -NoNewline; \"sonda raw zapsana\" }"
+    },
+    {
+      "source": "utraty",
+      "order": 7,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\bank_spending\\worktrees\\TASK-20\\backend\\app\\api\\transactions.py\"\n$o = Get-Content $f -Raw\n$p = $o -replace \"(?m)^    raw: dict \\| None\\r?\\n\", \"\"\nif ($p -eq $o) { \"NEVRACENO\" } else { Set-Content -Path $f -Value $p -NoNewline; \"sonda raw vracena\" }"
+    },
+    {
+      "source": "utraty",
+      "order": 8,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\bank_spending\\worktrees\\TASK-20\\backend\\app\\services\\transactions.py\"\n$o = Get-Content $f -Raw\n$p = $o.Replace(\"        fio_move_id=None,\", \"        fio_move_id=`\"SONDA`\",\")\nif ($p -eq $o) { \"SONDA SE NEZAPSALA\" } else { Set-Content -Path $f -Value $p -NoNewline; \"sonda dedup zapsana\" }"
+    },
+    {
+      "source": "utraty",
+      "order": 9,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\bank_spending\\worktrees\\TASK-20\\backend\\app\\services\\transactions.py\"\n$o = Get-Content $f -Raw\n$p = $o.Replace(\"        fio_move_id=`\"SONDA`\",\", \"        fio_move_id=None,\")\nif ($p -eq $o) { \"NEVRACENO\" } else { Set-Content -Path $f -Value $p -NoNewline; \"sonda dedup vracena\" }"
+    },
+    {
+      "source": "utraty",
+      "order": 10,
+      "tool": "PowerShell",
+      "expect": "silent",
+      "cmd": "$f = \"W:\\dev\\bank_spending\\worktrees\\TASK-20\\backend\\app\\services\\transactions.py\"\n$o = Get-Content $f -Raw\n$p = $o.Replace(\"        fio_move_id=`\"SONDA`\",\", \"        fio_move_id=None,\")\nif ($p -eq $o) { \"NEVRACENO\" } else { Set-Content -Path $f -Value $p -NoNewline; \"sonda dedup vracena\" }"
+    }
+  ]
+}

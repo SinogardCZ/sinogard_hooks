@@ -37,9 +37,28 @@
     "_shellInterpretersComment": "Uvozující příkazy, jejichž tělo heredocu je PŘÍKAZOVÁ ŘÁDKA, ne data. Bez tohoto seznamu bylo `bash <<'EOF' / git reset --hard / EOF` slepé místo — tělo se zahodilo (nález Amber E2).",
     "shellInterpreters": ["bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd"],
 
-    "_opaqueHeredocOuterComment": "Uvozující příkazy, jejichž tělo heredocu se SPUSTÍ, ale rozebrat ho neumíme — kód interpretu (`python <<EOF`) nebo příkazy na cizím stroji (`ssh prod <<EOF`). Do E2 se takové tělo bralo jako data a propadlo na allow, ačkoli `python -c` končí ask. Platí Z3: nerozebratelné → ask (nález Amber G8).",
+    "_opaqueHeredocOuterComment": "Uvozující příkazy, jejichž tělo heredocu se SPUSTÍ, ale rozebrat ho neumíme — kód interpretu (`python <<EOF`) nebo příkazy na cizím stroji (`ssh prod <<EOF`). Do E2 se takové tělo bralo jako data a propadlo na allow, ačkoli `python -c` končí ask (nález Amber G8). Od 0.1.10 se ty dva případy ROZDĚLUJÍ: kód interpretu jde politikou `opaque.interpreter`, cizí stroj zůstává `ask` beze změny — pravidla nad cestami tam neplatí a audit na našem stroji o cizím stroji netvrdí nic.",
     "codeInterpreters": ["python", "python3", "node", "nodejs", "ruby", "perl", "php", "deno"],
     "remoteShells": ["ssh", "plink"],
+
+    "_opaqueComment": "Rozhodnutí Toma 2026-09-07/T36-O5 = A: „nerozebratelné“ přestalo být jednou třídou. Do 0.1.9 končil každý takový tvar dotazem — nad reálnými čísly 7. 9. to bylo 45 dotazů ze 46 při DVOU skutečných zásazích §6. Politika je per PŘÍČINA. 🔴 `audit` znamená, že hook MLČÍ (zapíše řádek a nevydá rozhodnutí) — NE `permissionDecision: allow`; ten by přeskočil vrstvu oprávnění Claude Code, a právě ta má nadále rozhodovat. Hodnoty: `audit` | `ask`; cokoli jiného se čte jako `ask` (fail-closed). `invoked` = `& $cmd`, tedy obsah proměnné se SPUSTÍ; `encoded` = `-EncodedCommand`. Obojí zůstává dotazem — je to kontrolní skupina celé změny.",
+    "opaque": {
+      "variable": "audit",
+      "interpreter": "audit",
+      "heredocUnterminated": "audit",
+      "depth": "audit",
+      "invoked": "ask",
+      "encoded": "ask"
+    },
+
+    "_interpreterDestructiveTokensComment": "Kód interpretu (`python -c`, `node -e`, tělo heredocu interpretu) se nerozebírá — ale JMÉNO destruktivního volání v něm vidět je. Je to test na TOKEN, ne parser jazyka: prostý case-SENSITIVNÍ výskyt v těle → `ask`. Case-sensitivní schválně — `Remove-Item` ano, `remove-item` ne; jinak by seznam falešně chytal běžná anglická slova. Kontrolní skupina 7. 9. (15 příkazů HRMS + Útraty: `pathlib`, `read_text`/`write_text`, `io.open`, `node -e require(...)`) žádný z nich nenese. `.rmSync(`, `.rmdirSync(` a `.unlinkSync(` jsou tu proto, že Node se píše `require('fs').rmSync(`, ne `fs.rmSync` — vzor postavený na druhém tvaru by minul invariantní řádek `node -e \"require('fs').rmSync('src')\"`.",
+    "interpreterDestructiveTokens": [
+      "shutil.rmtree", "os.remove", "os.unlink", "os.rmdir",
+      ".unlink(", ".rmdir(", "rmtree(",
+      "fs.rm", "fs.rmSync", "fs.unlink", ".rmSync(", ".rmdirSync(", ".unlinkSync(", "rimraf",
+      "subprocess", "os.system", "child_process",
+      "Remove-Item", "DROP TABLE", "TRUNCATE"
+    ],
 
     "denyPatterns": [
       { "id": "git-reset-hard",     "pattern": "^git\\s+reset\\b.*\\s--hard(\\s|$)",                   "shape": "git reset --hard" },
@@ -76,7 +95,8 @@
       "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
       "pushDeleteRefspec": "smazání vzdálené větve prázdným refspecem",
       "deleteFromPipeline": "mazání se vstupem z roury (cíl není v příkazu vidět)",
-      "opaque": "příkaz, který nejde rozebrat ({text})"
+      "opaque": "příkaz, který nejde rozebrat ({text})",
+      "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})"
     }
   },
 

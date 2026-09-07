@@ -121,11 +121,13 @@ $wrapperCases = @(
     # dvojtecku. Bez rozpadu tokenu by cesta zmizela i s prepinacem -> allow.
     (Case 'parametr s dvojteckou'      'Remove-Item -Recurse:$true -LiteralPath:src' 'deny' 'PowerShell')
     (Case 'parametr s dvojteckou 2'    'Remove-Item -Path:src -Recurse' 'deny' 'PowerShell')
-    # nerozebiratelne obaly -> ask
-    (Case 'bash -c s promennou'        'bash -c "$x"' 'ask')
-    (Case 'cmd /c s promennou'         'cmd /c %X%' 'ask')
-    (Case 'eval s promennou'           'eval $cmd' 'ask')
-    (Case 'promenna misto exe'         '$TOOL git push' 'ask')
+    # nerozebiratelne obaly -> od 0.1.10 AUDIT (rozhodnuti Toma 2026-09-07/T36-O5 = A).
+    # Do 0.1.9 tu stalo 'ask'. Nezmenilo se to, co plugin VIDI - zmenilo se, co s tim
+    # ma delat: misto dotazu se udalost zapise a rozhodne o ni vrstva Claude Code.
+    (Case 'bash -c s promennou'        'bash -c "$x"' 'allow')
+    (Case 'cmd /c s promennou'         'cmd /c %X%' 'allow')
+    (Case 'eval s promennou'           'eval $cmd' 'allow')
+    (Case 'promenna misto exe'         '$TOOL git push' 'allow')
     # neprohledne, ale dokumentovane -> allow
     (Case 'skript souborem sh'         './cleanup.sh' 'allow')
     (Case 'skript souborem pwsh'       'pwsh -File x.ps1' 'allow')
@@ -304,8 +306,10 @@ $amberCases = @(
     # KLICOVE: prirazeni nic nepere - destruktivni prikaz na prave strane zustava deny
     (Case 'B1 prirazeni neprere'        '$x = git branch -D feature/y' 'deny' 'PowerShell')
     (Case 'B1 prirazeni reset'          '$r = git reset --hard' 'deny' 'PowerShell')
-    # a Z3 dal plati: promenna v pozici prikazu (bez `=`) je porad nerozebratelna
-    (Case 'B1 Z3 zustava'               '$tool build' 'ask' 'PowerShell')
+    # Promenna v pozici prikazu je porad NEROZEBRATELNA - od 0.1.10 z toho ale neni
+    # dotaz, ale audit (T36-O5 A). Nazev pripadu zustava, protoze na nej ukazuje
+    # radek regresniho invariantu.
+    (Case 'B1 Z3 zustava'               '$tool build' 'allow' 'PowerShell')
     # viceradkovy vstup nesmi destruktivni prikaz schovat
     (Case 'B1 viceradkovy destruktivni' "Write-Host 'a'`ngit reset --hard" 'deny' 'PowerShell')
 
@@ -317,7 +321,8 @@ $amberCases = @(
     # takze prikaz je nerozebratelny. Z3 je deklarovany tvar zadani par. 2.3 a jeho
     # zuzeni je rozhodnuti zadavatele, ne oprava - viz hlaseni 02. Doklad, ze DB
     # vzor uz nehraje roli, je radek pod tim: s LITERALEM je vysledek allow.
-    (Case 'B4 Math Truncate promenna'   '[Math]::Truncate($x)' 'ask' 'PowerShell')
+    # 0.1.10: tentyz tvar, tataz pricina (`variable`), jine rozhodnuti - audit (T36-O5 A).
+    (Case 'B4 Math Truncate promenna'   '[Math]::Truncate($x)' 'allow' 'PowerShell')
     (Case 'B4 Math Truncate literal'    '[Math]::Truncate(1.5)' 'allow' 'PowerShell')
     (Case 'B4 truncate logu'            'truncate -s 0 x.log' 'allow')
     (Case 'B4 echo textu'               'echo "TRUNCATE users"' 'allow')
@@ -433,8 +438,9 @@ $amber3Cases = @(
     (Case 'E2 bash heredoc neskodny'    "bash <<'EOF'`ngit status`nEOF" 'allow')
     # `<<` v uvozovkach NENI heredoc
     (Case 'E2 uvozovky nezacnou telo'   'echo "<<x>>"' 'allow')
-    # neukonceny heredoc: nevime, kde telo konci (Z3)
-    (Case 'E2 neukonceny heredoc'       "bash <<EOF`ngit status" 'ask')
+    # neukonceny heredoc: nevime, kde telo konci -> od 0.1.10 pricina
+    # `heredocUnterminated`, tedy audit (T36-O5 A)
+    (Case 'E2 neukonceny heredoc'       "bash <<EOF`ngit status" 'allow')
     # kontrolni skupina D3 plati dal: telo u NE-shellu jsou data
     (Case 'E2 kontrola D3 poznamka'     "cat > NOTES.md <<EOF`ngit reset --hard je nebezpecny`nEOF" 'allow')
 
@@ -731,11 +737,16 @@ $amber5bCases = @(
     (Case 'L1 citac ve smycce'          'foreach ($f in $files) { $i++ }' 'allow' 'PowerShell')
     # 🔴 kontrolni skupina: vyraz smi projit, PRIKAZ v tele bloku ne
     (Case 'L1 kontrola prikaz v bloku'  'foreach ($f in $files) { git branch -D $f }' 'deny' 'PowerShell')
-    (Case 'L1 kontrola volani metody'   'Get-ChildItem | ForEach-Object { $_.Delete() }' 'ask' 'PowerShell')
-    (Case 'L1 kontrola podvyraz'        'Where-Object { $_.Name -eq ''x'' -or (git reset --hard) }' 'ask' 'PowerShell')
+    # 🔴 CENA ROZHODNUTI T36-O5 A, pojmenovana: tyhle dva tvary byly do 0.1.9 `ask`
+    #    a od 0.1.10 je plugin PROPOUSTI (pricina `variable`, tedy audit). Zadani je
+    #    nejmenovalo - vysly z mereni. Rozhoduje o nich vrstva Claude Code, ne plugin.
+    (Case 'L1 kontrola volani metody'   'Get-ChildItem | ForEach-Object { $_.Delete() }' 'allow' 'PowerShell')
+    (Case 'L1 kontrola podvyraz'        'Where-Object { $_.Name -eq ''x'' -or (git reset --hard) }' 'allow' 'PowerShell')
+    #    Naproti tomu mazani z roury je POJMENOVANY tvar, ne nerozebratelny - zustava ask.
     (Case 'L1 kontrola roura z $_'      'Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force }' 'ask' 'PowerShell')
-    # 🔴 v BASHi vyrazove pravidlo NEPLATI - `$cmd -rf src` se tam spousti
-    (Case 'L1 kontrola Bash zustava'    '$_.Name -like "*.cs"' 'ask')
+    # 🔴 v BASHi vyrazove pravidlo NEPLATI - `$cmd -rf src` se tam spousti, takze tvar
+    #    zustava NEROZEBRATELNY; od 0.1.10 z toho ale neni dotaz, ale audit.
+    (Case 'L1 kontrola Bash zustava'    '$_.Name -like "*.cs"' 'allow')
 
     # K3 - tataz trida jako I2, ale pro telo heredocu
     (Case 'K3 bash heredoc z PS'        ("bash <<'EOF'" + $lf + 'echo \" ; git reset --hard' + $lf + 'EOF') 'deny' 'PowerShell')
@@ -857,7 +868,9 @@ $t10Cases = @(
     (Case 'T10 kontrola here-string literal' 'psql -h prod <<< "DROP TABLE x"' 'deny')
 
     # !! tridy, ktere ask ZUSTAVAJI (rozhodnuti T-10 A jmenuje i to, co se NEMENI)
-    (Case 'T10 zustava obal s promennou' 'bash -c "$CMD"' 'ask')
+    # 🔴 Az na jednu: obal s promennou T-10 A ask NECHALO, T36-O5 A z nej udelalo audit.
+    #    Nazev pripadu zustava - ukazuje na nej radek regresniho invariantu.
+    (Case 'T10 zustava obal s promennou' 'bash -c "$CMD"' 'allow')
     (Case 'T10 zustava ssh s prikazem'   'ssh host "rm -rf /"' 'ask')
     (Case 'T10 zustava kratka cesta'     'rm -rf /srv' 'ask')
     (Case 'T10 zustava spusteni promenne' '& $cmd' 'ask' 'PowerShell')
@@ -895,6 +908,219 @@ $rAudit2 = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonAudit -Environment @{ 
 Assert-Equal 'allow' (Get-Decision $rAudit2) '[audit/kontrola] rozhodnuti je porad allow'
 Assert-Equal 0 $rAudit2.Exit '[audit/kontrola] navratovy kod 0'
 Assert-True (-not [System.IO.Directory]::Exists($auditDir2)) '[audit/kontrola] zadny soubor nevznikl'
+
+# ================================================================================
+#  ROZHODNUTI TOMA 2026-09-07/T36-O5 = A - "nerozebratelne" uz neni dotaz
+#
+#  Do 0.1.9 koncil KAZDY nerozebratelny tvar na `ask`. Nad realnymi cisly ze 7. 9.
+#  (tri sessions, 46 dotazu) to znamenalo 45 dotazu pri DVOU skutecnych zasazich §6.
+#  Trida se proto rozpadla na PRICINY a politiku k nim urcuje konfigurace.
+#
+#  🔴 Tahle sekce tvrdi TICHO, ne 'allow'. Get-Decision vraci 'allow' i pro
+#  `permissionDecision: allow`, jenze to je JINA vec: `allow` z hooku preskoci vrstvu
+#  opravneni Claude Code, kdezto ticho ji necha rozhodnout. Mutant "1A vraci allow
+#  misto $null" by pres tvrzeni o rozhodnuti PROSEL - proto se tvrdi prazdny stdout.
+# ================================================================================
+
+$t36Cases = @(
+    # --- kontrolni skupina: co ask ZUSTAVA. Bez ni by sada merila jen to, ze se neco
+    #     zmenilo, ne ze se zmenilo to spravne.
+    (Case 'T36 spusteni promenne'       '& $cmd' 'ask' 'PowerShell')
+    (Case 'T36 spusteni promenne arg'   '& $cmd -Force' 'ask' 'PowerShell')
+    (Case 'T36 -enc'                    'pwsh -enc UmVtb3ZlLUl0ZW0=' 'ask' 'PowerShell')
+    (Case 'T36 ssh s prikazem'          'ssh prod "rm -rf /"' 'ask')
+    (Case 'T36 git alias'               "git -c alias.bd='branch -D' bd x" 'ask')
+    (Case 'T36 ssh heredoc'             ("ssh prod <<EOF" + $lf + 'rm -rf /srv' + $lf + 'EOF') 'ask')
+
+    # --- pricina `variable` -> audit (jadro zmeny)
+    (Case 'T36 obal s promennou'        'bash -c "$CMD"' 'allow')
+    (Case 'T36 cmd s promennou'         'cmd /c %X%' 'allow')
+    (Case 'T36 eval s promennou'        'eval $cmd' 'allow')
+    (Case 'T36 promenna misto exe'      '$TOOL git push' 'allow')
+    (Case 'T36 retezec s promennou'     '"EXIT=$LASTEXITCODE"' 'allow' 'PowerShell')
+    (Case 'T36 Math Truncate promenna'  '[Math]::Truncate($x)' 'allow' 'PowerShell')
+    (Case 'T36 ReadAllText promenna'    '[System.IO.File]::ReadAllText($f)' 'allow' 'PowerShell')
+    #     `$x = <prikaz>` neprere dal: destruktivni prava strana zustava deny
+    (Case 'T36 prirazeni neprere'       '$x = git branch -D feature/y' 'deny' 'PowerShell')
+
+    # --- pricina `heredocUnterminated` a `depth` -> audit
+    (Case 'T36 neukonceny heredoc'      ("bash <<EOF" + $lf + 'git status') 'allow')
+
+    # --- pricina `interpreter`: bez destruktivniho tokenu audit, s nim ask (1C)
+    (Case 'T36 python neskodny'         'python -c "print(1)"' 'allow')
+    (Case 'T36 python read_text'        'python -c "import io; io.open(''x'').read()"' 'allow')
+    (Case 'T36 python rmtree'           'python -c "import shutil; shutil.rmtree(''src'')"' 'ask')
+    (Case 'T36 python os.remove'        'python -c "import os; os.remove(''x'')"' 'ask')
+    (Case 'T36 node rmSync'             'node -e "require(''fs'').rmSync(''src'')"' 'ask')
+    (Case 'T36 node neskodny'           'node -e "console.log(require(''./p.json'').name)"' 'allow')
+    (Case 'T36 python heredoc neskodny' ("python <<EOF" + $lf + 'print(1)' + $lf + 'EOF') 'allow')
+    (Case 'T36 python heredoc rmtree'   ("python <<EOF" + $lf + 'import shutil' + $lf + "shutil.rmtree('src')" + $lf + 'EOF') 'ask')
+    #     token se porovnava CASE-SENSITIVNE - jinak by seznam chytal bezna slova
+    (Case 'T36 token jinou velikosti'   'python -c "x.remove_item(1)"' 'allow')
+
+    # --- 1B: Microsoft.VisualBasic je druhe jmeno teze operace
+    (Case 'T36 VB promenna'             '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, $true)' 'ask' 'PowerShell')
+    (Case 'T36 VB literal src'          '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(''src'')' 'deny' 'PowerShell')
+    (Case 'T36 VB literal bin'          '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(''bin'')' 'allow' 'PowerShell')
+    (Case 'T36 VB DeleteFile literal'   '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(''src/a.cs'')' 'deny' 'PowerShell')
+    (Case 'T36 VB recycle bin'          '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)' 'ask' 'PowerShell')
+    #     kontrolni skupina: stara cesta [IO.*]::Delete se nezmenila
+    (Case 'T36 IO.File promenna'        '[IO.File]::Delete($f)' 'ask' 'PowerShell')
+    (Case 'T36 IO.Directory literal'    '[IO.Directory]::Delete(''src'', $true)' 'deny' 'PowerShell')
+
+    # --- v bypassu: audit ZUSTAVA auditem (neni to `ask`, tak se z neho nema co stat
+    #     `deny`), `invoked` na deny padne dal.
+    (Case 'T36 bypass obal s promennou' 'bash -c "$CMD"' 'allow' 'Bash' 'bypassPermissions')
+    (Case 'T36 bypass spusteni'         '& $cmd' 'deny' 'PowerShell' 'bypassPermissions')
+    (Case 'T36 bypass VB literal'       '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(''src'')' 'deny' 'PowerShell' 'bypassPermissions')
+)
+
+Test-Cases 'rozhodnuti Toma T36-O5 A (opaque -> audit)' $t36Cases
+
+# ------------------------------------------- audit misto dotazu: radek JSONL ---
+#
+# "audit" je jine tvrzeni nez "nic". Kdyby se radek nezapsal, zmizela by po tvaru
+# stopa uplne - a to je presne to, co rozhodnuti T36-O5 A nechtelo.
+
+Start-Case 'T36-O5 A: nerozebratelny obal MLCI a zapise se do auditu'
+$auditDirO = Join-Path $script:TempDir ('audit-op-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+$auditPathO = Join-Path $auditDirO 'gate-audit.jsonl'
+$jsonO = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'bash -c "$CMD"' }
+$rO = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonO -Environment @{ 'CLAUDE_PLUGIN_DATA' = $auditDirO }
+Assert-Equal '' ($rO.Stdout.Trim()) '[opaque-audit] hook MLCI - prazdny stdout, ne permissionDecision'
+Assert-Equal 0 $rO.Exit '[opaque-audit] exit 0'
+Assert-True ([System.IO.File]::Exists($auditPathO)) '[opaque-audit] radek se zapsal'
+if ([System.IO.File]::Exists($auditPathO)) {
+    $lineO = [System.IO.File]::ReadAllText($auditPathO, ([System.Text.UTF8Encoding]::new($false)))
+    Assert-True ($lineO -match '"shape":"opaque:variable"') '[opaque-audit] nese id tvaru vcetne priciny'
+    Assert-True ($lineO -match '"decision":"allow"') '[opaque-audit] nese rozhodnuti'
+    Assert-True ($lineO -match '"tool":"Bash"') '[opaque-audit] nese nastroj'
+    # 🔴 zadani par. 4 bod 8: obsah prikazu se NELOGUJE
+    Assert-True (-not $lineO.Contains('CMD')) '[opaque-audit] NEOBSAHUJE text prikazu'
+}
+
+# 🔴 kontrolni skupina: tvar, ktery ask ZUSTAVA, se do auditu nezapisuje - jinak by
+# radek v JSONL netvrdil nic o tom, co se doopravdy pustilo dal.
+Start-Case 'kontrolni skupina: & $cmd je ask, ne audit'
+$auditDirI = Join-Path $script:TempDir ('audit-inv-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+$auditPathI = Join-Path $auditDirI 'gate-audit.jsonl'
+$jsonI = New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = '& $cmd' }
+$rI = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonI -Environment @{ 'CLAUDE_PLUGIN_DATA' = $auditDirI }
+Assert-Equal 'ask' (Get-Decision $rI) '[opaque-ask] rozhodnuti je ask'
+Assert-True (-not [System.IO.File]::Exists($auditPathI)) '[opaque-ask] radek auditu NEVZNIKL'
+
+# ------------------------------------------------ politika je KONFIGURACE ---
+#
+# Slouceni je MELKE na nejvyssi urovni, takze override musi dodat cely klic `gate`.
+# Ostatni hodnoty pak berou vestavene fallbacky - pro tohle tvrzeni to staci, protoze
+# tvrdi ROZHODNUTI, ne text duvodu.
+
+function Test-OpaquePolicy([string]$Name, [string]$Value, [string]$Expect) {
+    $dir = Join-Path $script:TempDir ('policy-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $dir '.claude'))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $dir '.claude/sinogard-hooks.json'),
+        ('{"gate":{"opaque":{"variable":"' + $Value + '"}}}'),
+        ([System.Text.UTF8Encoding]::new($false)))
+    $json = New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = '"EXIT=$x"' }
+    $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment @{ CLAUDE_PROJECT_DIR = $dir }
+    Assert-Equal $Expect (Get-Decision $r) ("[politika/{0}] gate.opaque.variable = {1}" -f $Name, $Value)
+}
+
+Start-Case 'gate.opaque je konfigurace (a neznama hodnota je fail-closed)'
+Test-OpaquePolicy 'audit' 'audit' 'allow'
+Test-OpaquePolicy 'ask'   'ask'   'ask'
+# 🔴 Neznama hodnota NESMI znamenat audit: preklep v override by branu tise otevrel.
+Test-OpaquePolicy 'neznama' 'maybe' 'ask'
+
+# ------------------------------------- HRANICE melkeho slucovani (K2-1) ---
+#
+# 🔴 Tohle NENI oprava, je to DOKLAD OMEZENI. Slouceni je melke na nejvyssi urovni,
+# takze override, ktery nese jen jednu hodnotu z `gate`, zahodi cely zbytek klice -
+# `denyPatterns`, `allowedRemoveRoots`, `shapes`, ... - a ty padnou na fallbacky.
+# Je to stara vlastnost (0.1.x), ale 0.1.10 do `gate` pridava dva klice, takze je
+# nove mnohem pravdepodobnejsi, ze si nekdo `gate` prepise castecne.
+#
+# Jde to OBEMA smery a prave to je na tom zradne:
+#   `git reset --hard` PRESTANE byt deny (pravidlo bylo v `denyPatterns`)
+#   `rm -rf bin`       ZACNE byt deny  (povolena slozka byla v `allowedRemoveRoots`)
+# Kdyby to slo jen jednim smerem, poznalo by se to; takhle brana dal neco blokuje,
+# takze "porad funguje" je pravdive pozorovani a zaroven falesny zaver.
+#
+# Tvar hlubsiho slucovani je rozhodnuti do v0.2 (TASK-106 bod 10). Az se zmeni,
+# tenhle pripad ZCERVENA - a to je zamer: doklad omezeni musi padnout, jakmile
+# omezeni prestane platit.
+function Test-PartialGateOverride([string]$Name, [string]$Tool, [string]$Cmd, [string]$Expect) {
+    $dir = Join-Path $script:TempDir ('partial-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $dir '.claude'))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $dir '.claude/sinogard-hooks.json'),
+        '{"gate":{"opaque":{"variable":"audit"}}}',
+        ([System.Text.UTF8Encoding]::new($false)))
+    $template = if ($Tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+    $json = New-HookInput $template @{ 'tool_input.command' = $Cmd }
+    $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment @{ CLAUDE_PROJECT_DIR = $dir }
+    Assert-Equal $Expect (Get-Decision $r) ("[K2-1/{0}] {1}" -f $Name, $Cmd)
+}
+
+Start-Case 'K2-1: override `gate` bez `denyPatterns` ZTRATI tvary (doklad omezeni)'
+Test-PartialGateOverride 'reset --hard mizi'  'Bash' 'git reset --hard' 'allow'
+Test-PartialGateOverride 'branch -D mizi'     'Bash' 'git branch -D feature/x' 'allow'
+Test-PartialGateOverride 'filter-branch mizi' 'Bash' 'git filter-branch --tree-filter x HEAD' 'allow'
+# 🔴 druhy smer teze ztraty: povolena slozka zmizi taky, takze vznikne FALESNY BLOK
+Test-PartialGateOverride 'rm -rf bin blokuje' 'Bash' 'rm -rf bin' 'deny'
+# 🔴 kontrolni skupina: pravidla, ktera ziji v KODU (ne v konfiguraci), drzi dal -
+#    bez ni by se dalo cist, ze override vypne branu celou, a to je nepravda
+Test-PartialGateOverride 'rm -rf src drzi'    'Bash' 'rm -rf src' 'deny'
+Test-PartialGateOverride 'DB podle hosta drzi' 'Bash' 'psql -h db.firma.cz -c "DROP TABLE users"' 'deny'
+Test-PartialGateOverride 'invoked drzi'       'PowerShell' '& $cmd' 'ask'
+
+# ================================================================================
+#  VYPIS DOTAZU 7. 9. 2026 - 46 PRIKAZU ZE TRI SESSIONS (GSD 31, HRMS 5, Utraty 10)
+#
+#  Fixtura nese prikaz DOSLOVNE. Merenim nad 9e4720b (v0.1.9) vyslo 45 ask a 1 ticho
+#  (blok "Inventura MCP" - tam se ptal hook secrets, ne gate), takze cervenych tvrzeni
+#  bylo 45: 43 x rozhodnuti misto ticha + 2 x duvod "nejde rozebrat" misto tvaru
+#  netDeleteVariable.
+#
+#  Radky NEJDOU do regresniho invariantu: invariant nese jednoradkove tvary a tyhle
+#  prikazy maji az 50 radku. Drzi je vlastni fixtura, prehrava se stejne pri kazdem behu.
+# ================================================================================
+
+Start-Case 'vypis dotazu 7. 9. 2026: 46 prikazu -> 44 x ticho, 2 x ask'
+$vypisPath = Join-Path $PSScriptRoot 'fixtures/ask-vypis-2026-09-07.json'
+if (-not (Test-SafePath $vypisPath)) {
+    $script:Skip++
+    Write-Host '    SKIP fixtures/ask-vypis-2026-09-07.json chybi' -ForegroundColor Yellow
+} elseif (Test-CollectOnly) {
+    $script:Skip++
+} else {
+    $vypis = [System.IO.File]::ReadAllText($vypisPath, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+    $vRows = @($vypis.rows)
+    Assert-Equal 46 $vRows.Count '[vypis] radku ve fixture'
+    Assert-Equal 2 (@($vRows | Where-Object { $_.expect -eq 'ask' }).Count) '[vypis] tvaru s dotazem'
+    foreach ($vr in $vRows) {
+        $vid = "{0}/{1}" -f $vr.source, $vr.order
+        $template = if ([string]$vr.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+        $json = New-HookInput $template @{ 'tool_input.command' = [string]$vr.cmd }
+        $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json
+        if ([string]$vr.expect -eq 'silent') {
+            Assert-Equal '' ($r.Stdout.Trim()) ("[vypis/{0}] hook mlci (prazdny stdout)" -f $vid)
+            Assert-Equal 0 $r.Exit ("[vypis/{0}] exit 0" -f $vid)
+        } else {
+            Assert-Equal 'ask' (Get-Decision $r) ("[vypis/{0}] rozhodnuti ask" -f $vid)
+            # Duvod musi jmenovat MAZANI. Bez 1B by tenhle tvar spadl do tridy
+            # `variable`, tedy do auditu - a to by byla dira, ne automatizace.
+            # !! Cte se ze STDOUT: `ask` se na stderr nevypisuje vubec (Write-AskDecision),
+            #    takze tvrzeni nad `$r.Stderr` by bylo zelene i pro uplne jiny tvar.
+            $reasonV = ''
+            if (-not [string]::IsNullOrWhiteSpace($r.Stdout)) {
+                $reasonV = [string]($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason
+            }
+            Assert-True ($reasonV -match 'mazání \.NET') ("[vypis/{0}] duvod jmenuje mazani .NET volanim" -f $vid)
+        }
+    }
+}
 
 # ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)

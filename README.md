@@ -19,7 +19,7 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 
 | Hook | Událost | Co dělá |
 |---|---|---|
-| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky a destruktivní DB operace → **deny**. Šedá zóna → **ask**. |
+| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**. Šedá zóna → **ask**. Tvar, který nejde rozebrat, → **audit** (viz níže). |
 | `secrets.ps1` | `PreToolUse` nad `Read`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit`/`Bash`/`PowerShell` | Čtení, zápis i výpis souborů se secrets → **deny**. Výpis prostředí, čtení citlivé proměnné a zápis do souborů, kterými se brána vypíná → **ask**. |
 | `resume-cost.ps1` | `SessionStart` (`startup`/`resume`/`fork`) | Při startu **kanárek** („plugin běží, tyhle čtyři hooky jsou živé"). Při obnovení session hlásí cenu a zapisuje řádek do JSONL. Nic neblokuje. |
 | `notify.ps1` | `Notification` | Upozorní, že se čeká na člověka. Nic neblokuje. |
@@ -35,30 +35,37 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 V režimu `bypassPermissions` se **`ask` vydává jako `deny`**: v bypassu by se dotaz
 nezobrazil, takže šedá zóna by tiše propadla. Důvod to říká nahlas.
 
-### Třídy `ask` — a proč některé od 0.1.9 už `ask` nejsou
+### Třídy `ask` — a proč některé od 0.1.9 a 0.1.10 už `ask` nejsou
 
-Rozsah brány je **rozhodnutí zadavatele**, ne technická nutnost. Po první ostré session
-se spočítalo, co se doopravdy ptalo, a nad těmi čísly padlo rozhodnutí
-(Tom, 2026-09-07/T36-F1 T-10 A):
+Rozsah brány je **rozhodnutí zadavatele**, ne technická nutnost. Po prvních ostrých
+sessions se spočítalo, co se doopravdy ptalo, a nad těmi čísly padla dvě rozhodnutí
+(Tom, 2026-09-07/T36-F1 `T-10 A` a 2026-09-07/`T36-O5 A`):
 
-| třída | do 0.1.8 | od 0.1.9 | proč |
-|---|---|---|---|
-| `git rebase` | ask | **allow** | běžná práce s historií vlastní větve |
-| `git clean -fdX` (jen ignorované) | ask | **allow** | úklid buildu; `-fdx` zůstává `deny` |
-| SQL, které v příkazu **není vidět** (`-f`, `<`, `<<< $VAR`, `cat x.sql \| psql`) | ask | **allow + audit** | rozsah neznáme, ale je to běžná práce — místo dotazu se událost **zapíše** |
-| čtení `.claude/settings.local.json` | ask | ask | nese hodnoty secrets |
-| nerozebratelný obal (`bash -c "$CMD"`) | ask | ask | slepé místo, ne známý tvar |
-| `ssh host "příkaz"` | ask | ask | cizí stroj, kde naše pravidla neplatí |
-| krátká absolutní cesta `/xxx` | ask | ask | od přepínače `cmd` k nerozeznání |
-| spuštění proměnné (`& $cmd`) | ask | ask | obsah se spustí, a ten nevidíme |
+| třída | do 0.1.8 | od 0.1.9 | od 0.1.10 | proč |
+|---|---|---|---|---|
+| `git rebase` | ask | **allow** | allow | běžná práce s historií vlastní větve |
+| `git clean -fdX` (jen ignorované) | ask | **allow** | allow | úklid buildu; `-fdx` zůstává `deny` |
+| SQL, které v příkazu **není vidět** (`-f`, `<`, `<<< $VAR`, `cat x.sql \| psql`) | ask | **allow + audit** | allow + audit | rozsah neznáme, ale je to běžná práce — místo dotazu se událost **zapíše** |
+| nerozebratelný obal (`bash -c "$CMD"`), proměnná v pozici příkazu, `python -c`, neukončený heredoc | ask | ask | **audit** | slepé místo pluginu; rozhodne o něm normální tok oprávnění Claude Code |
+| kód interpretu s destruktivním voláním (`python -c "shutil.rmtree(…)"`) | ask | ask | **ask** | jméno volání v těle vidět **je** |
+| čtení `.claude/settings.local.json` | ask | ask | ask | nese hodnoty secrets |
+| `ssh host "příkaz"`, `ssh prod <<EOF` | ask | ask | ask | cizí stroj, kde naše pravidla neplatí |
+| krátká absolutní cesta `/xxx` | ask | ask | ask | od přepínače `cmd` k nerozeznání |
+| spuštění proměnné (`& $cmd`) | ask | ask | ask | obsah se spustí, a ten nevidíme |
+| `-EncodedCommand` a jeho zkratky | ask | ask | ask | příkaz je zakódovaný, ne skrytý omylem |
 
-🔴 **„allow + audit" není totéž co „allow".** Událost jde do
-`${CLAUDE_PLUGIN_DATA}/gate-audit.jsonl`: čas, nástroj, id tvaru, rozhodnutí —
-**nikdy obsah příkazu**. Bez `CLAUDE_PLUGIN_DATA` se nezapisuje nic a hook mlčí:
+🔴 **„audit" není totéž co „allow".** Hook **mlčí** — zapíše řádek do
+`${CLAUDE_PLUGIN_DATA}/gate-audit.jsonl` (čas, nástroj, id tvaru, rozhodnutí —
+**nikdy obsah příkazu**) a **nevydá rozhodnutí**. Kdyby vydal
+`permissionDecision: allow`, přeskočil by tím vrstvu oprávnění Claude Code; ticho ji
+nechá rozhodnout. Bez `CLAUDE_PLUGIN_DATA` se nezapisuje nic a hook mlčí dál:
 evidence je fail-open a nesmí být důvod, proč brána spadne.
 
 🔴 **Co se tím NEotevřelo:** SQL, které v příkazu **vidět je**, se rozhoduje dál podle
 hostitele. `echo "DROP TABLE users" | psql -h prod` je pořád `deny`.
+
+Politika je konfigurace (`gate.opaque`), hodnoty `audit | ask`; **cokoli jiného se čte
+jako `ask`** — fail-closed.
 
 ---
 
@@ -92,17 +99,40 @@ Projekt je může přepsat souborem `.claude/sinogard-hooks.json` ve své složc
 ```jsonc
 {
   "hooks": { "gate": true, "secrets": true, "resumeCost": true, "notify": false },
-  "gate": {
-    "allowedRemoveRoots": ["bin", "obj", "node_modules", "tmp", "dist", "TestResults"],
-    "localDbHosts": ["localhost", "127.0.0.1", "::1"],
-    "protectedBranches": ["main"]
-  },
   "notify": { "channel": "osc9" }
 }
 ```
 
-**Slučování je mělké:** klíč v override nahradí celý klíč z defaults. Je to záměr —
+**Slučování je mělké:** klíč v override nahradí **celý** klíč z defaults. Je to záměr —
 při hlubokém slučování by z override šlo položku seznamu jen přidat, nikdy odebrat.
+
+### 🔴 Chcete-li přepsat cokoli uvnitř `gate`, musíte zkopírovat CELÝ klíč `gate`
+
+Mělké slučování se nedívá dovnitř. Override, který nese jen jednu hodnotu z `gate`,
+**zahodí všechno ostatní** — `denyPatterns`, `askPatterns`, `allowedRemoveRoots`,
+`shapes`, `sqlClients`, `codeInterpreters`, `interpreterDestructiveTokens` — a ty pak
+padnou na vestavěné fallbacky, tedy většinou na prázdný seznam.
+
+Změřeno (0.1.10) s override `{"gate":{"opaque":{"variable":"audit"}}}`:
+
+| příkaz | bez override | s tímhle override |
+|---|---|---|
+| `git reset --hard` | `deny` | **žádné rozhodnutí** |
+| `git branch -D feature/x` | `deny` | **žádné rozhodnutí** |
+| `git filter-branch …` | `deny` | **žádné rozhodnutí** |
+| `rm -rf bin` (povolená složka) | žádné rozhodnutí | **`deny`** |
+| `rm -rf src`, `psql -h prod -c "DROP TABLE x"` | `deny` | `deny` |
+
+Jde to **oběma směry**: brána ztratí tvary, které měla držet, a zároveň začne blokovat
+běžnou práci, protože `allowedRemoveRoots` zmizely s ní. Pravidla, která žijí v kódu
+(rekurzivní mazání, DB podle hostitele), drží dál — proto se ta ztráta nepozná podle
+toho, že by „přestalo fungovat všechno".
+
+**Bezpečný postup:** zkopírujte celý objekt `gate` z
+[`hooks/config/defaults.json`](hooks/config/defaults.json) a upravte v kopii jednu
+hodnotu. Sada nese případ, který tuhle hranici drží jako doklad
+(*„override `gate` bez `denyPatterns`"*), ne jako opravu — tvar hlubšího slučování je
+rozhodnutí do v0.2 (nález K2-1 review Amber, 2026-09-07).
 
 `userConfig` pluginu se vědomě nepoužívá: ukládá se do globálních user settings, tedy
 společně pro všechny projekty na stroji. Zábradlí musí jít nastavit **per projekt**.
@@ -135,8 +165,14 @@ aby si je nikdo nemusel objevit sám.
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
    uvnitř byl `git reset --hard`. Obal s literálem (`bash -c "…"`) se rozebere,
    obal se souborem ne.
-2. **Obal s proměnnou končí `ask`, ne `deny`.** `bash -c "$CMD"` nejde rozebrat, takže
-   rozhoduje člověk. V `bypassPermissions` se z toho stane `deny`.
+2. **Obal s proměnnou plugin nezastaví — zapíše ho a pustí dál.** `bash -c "$CMD"`
+   nejde rozebrat, a od 0.1.10 z toho **není dotaz** (rozhodnutí Toma
+   2026-09-07/`T36-O5 A`): událost jde do auditu jako `opaque:variable` a rozhodne
+   o ní **normální tok oprávnění Claude Code**. Do 0.1.9 tu stálo *„rozhoduje člověk;
+   v `bypassPermissions` se z toho stane `deny`"* — obojí přestalo platit, protože
+   z `ask` se stal audit a v bypassu se `audit` chová stejně jako mimo něj.
+   `ask` zůstává jen tam, kde se obsah proměnné **spustí** (`& $cmd`) nebo je
+   **zakódovaný** (`-EncodedCommand`).
 3. **Windows-first.** Handlery volají `powershell.exe`. Na Linuxu a macOS plugin
    nefunguje; portace by znamenala druhý běhový tvar, ne jen jinou cestu.
 4. **Rozklad příkazové řádky je tokenizér, ne shell.** Rozdělení na `&&`, `||`, `;`, `|`
@@ -155,19 +191,27 @@ aby si je nikdo nemusel objevit sám.
    `-fdX` je legitimní úklid buildu.
 6. **Hook čte text příkazu, ne to, co z něj shell vyrobí.** `psql -c ('TRUN' + 'CATE TABLE x')`
    se skládá až za běhu; statický rozbor takový tvar nemá jak vidět. Totéž platí pro
-   jakoukoli expanzi proměnných. Poctivá odpověď je, že tohle je hranice metody, ne
-   nedodělek — proto tvary s proměnnou končí `ask`, a ne `allow`.
+   jakoukoli expanzi proměnných. Je to **hranice metody, ne nedodělek**.
+   🔴 Do 0.1.9 tu stálo *„proto tvary s proměnnou končí `ask`, a ne `allow`"* — to už
+   neplatí. Od 0.1.10 končí **auditem**, tedy plugin je nezastaví a rozhoduje o nich
+   vrstva nad ním. Cena za to je pojmenovaná: tvar jako
+   `Where-Object { $_.Name -eq 'x' -or (git reset --hard) }` je dnes `ask`, po 0.1.10
+   ho plugin propustí. Rozsah brány je rozhodnutí zadavatele (`T36-O5 A`), ne odhad
+   pluginu — a nemá smysl ptát se 45× na to, kde jsou dva zásahy.
 7. **Timeout hooku propouští.** Když handler nestihne `timeout` z `hooks/hooks.json`,
    Claude Code ho na `PreToolUse` **neblokuje** — příkaz projde. Timeouty jsou proto
    nastavené vysoko nad naměřený studený start a hook nedělá nic, co by mohlo čekat
    na síť nebo na člověka.
-8. **Proměnná v pozici příkazu končí `ask`, i když jde o výraz.** `[Math]::Truncate($x)`
-   se nerozebere, takže rozhoduje člověk. Přiřazení `$x = <příkaz>` je výjimka: rozebere
-   se jeho pravá strana, protože jinak by `ask` končila každá druhá řádka běžné práce.
-   Druhá výjimka (nález L1, **jen PowerShell**): čtení hodnoty — `$_`, `$var.Prop`,
-   `$var[…]`, `$i++`, porovnání operátorem — nic nespouští a projde. Jakákoli **závorka**
-   výjimku ruší, protože `$_.Delete()` maže. V Bashi výjimka neplatí: `$cmd -rf src`
-   je tam příkaz.
+8. **Proměnná v pozici příkazu končí auditem, i když jde o výraz.** `[Math]::Truncate($x)`
+   se nerozebere. Do 0.1.9 z toho byl `ask`; od 0.1.10 je to příčina `variable`, tedy
+   audit. Přiřazení `$x = <příkaz>` je výjimka: rozebere se jeho pravá strana, takže
+   `$x = git branch -D y` je pořád `deny`. Druhá výjimka (nález L1, **jen PowerShell**):
+   čtení hodnoty — `$_`, `$var.Prop`, `$var[…]`, `$i++`, porovnání operátorem — nic
+   nespouští a projde bez záznamu. Jakákoli **závorka** výjimku ruší. V Bashi výjimka
+   neplatí: `$cmd -rf src` je tam příkaz.
+   🔴 **Výjimka z výjimky je `& $cmd`** — operátor `&` obsah proměnné **spustí**, a to
+   zůstává `ask`. Příznak se proto nese až do listu jako příčina `invoked`; bez něj
+   by `& $cmd` a `"EXIT=$code"` měly tutéž politiku.
 9. **`*.json` se ptá.** Zástupný znak, který může padnout na chráněné jméno (`secrets.json`,
    `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
    Od 0.1.8 (nález N26) se glob vyhodnocuje **jen tam, kde ho shell rozvine**: nad
@@ -220,7 +264,21 @@ aby si je nikdo nemusel objevit sám.
 18. **Příkaz jako argument vzdáleného shellu končí `ask`, ne `deny`.** `ssh host "rm -rf /"`
     se spustí na cizím stroji, kde pravidla nad cestami neplatí — rozhoduje proto člověk
     (nález Ada N21, opraveno v 0.1.7). `ssh host` a `ssh -T git@github.com` zůstávají
-    `allow`, aby běžná práce přes ssh nekončila dotazem.
+    `allow`, aby běžná práce přes ssh nekončila dotazem. Totéž platí pro `ssh prod <<EOF`:
+    do 0.1.9 sdílel jednu podmínku s `python <<EOF`, od 0.1.10 jsou to dvě různé věci —
+    kód interpretu jde politikou `opaque.interpreter`, cizí stroj zůstává dotazem.
+19. 🔴 **Co audit NEVIDÍ.** Od 0.1.10 propadá nerozebratelný tvar do normálního toku
+    oprávnění Claude Code — a to znamená, že o něm **rozhoduje vrstva nad pluginem**
+    (klasifikátor auto režimu, `permissions.allow` / `permissions.deny` projektu).
+    `bash -c "$CMD"` tedy neběží „bez brány", ale běží **pod jinou** — a plugin o ní
+    nic netvrdí. Řádek v `gate-audit.jsonl` říká, že se tvar objevil; **neříká, jestli
+    se provedl**. Kdo chce vědět to druhé, musí se zeptat Claude Code, ne pluginu.
+20. **Destruktivní volání v kódu interpretu se hledá TOKENEM, ne parserem.**
+    `gate.interpreterDestructiveTokens` je seznam řetězců a porovnává se
+    **case-sensitivně** prostým výskytem v těle. Z toho plyne obojí: `python -c
+    "shutil.rmtree('x')"` se ptá, a `python -c "getattr(shutil, 'rm' + 'tree')(x)"` ne.
+    Rozbor kódu Pythonu ani JavaScriptu tenhle plugin nedělá a dělat nebude — proto je
+    seznam **konfigurace**, ne pravidlo v kódu.
 
 ---
 

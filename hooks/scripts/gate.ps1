@@ -48,6 +48,26 @@ function Get-LeafField($Leaf, [string]$Name, $Default = '') {
     return $Leaf[$Name]
 }
 
+# Rozhodnuti Toma 2026-09-07/T36-O5 = A: "nerozebratelne" prestalo byt jednou tridou.
+# Do 0.1.9 skoncil KAZDY takovy list na `ask` - a nad realnymi cisly to znamenalo
+# 45 dotazu ze 46 pri dvou skutecnych zasazich par. 6. List proto nese PRICINU (`Why`)
+# a politiku k ni urcuje konfigurace (`gate.opaque`). Bez `Why` by se nedalo odlisit
+# `& $cmd` (obsah se SPUSTI - zustava ask) od `"EXIT=$code"` (retezec s promennou).
+#
+# `Body` nese jen pricina `interpreter`: je to kod, ktery se spusti a rozebrat ho neumime,
+# ale JMENO volani v nem videt je - a to je jediny signal, ktery mame (viz 1C).
+function New-OpaqueLeaf([string]$Raw, [string]$Why, [string]$Body = '') {
+    return @{ Kind = 'opaque'; Raw = $Raw; Why = $Why; Body = $Body }
+}
+
+# Mazani volanim .NET / VB tridy. Dva vzory nad TYMZ vyctem jmen, aby se nemohly
+# rozejit: prvni jen POZNA, ze jde o mazani (Get-CommandLeaf), druhy z nej vytahne
+# LITERALNI cil (Test-RecursiveDeleteRule). Cil v promenne druhy vzor nenajde -
+# a prave to je rozdil mezi `deny` a `ask` (nalez Amber A1).
+$script:NetDeleteCallHeads = '(?:\[(?:System\.)?IO\.(?:Directory|File)\]::Delete|\[Microsoft\.VisualBasic\.FileIO\.FileSystem\]::Delete(?:Directory|File))'
+$script:NetDeleteCallPattern   = $script:NetDeleteCallHeads + '\('
+$script:NetDeleteTargetPattern = $script:NetDeleteCallHeads + '\(\s*[''"]([^''"]+)[''"]'
+
 # Jmeno spustitelneho souboru PO rozbaleni obalu.
 #
 # Nalez Amber C4: `sudo -u postgres psql <<SQL` a `docker exec -i db psql <<SQL` davaly
@@ -420,16 +440,19 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     # Roura do SQL klienta se resi az nad zbytkem - heredoc uz je z nej pryc (Amber C1).
     $pl = Split-SqlPipeline $hd.Rest $script:SqlClients
 
-    foreach ($sub in (Split-CommandLine $pl.Rest)) {
+    # `&` si vyzadame ZPATKY: je to operator SPUSTENI, ne oddelovac, a bez nej se
+    # `& $cmd` neda odlisit od `$cmd`. Do 0.1.9 to nevadilo (oboji koncilo ask),
+    # od 0.1.10 je `invoked` jedina trida, ktera se ptat NEPRESTALA.
+    foreach ($sub in (Split-CommandLine $pl.Rest @('&'))) {
         foreach ($l in (Get-CommandLeaf $sub $Depth)) { [void]$out.Add($l) }
     }
     foreach ($b in $hd.Bodies) {
         [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
                           Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
     }
-    # Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti (Z3 -> ask).
+    # Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti.
     if ($hd.Unterminated) {
-        [void]$out.Add(@{ Kind = 'opaque'; Raw = $Text })
+        [void]$out.Add((New-OpaqueLeaf $Text 'heredocUnterminated'))
     }
     foreach ($b in $pl.Bodies) {
         if ($b.Opaque) {
@@ -449,7 +472,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     $out = New-Object System.Collections.ArrayList
     $trimmed = $Sub.Trim()
     if ($trimmed -eq '') { return $out }
-    if ($Depth -gt 5) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $trimmed }); return $out }
+    if ($Depth -gt 5) { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
 
     # `&` je operator SPUSTENI. Rozdil je podstatny az u hole promenne: `$sql | psql`
     # posila HODNOTU, kdezto `& $cmd` obsah promenne SPUSTI. Priznak se proto nese dal.
@@ -466,7 +489,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     # .NET volani nemaji argv tvar a nesou `$true` jako druhy argument - kdyby sla
     # nejdriv kontrola "nerozebratelne", skoncila by ask misto deny.
-    if ([regex]::IsMatch($trimmed, '\[(?:System\.)?IO\.(?:Directory|File)\]::Delete\(', 'IgnoreCase')) {
+    #
+    # 0.1.10: druhe jmeno teze operace je `Microsoft.VisualBasic.FileIO.FileSystem`
+    # (`DeleteDirectory` / `DeleteFile`). Do 0.1.9 propadalo do tridy "nerozebratelne",
+    # a jakmile ta trida prestala byt dotazem, byla by z toho DIRA: mereni 7. 9. ukazalo,
+    # ze prave tyhle dva tvary jsou JEDINE dva prave zasahy par. 6 ze 46 dotazu.
+    # `SendToRecycleBin` se nerozlisuje - brana zni "mazani", ne "nevratne mazani".
+    if ([regex]::IsMatch($trimmed, $script:NetDeleteCallPattern, 'IgnoreCase')) {
         [void]$out.Add(@{ Kind = 'leaf'; Exe = 'net-delete'; Args = @(); Raw = $raw; Text = $trimmed; GitConfig = @() })
         return $out
     }
@@ -533,7 +562,10 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     if ($argv.Count -eq 0) { return $out }
 
     if (Test-Unexpandable $argv[0]) {
-        [void]$out.Add(@{ Kind = 'opaque'; Raw = $raw }); return $out
+        # `& $cmd` obsah promenne SPUSTI, `$out` nebo `"EXIT=$code"` ne. Priznak `$invoked`
+        # se proto musi DONEST az sem - jinak by obe veci mely tutez politiku.
+        $why = if ($invoked) { 'invoked' } else { 'variable' }
+        [void]$out.Add((New-OpaqueLeaf $raw $why)); return $out
     }
 
     $exe = Get-ExecutableName $argv[0]
@@ -564,10 +596,12 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         }
         '^(python|python3|node|nodejs|ruby|perl|php|deno)$' {
             # Nalez Metis 16/24: vnitrek `-c "..."` je kod, ne prikazova radka - rozebrat
-            # ho neumime, takze plati Z3: nerozebratelne -> ask.
-            foreach ($t in $rest) {
-                if ($t -cmatch '^-{1,2}(c|e|eval)$') {
-                    [void]$out.Add(@{ Kind = 'opaque'; Raw = $raw }); return $out
+            # ho neumime. Od 0.1.10 je to pricina `interpreter`: telo se nese dal, aby
+            # nad nim mohl probehnout test destruktivniho tokenu (1C).
+            for ($i = 0; $i -lt $rest.Count; $i++) {
+                if ($rest[$i] -cmatch '^-{1,2}(c|e|eval)$') {
+                    $body = (Join-CommandString ($rest | Select-Object -Skip ($i + 1)))
+                    [void]$out.Add((New-OpaqueLeaf $raw 'interpreter' $body)); return $out
                 }
             }
             return $out
@@ -610,7 +644,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             if ($file -eq '') { return $out }
             $inner = ($file + ' ' + $argList).Trim()
-            if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $raw }); return $out }
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $raw 'variable')); return $out }
             # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
             foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
@@ -625,7 +659,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 return $out
             }
             $inner = $rest[$idx + 1]
-            if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
             # Nalez Amber I2: escape znak patri tomu shellu, ktery text SPUSTI, ne tomu,
             # ktery ho predal dal. Bez prepnuti se `bash -c 'echo \" ; git reset --hard'`
             # psane z PowerShell nastroje rozebiralo PS pravidly a propadlo na allow.
@@ -641,7 +675,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 # parametru, takze `-enc`, `-enco`, `-encod` ... fungujou stejne jako
                 # `-encodedcommand`. Vyjmenovat tri z nich nestacilo.
                 if (Test-EncodedCommandFlag $t) {
-                    [void]$out.Add(@{ Kind = 'opaque'; Raw = $raw }); return $out
+                    [void]$out.Add((New-OpaqueLeaf $raw 'encoded')); return $out
                 }
                 # Nalez Amber G5: `-c`/`-command` se porovnavaly PRESNE, takze
                 # `pwsh -com "git reset --hard"` prosel bez rozboru -> allow.
@@ -652,7 +686,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($isFile) { return $out }
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
-            if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
             # Nalez Amber I2, opacny smer: `pwsh -c '...'` psane z Bash nastroje.
             foreach ($l in (Get-NestedShellLeaf $inner 'PowerShell' $Depth)) { [void]$out.Add($l) }
             return $out
@@ -664,14 +698,14 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
-            if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
             # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
             foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
         '^(eval)$' {
             $inner = (Join-CommandString $rest)
-            if (Test-Unexpandable $inner) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $inner }); return $out }
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
             # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
             foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
@@ -909,8 +943,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
     $recursive = $false
 
     # .NET volani nejsou argv-tvaru, hledaji se regexem nad surovym textem
-    $netMatches = [regex]::Matches($Leaf.Raw,
-        '\[(?:System\.)?IO\.(?:Directory|File)\]::Delete\(\s*[''"]([^''"]+)[''"]', 'IgnoreCase')
+    $netMatches = [regex]::Matches($Leaf.Raw, $script:NetDeleteTargetPattern, 'IgnoreCase')
     foreach ($m in $netMatches) { $recursive = $true; [void]$targets.Add($m.Groups[1].Value) }
 
     # Nalez Amber A1: `[IO.Directory]::Delete($p, $true)` - cil je PROMENNA, regex nad
@@ -1320,15 +1353,54 @@ function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision,
     }
 }
 
+# Politika pro nerozebratelny list (rozhodnuti Toma 2026-09-07/T36-O5 = A).
+#
+# !! `audit` vraci $null, NE `permissionDecision: allow`. Rozdil je cely smysl zmeny:
+# `allow` z hooku PRESKOCI vrstvu opravneni Claude Code (klasifikator auto rezimu,
+# pravidla `permissions.*`), kdezto ticho ji necha rozhodnout. Plugin timhle prestava
+# byt POSLEDNI instanci parseru a stava se prvni - viz README "Tri rozhodnuti, ne dve".
+#
+# Neznama hodnota politiky konci `ask`, ne vyjimkou: fail-closed je strop, ne prvni
+# omezujici hodnota, a preklep v projektovem override nesmi branu tise otevrit.
+function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Config) {
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+
+    # 1C: kod interpretu se nerozebira, ale JMENO destruktivniho volani v nem videt je.
+    # Je to test na TOKEN, ne parser jazyka - `python -c "print(1)"` musi projit,
+    # `python -c "shutil.rmtree('x')"` ne. Porovnani je case-SENSITIVNI (`Remove-Item`
+    # ano, `remove-item` ne bylo by falesne siroke pres bezna anglicka slova).
+    if ($Why -eq 'interpreter' -and $Body -ne '') {
+        foreach ($t in @(Get-Field $gate 'interpreterDestructiveTokens' @())) {
+            $token = [string]$t
+            if ($token -eq '') { continue }
+            if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+                return @{ Decision = 'ask'
+                          Shape = ((Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})') `
+                                   -replace '\{token\}', $token) }
+            }
+        }
+    }
+
+    if (([string](Get-Field (Get-Field $gate 'opaque') $Why 'ask')) -eq 'audit') {
+        Write-GateAudit $script:ToolName ('opaque:' + $Why) 'allow' $Config
+        return $null
+    }
+
+    $text = [string]$Raw
+    if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
+    return @{ Decision = 'ask'
+              Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+}
+
 function Test-Leaf($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
 
     if ($Leaf.Kind -eq 'opaque') {
-        $text = $Leaf.Raw
-        if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-        return @{ Decision = 'ask'
-                  Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+        return (Resolve-OpaqueDecision ([string](Get-LeafField $Leaf 'Why' 'variable')) `
+                                       ([string]$Leaf.Raw) `
+                                       ([string](Get-LeafField $Leaf 'Body' '')) $Config)
     }
 
     # Nalez Ada N21: prikaz jako ARGUMENT vzdaleneho shellu. `ssh host "rm -rf /"` se
@@ -1391,9 +1463,17 @@ function Test-Leaf($Leaf, $Config) {
 
         # Nalez Amber G8: telo se SPUSTI, ale rozebrat ho neumime - je to kod interpretu
         # (`python <<EOF`) nebo prikazy na cizim stroji (`ssh prod <<EOF`). Brat ho jako
-        # data znamenalo allow, pritom `python -c` uz konci ask. Plati Z3.
-        $opaqueOuters = @(Get-Field $gate 'codeInterpreters' @()) + @(Get-Field $gate 'remoteShells' @())
-        if ($opaqueOuters -ccontains $oe) {
+        # data znamenalo allow, pritom `python -c` uz konci ask.
+        #
+        # 0.1.10 ty dva pripady ROZDELUJE, prestoze do 0.1.9 sdilely jednu podminku:
+        #   kod interpretu = tataz vec jako `python -c`, tedy pricina `interpreter`,
+        #   cizi stroj      = tataz vec jako `ssh host "cmd"` (nalez Ada N21), tedy ask
+        #                     BEZE ZMENY - pravidla nad cestami tam neplati a audit
+        #                     na nasem stroji o cizim stroji netvrdi nic.
+        if (@(Get-Field $gate 'codeInterpreters' @()) -ccontains $oe) {
+            return (Resolve-OpaqueDecision 'interpreter' ([string]$Leaf.Raw) ([string]$Leaf.Raw) $Config)
+        }
+        if (@(Get-Field $gate 'remoteShells' @()) -ccontains $oe) {
             $text = [string]$Leaf.Raw
             if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
             return @{ Decision = 'ask'
