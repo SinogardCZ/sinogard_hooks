@@ -305,6 +305,37 @@ $amber4SecretCases = @(
 
 Test-Cases 'review Amber kolo 4 (H1)' $amber4SecretCases
 
+# ================================================================================
+#  NALEZ N26 (Tom, ziva ukazka z konzole, 2026-09-07)
+#
+#  Glob se vyhodnocoval nad KAZDYM kandidatem - i nad textem, ktery zadna cesta
+#  neni. `git commit -m "**2**"` dalo glob `**2**`, ten sedne na `server.p12`
+#  a hook se zeptal na COMMIT MESSAGE. V Bashi se `*` v uvozovkach nerozvine
+#  a v PowerShellu retezec negloboval nikdy.
+#
+#  Nove: glob jen nad NEUVOZENYM tokenem v pozici cesty u prikazu, ktery soubory
+#  cte nebo kopiruje.
+# ================================================================================
+
+$n26SecretCases = @(
+    (CmdCase 'N26 markdown v commitu'   'git commit -m "**2**"' 'allow')
+    (CmdCase 'N26 markdown s textem'    'git commit -m "**2 opravy**"' 'allow')
+    (CmdCase 'N26 markdown uprostred'   'git commit -m "fix **2**: nalez"' 'allow')
+    (CmdCase 'N26 echo neuvozene'       'echo **2**' 'allow')
+    (CmdCase 'N26 echo hvezdicka'       'echo "a*b"' 'allow')
+    (CmdCase 'N26 Write-Host'           'Write-Host "**2**"' 'allow' 'PowerShell')
+    (CmdCase 'N26 grep vzor'            'grep "x*" src/a.cs' 'allow')
+    # 🔴 kontrolni skupina: glob v pozici CESTY u cteciho prikazu se pta dal
+    (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'ask')
+    (CmdCase 'N26 kontrola Get-Content' 'Get-Content .en?' 'ask' 'PowerShell')
+    (CmdCase 'N26 kontrola cp glob'     'cp *.pem /tmp/x' 'ask')
+    # 🔴 a presne jmeno se pta dal bez ohledu na uvozovky
+    (CmdCase 'N26 kontrola presne jmeno' 'cat .env' 'deny')
+    (CmdCase 'N26 kontrola literal'      '[IO.File]::ReadAllText(''.env'')' 'deny' 'PowerShell')
+)
+
+Test-Cases 'nalez N26 - glob jen v pozici cesty' $n26SecretCases
+
 # ---------------------------------- trackovany .env.<x> je MERENI, ne fixture ---
 
 Start-Case 'trackovany .env.<x> v GSD repu -> allow'

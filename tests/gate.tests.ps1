@@ -801,6 +801,35 @@ $ada6Cases = @(
 Test-Cases 'review Ada kolo 6 (N19-N23)' $ada6Cases
 
 # ================================================================================
+#  REVIZE ADY NAD KOLEM 6 - N24, N25 (2026-09-07)
+#
+#  Obe jsou nasledky OPRAV z kola 6, ne noveho tvaru:
+#    N24 - oprava N21 pocitala prepinac s hodnotou jako pozicionalni argument
+#    N25 - vzor N22 bral jmeno tabulky jako JEDEN token
+# ================================================================================
+
+$ada6bCases = @(
+    # N24 - prepinace ssh s hodnotou nesmi vypadat jako prikaz
+    (Case 'N24 ssh -i s klicem'          'ssh -i key.pem host' 'allow')
+    (Case 'N24 ssh -p s portem'          'ssh -p 2222 host' 'allow')
+    (Case 'N24 ssh -o s volbou'          'ssh -o BatchMode=yes host' 'allow')
+    (Case 'N24 ssh -l s uzivatelem'      'ssh -l tomas host' 'allow')
+    # 🔴 kontrolni skupina: s PRIKAZEM to ask zustava, i kdyz jsou prepinace pritomne
+    (Case 'N24 kontrola s prikazem'      'ssh -i key.pem host "rm -rf /"' 'ask')
+    (Case 'N24 kontrola bez prepinacu'   'ssh host "rm -rf /"' 'ask')
+    (Case 'N24 kontrola holy ssh'        'ssh host' 'allow')
+
+    # N25 - UPDATE ONLY / UPDATE ... AS
+    (Case 'N25 update only'              'psql -h prod -c "UPDATE ONLY users SET active=0"' 'deny')
+    (Case 'N25 update s aliasem'         'psql -h prod -c "UPDATE users AS u SET active=0"' 'deny')
+    # 🔴 kontrolni skupina: s WHERE je to porad bezna prace
+    (Case 'N25 kontrola only s where'    'psql -h prod -c "UPDATE ONLY users SET active=0 WHERE id=1"' 'allow')
+    (Case 'N25 kontrola alias s where'   'psql -h prod -c "UPDATE users AS u SET active=0 WHERE u.id=1"' 'allow')
+)
+
+Test-Cases 'revize Ady nad kolem 6 (N24, N25)' $ada6bCases
+
+# ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)
 #
 #  Kazdy tvar, ktery kdy byl deny, jim ZUSTAVA - a kazdy tvar, ktery byl kdy

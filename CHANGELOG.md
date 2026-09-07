@@ -3,6 +3,73 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.8] — 2026-09-07
+
+Revize Ady nad kolem 6. Obě položky jsou **následky oprav z kola 6**, ne nové tvary —
+což je přesně ta třída, kterou tenhle projekt už dvakrát zaplatil regresí.
+
+### Opraveno — N24: přepínače `ssh` s hodnotou nafukovaly počet pozicionálů
+
+Oprava N21 počítala „host + příkaz" jako dva pozicionální argumenty. Jenže přepínač
+**s hodnotou** vypadá stejně:
+
+| příkaz | 0.1.7 | 0.1.8 |
+|---|---|---|
+| `ssh -i key.pem host` | **ask** | allow |
+| `ssh -p 2222 host` | **ask** | allow |
+| `ssh -o BatchMode=yes host` | **ask** | allow |
+| `ssh -l tomas host` | **ask** | allow |
+
+V `bypassPermissions` by z toho bylo `deny` — falešný blok na úplně běžné práci.
+Tabulka value-flagů je vedená stejně jako u obalů (`Get-WrapperTail`); jinak se ty dvě
+rozejdou, což je přesně nález G2.
+
+**Kontrolní skupina:** `ssh -i key.pem host "rm -rf /"` a `ssh host "rm -rf /"` = `ask`
+(příkaz tam pořád je), `ssh host` = `allow`.
+
+### Opraveno — N25: `UPDATE ONLY t SET` a `UPDATE t AS x SET` míjely vzor
+
+`\S+` je **jeden token**, takže vzor z N22 neviděl ani `ONLY`, ani alias. Obojí je
+platný SQL a obojí přepíše celý obsah tabulky:
+
+| příkaz | 0.1.7 | 0.1.8 |
+|---|---|---|
+| `psql -h prod -c "UPDATE ONLY users SET active=0"` | allow | **deny** |
+| `psql -h prod -c "UPDATE users AS u SET active=0"` | allow | **deny** |
+
+**Kontrolní skupina:** tytéž tvary **s `WHERE`** zůstávají `allow`.
+
+### Opraveno — N26: `secrets` se ptal na `*` uvnitř řetězce
+
+🔴 **Našel to Tom na živé konzoli**, ne review ani test — a je to nejnepříjemnější druh
+falešného bloku, protože trefil úplně obyčejnou práci: **hvězdičky z markdownu v commit
+message.**
+
+| příkaz | 0.1.7 | 0.1.8 |
+|---|---|---|
+| `git commit -m "**2**"` | **ask** | allow |
+| `echo **2**` | **ask** | allow |
+| `Write-Host "**2**"` | **ask** | allow |
+
+Mechanismus: kandidátem na cestu byl **každý** řetězec v uvozovkách, a glob `**2**`
+sedne na `server.p12` ze seznamu chráněných jmen. Hook se pak ptal na text commitu.
+
+Nově se zástupný znak vyhodnocuje **jen tam, kde ho shell doopravdy rozvine**:
+nad **neuvozeným** tokenem v **pozici cesty** u příkazu, který soubory čte nebo kopíruje
+(`secrets.pathCommands`). V Bashi se `*` v uvozovkách nerozvine a v PowerShellu řetězec
+negloboval nikdy — pravidlo tedy odpovídá tomu, co se stane.
+
+**Kontrolní skupina:** `cat *.env` a `Get-Content .en?` = `ask` (drží), `cp *.pem /tmp/x`
+= `ask`, `cat .env` = `deny`, `[IO.File]::ReadAllText('.env')` = `deny` (literál
+v uvozovkách se pořád čte — jen se u něj neřeší glob).
+
+### Konvence — kontrolní skupina je fixtura, ne věta
+
+Doporučila Ada, přijato: **každý řádek kontrolní skupiny, na který se odvolává review
+nebo hlášení, musí existovat jako případ v sadě.** Věta v hlášení je tvrzení; případ
+v `gate.tests.ps1` je doklad, který se přehraje při příštím kole. Zapsáno do README,
+sekce *Testy*.
+
 ## [0.1.7] — 2026-09-06
 
 Kolo 6. Nálezy **Ady** (N19–N22) — sousední třída k obalům: ne *„co se rozebírá"*, ale
@@ -17,9 +84,9 @@ neexistovaly:
 
 | příkaz | 0.1.6 | 0.1.7 |
 |---|---|---|
-| `bash -c 'echo "DROP TABLE users" \| psql -h prod'` | allow | deny |
+| `bash -c 'echo "DROP TABLE users" \| psql -h prod'` | CRASH | deny |
 | `sh -c "psql -h prod <<SQL … DROP TABLE x … SQL"` | allow | deny |
-| `eval 'echo "DROP TABLE x" \| psql -h prod'` | allow | deny |
+| `eval 'echo "DROP TABLE x" \| psql -h prod'` | CRASH | deny |
 
 🔴 **Vzdálený `DROP` nemá zálohu v `permissions.deny`** — prefixové pravidlo rouru neumí —
 takže ho držel **jen hook**. Řetěz proto žije v jediné funkci (`Get-CommandLineLeaves`)
@@ -567,6 +634,7 @@ První verze. Čtyři hooky, Windows-first, bez externích závislostí.
 - **`userConfig` pluginu se nepoužívá** — ukládá se do globálních user settings,
   tedy společně pro všechny projekty na stroji.
 
+[0.1.8]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.8
 [0.1.7]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.7
 [0.1.6]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.6
 [0.1.5]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.5

@@ -1027,7 +1027,9 @@ function Test-DeleteWithoutWhere([string]$Sql) {
 function Test-UpdateWithoutWhere([string]$Sql) {
     if ([string]::IsNullOrWhiteSpace($Sql)) { return $false }
     foreach ($stmt in [regex]::Split($Sql, ';')) {
-        if (-not [regex]::IsMatch($stmt, '\bupdate\s+\S+\s+set\b', 'IgnoreCase')) { continue }
+        # Nalez Ada N25: `\S+` je JEDEN token, takze vzor minul `UPDATE ONLY t SET ...`
+        # i `UPDATE t AS x SET ...` - oboji je platny SQL a oboji prepise cely obsah.
+        if (-not [regex]::IsMatch($stmt, '\bupdate\s+(?:only\s+)?\S+(?:\s+as\s+\S+)?\s+set\b', 'IgnoreCase')) { continue }
         if (-not [regex]::IsMatch($stmt, '\bwhere\b', 'IgnoreCase')) { return $true }
     }
     return $false
@@ -1261,6 +1263,25 @@ function Test-ConfiguredPattern($Leaf, $Patterns) {
     return $null
 }
 
+# Nalez Ada N24: prepinac s HODNOTOU se pocital jako pozicionalni argument, takze
+# `ssh -i key.pem host` vypadalo jako "host + prikaz" -> ask, a v bypassu deny.
+# Falesny blok na uplne bezne praci; tabulka je proto stejna jako u obalu
+# (Get-WrapperTail) - jediny zpusob, jak se to nerozejde.
+$script:SshValueFlags = '^(-p|-i|-o|-l|-F|-J|-L|-R|-D|-b|-c|-e|-m|-w|-E|-I|-Q|-S|-W)$'
+
+function Get-RemoteShellPositional($Argv) {
+    $out = New-Object System.Collections.ArrayList
+    $i = 0
+    while ($i -lt $Argv.Count) {
+        $t = [string]$Argv[$i]
+        if ($t -cmatch $script:SshValueFlags) { $i += 2; continue }
+        if ($t.StartsWith('-')) { $i++; continue }
+        [void]$out.Add($t)
+        $i++
+    }
+    return $out
+}
+
 function Test-Leaf($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
@@ -1281,7 +1302,7 @@ function Test-Leaf($Leaf, $Config) {
     if ($Leaf.Kind -eq 'leaf') {
         $remote = @(Get-Field $gate 'remoteShells' @('ssh', 'plink'))
         if ($remote -ccontains ([string]$Leaf.Exe).ToLowerInvariant()) {
-            $positional = @(@(Get-LeafField $Leaf 'Args' @()) | Where-Object { -not ([string]$_).StartsWith('-') })
+            $positional = @(Get-RemoteShellPositional (@(Get-LeafField $Leaf 'Args' @())))
             if ($positional.Count -ge 2) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }

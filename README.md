@@ -145,6 +145,11 @@ aby si je nikdo nemusel objevit sám.
    je tam příkaz.
 9. **`*.json` se ptá.** Zástupný znak, který může padnout na chráněné jméno (`secrets.json`,
    `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
+   Od 0.1.8 (nález N26) se glob vyhodnocuje **jen tam, kde ho shell rozvine**: nad
+   **neuvozeným** tokenem v **pozici cesty** u příkazu ze seznamu `secrets.pathCommands`
+   (čtení a kopírování souborů). `git commit -m "**2**"`, `echo **2**` ani
+   `Write-Host "**2**"` tedy nejsou cesty a neptají se — dřív ano, protože glob `**2**`
+   sedne na `server.p12`.
 10. **SQL, které v příkazu není vidět, končí `ask`.** `cat migrace.sql | psql`,
     `psql -f migrace.sql`, `sqlcmd -i migrace.sql` i `$sql | psql` — obsah souboru ani
     roury hook nečte, takže rozsah nezná. Od 0.1.7 sem patří i **přesměrování stdin** —
@@ -247,6 +252,29 @@ návratový kód i kódování, tedy přesně to, o čem sada tvrdí.
 
 Verdikt dává **souhrnný řádek** `N passed / N failed / N skipped`, ne návratový kód:
 pád uprostřed sady vypadá zvenčí jako červená, a přitom je to „neměřeno".
+
+### Konvence: kontrolní skupina je fixtura, ne věta
+
+🔴 **Každý řádek kontrolní skupiny, na který se odvolává review nebo hlášení, musí
+existovat jako případ v sadě.** Věta „`ssh host` zůstává `allow`" napsaná jen do
+hlášení je **tvrzení**; případ v `gate.tests.ps1` je doklad, který se přehraje při
+každém běhu — a hlavně **při příštím kole**, kde se přesně takové věty rozbíjejí.
+
+Důvod je konkrétní: dvě kola po sobě zavedla oprava regresi (G4 → I1, I1 → K1 + L1)
+a v obou případech chyběl v sadě právě ten tvar, o kterém se předtím psalo, že drží.
+(Doporučila Ada, přijato 2026-09-07.)
+
+Z toho plyne i tvar sady: u každého nálezu stojí **opravený tvar i jeho protipól** —
+tvar, který se změnit **nesmí**. Bez protipólu měří test jen to, že se něco změnilo,
+ne že se změnilo to správné.
+
+### Regresní invariant
+
+`tests/fixtures/invariants.json` je **append-only** seznam tvarů s očekáváním; přehrává
+ho každá sada, které se týká (`Invoke-InvariantRows`). Roste **generátorem**
+(`tests/_generate-invariants.ps1 -WhatIf` pro náhled), ne ruční editací — a generátor
+při **sporu** (týž tvar, jiné očekávání) nezapíše nic a skončí nenulově. Řádek odsud
+odchází jen s citovaným rozhodnutím.
 
 ---
 

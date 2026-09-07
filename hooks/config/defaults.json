@@ -124,6 +124,14 @@
       "settings.local.json"
     ],
 
+    "_pathCommandsComment": "Nález N26 (Tom, živá ukázka): zástupný znak se vyhodnocuje JEN v pozici cesty u příkazu, který soubory čte nebo kopíruje — a jen u NEUVOZENÉHO tokenu. `git commit -m \"**2**\"` (hvězdičky z markdownu) dávalo glob `**2**`, ten sedne na `server.p12` a hook se ptal na text commitu. V Bashi se `*` v uvozovkách nerozvine a v PowerShellu řetězec negloboval nikdy.",
+    "pathCommands": [
+      "cat", "type", "get-content", "gc", "more", "less", "head", "tail",
+      "cp", "copy", "copy-item", "mv", "move", "move-item",
+      "ls", "dir", "get-childitem", "gci", "get-item", "gi",
+      "compress-archive", "tar", "zip", "scp", "rsync", "findstr", "select-string"
+    ],
+
     "_envVarNamePatternComment": "DVA vzory se DVĚMA režimy velikosti písmen — jeden vzor to neumí. `envVarNamePattern` (podtržítkový zápis) se matchuje IGNORE-CASE, aby chytil i `db_password` a `github_token` (nález Amber E5); množné číslo je povolené jen ZA podtržítkem, takže `API_KEYS` se ptá a holé `tokens` ne. `envVarNameCamelPattern` se matchuje CASE-SENSITIVNĚ, protože jen tak zůstane `monkey` a `keyFile` běžnou prací, zatímco `secretKey` a `apiKey` se ptají. Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
     "envVarNamePattern": "(?:^(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)|_(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?)(_|$)|_PWD(_|$)|^PWD_",
     "envVarNameCamelPattern": "[a-z](Key|Token|Secret|Password|Passwd|Credential)s?($|[A-Z_])",

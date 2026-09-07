@@ -70,7 +70,7 @@ function Get-RelativeToCwd([string]$NormalPath, [string]$CwdNormal) {
 
 # --------------------------------------------------------- pravidlo cesty ---
 
-function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config) {
+function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true) {
     $sec = Get-Field $Config 'secrets'
     $shapes = Get-Field $sec 'shapes'
     $norm = ConvertTo-NormalPath $Path
@@ -81,7 +81,13 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config) {
     # `.en?`. Zastupny znak je neznamy cil -> Z3: ask. POZOR: ale NE u kazdeho globu:
     # `ls *.md` nebo `grep x *.ts` by se ptalo pokazde a takova brana se do tydne
     # vypne. Ptame se jen tehdy, kdyz ten glob DOKAZE padnout na chranene jmeno.
-    if ($base -match '[\*\?]') {
+    # Nalez N26 (Tom, ziva ukazka): glob se vyhodnocoval i nad textem, ktery zadna
+    # cesta neni. `git commit -m "**2**"` (hvezdicky z markdownu) dalo glob `**2**`,
+    # ten sedne na `server.p12` a hook se ZEPTAL na commit message. Vyhodnocuje se
+    # proto jen tam, kde glob DOOPRAVDY rozvine shell: nad NEUVOZENYM tokenem
+    # v pozici cesty u prikazu, ktery soubory cte nebo kopiruje. Detail u
+    # Get-PathCandidate; sem prichazi uz jen vysledek.
+    if ($AllowGlob -and $base -match '[\*\?]') {
         $globRegex = '^' + ([regex]::Escape($base) -replace '\\\*', '.*' -replace '\\\?', '.') + '$'
         foreach ($known in @(Get-Field $sec 'protectedBaseNames' @())) {
             if ([regex]::IsMatch([string]$known, $globRegex, 'IgnoreCase')) {
@@ -133,8 +139,27 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config) {
 
 # Vytahne z prikazu tokeny, ktere vypadaji jako cesta. Slovo bez lomitka a bez
 # tecky na zacatku cestou neni - jinak by kazdy prepinac spustil falesny nalez.
-function Get-PathCandidate([string]$Command) {
+# Prikazy, u kterych je pozicionalni argument CESTA - jen u nich ma smysl ptat se
+# na zastupny znak. `echo`, `git commit -m`, `Write-Host` ani vzor u `grep` cesta
+# nejsou (nalez N26).
+$script:PathReadCommandsFallback = @(
+    'cat', 'type', 'get-content', 'gc', 'more', 'less', 'head', 'tail',
+    'cp', 'copy', 'copy-item', 'mv', 'move', 'move-item',
+    'ls', 'dir', 'get-childitem', 'gci', 'get-item', 'gi',
+    'compress-archive', 'tar', 'zip', 'scp', 'rsync', 'findstr', 'select-string'
+)
+
+function Get-PathCandidate([string]$Command, $Config = $null) {
     $out = New-Object System.Collections.ArrayList
+    $pathCommands = @($script:PathReadCommandsFallback)
+    if ($null -ne $Config) {
+        $pathCommands = @(Get-Field (Get-Field $Config 'secrets') 'pathCommands' $script:PathReadCommandsFallback)
+    }
+
+    # Hodnoty, ktere v prikazu stoji V UVOZOVKACH. Shell v nich glob nerozvine
+    # (a PowerShell retezec negloboval nikdy), takze u nich zastupny znak neznamena
+    # "neznamy cil" - je to obycejny text.
+    $quoted = New-Object System.Collections.Generic.HashSet[string]
 
     # (a) Nalez Metis 23/24: cesta muze byt LITERAL uvnitr vyrazu
     # (`[IO.File]::ReadAllText('.env')`, `python -c "open('.env')"`). Kazdy retezec
@@ -146,11 +171,21 @@ function Get-PathCandidate([string]$Command) {
     foreach ($pattern in @('"([^"]{1,260})"', '''([^'']{1,260})''')) {
         foreach ($m in [regex]::Matches($Command, $pattern)) {
             $value = $m.Groups[1].Value
-            if ($value -ne '') { [void]$out.Add($value) }
+            if ($value -ne '') {
+                [void]$quoted.Add($value)
+                [void]$out.Add(@{ Value = $value; AllowGlob = $false })
+            }
         }
     }
 
-    foreach ($token in (Expand-ColonParameter (Split-Arguments $Command))) {
+    # Prikaz se rozebira po PODPRIKAZECH, aby se u tokenu vedelo, ktery program ho
+    # dostane - glob u `cat` je cesta, glob u `echo` je text.
+    foreach ($sub in (Split-CommandLine $Command)) {
+    $argv = Split-Arguments $sub
+    if ($argv.Count -eq 0) { continue }
+    $subExe = (Get-ExecutableName $argv[0]).ToLowerInvariant()
+    $isPathCommand = ($pathCommands -contains $subExe)
+    foreach ($token in (Expand-ColonParameter $argv)) {
         # (b) Nalez Metis 22: `cat<.env` - presmerovani nemusi mit kolem sebe mezery,
         # takze token muze nest prikaz i cestu naraz.
         foreach ($piece in ($token -split '[<>]')) {
@@ -173,9 +208,13 @@ function Get-PathCandidate([string]$Command) {
                 $t.StartsWith('.') -or $t.StartsWith('~') -or $t.StartsWith('%') -or
                 $t.Contains('.') -or $t -match '^id_' -or
                 $t.Contains('*') -or $t.Contains('?')) {
-                [void]$out.Add($t)
+                # Glob se vyhodnoti jen u NEUVOZENEHO tokenu v pozici cesty
+                # u prikazu, ktery soubory cte nebo kopiruje (nalez N26).
+                $allowGlob = $isPathCommand -and (-not $quoted.Contains($t))
+                [void]$out.Add(@{ Value = $t; AllowGlob = $allowGlob })
             }
         }
+    }
     }
     return ,@($out)
 }
@@ -233,8 +272,8 @@ function Test-SecretCommand([string]$Command, $Config) {
     # zapisove tvary v prikazu (presmerovani, Set-Content, ...) zapinaji sebeochranu
     $isWrite = ($Command -match '(>>?|\btee\b|\bset-content\b|\bout-file\b|\badd-content\b|\bsc\b)')
 
-    foreach ($candidate in (Get-PathCandidate $Command)) {
-        $r = Test-SecretPath $candidate $isWrite $Config
+    foreach ($candidate in (Get-PathCandidate $Command $Config)) {
+        $r = Test-SecretPath $candidate.Value $isWrite $Config ([bool]$candidate.AllowGlob)
         if ($null -eq $r) { continue }
         if ($r.Decision -eq 'deny') { return $r }
         if ($null -eq $worst) { $worst = $r }

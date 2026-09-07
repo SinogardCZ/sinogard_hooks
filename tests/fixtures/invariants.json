@@ -3299,5 +3299,122 @@
       "cmd": "ssh -T git@github.com",
       "expect": "allow",
       "since": "N21 kontrola ssh -T"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -i key.pem host",
+      "expect": "allow",
+      "since": "N24 ssh -i s klicem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -p 2222 host",
+      "expect": "allow",
+      "since": "N24 ssh -p s portem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -o BatchMode=yes host",
+      "expect": "allow",
+      "since": "N24 ssh -o s volbou"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -l tomas host",
+      "expect": "allow",
+      "since": "N24 ssh -l s uzivatelem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -i key.pem host \"rm -rf /\"",
+      "expect": "ask",
+      "since": "N24 kontrola s prikazem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"UPDATE ONLY users SET active=0\"",
+      "expect": "deny",
+      "since": "N25 update only"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"UPDATE users AS u SET active=0\"",
+      "expect": "deny",
+      "since": "N25 update s aliasem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"UPDATE ONLY users SET active=0 WHERE id=1\"",
+      "expect": "allow",
+      "since": "N25 kontrola only s where"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"UPDATE users AS u SET active=0 WHERE u.id=1\"",
+      "expect": "allow",
+      "since": "N25 kontrola alias s where"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git commit -m \"**2**\"",
+      "expect": "allow",
+      "since": "N26 markdown v commitu",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git commit -m \"**2 opravy**\"",
+      "expect": "allow",
+      "since": "N26 markdown s textem",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git commit -m \"fix **2**: nalez\"",
+      "expect": "allow",
+      "since": "N26 markdown uprostred",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo **2**",
+      "expect": "allow",
+      "since": "N26 echo neuvozene",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"a*b\"",
+      "expect": "allow",
+      "since": "N26 echo hvezdicka",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Write-Host \"**2**\"",
+      "expect": "allow",
+      "since": "N26 Write-Host",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "grep \"x*\" src/a.cs",
+      "expect": "allow",
+      "since": "N26 grep vzor",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat *.env",
+      "expect": "ask",
+      "since": "N26 kontrola cat glob",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp *.pem /tmp/x",
+      "expect": "ask",
+      "since": "N26 kontrola cp glob",
+      "hook": "secrets"
     }
   ]}
