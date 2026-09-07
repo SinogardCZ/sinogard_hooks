@@ -26,6 +26,9 @@
   "gate": {
     "allowedRemoveRoots": ["bin", "obj", "node_modules", "tmp", "dist", "TestResults"],
     "localDbHosts": ["localhost", "127.0.0.1", "::1"],
+
+    "_auditFileComment": "Rozhodnutí Toma 2026-09-07/T36-F1 T-10 A: tvary, kde SQL v příkazu není vidět, se už neptají — zapíšou se sem a pustí dál (audit místo brány). Loguje se UDÁLOST, ne obsah: čas, nástroj, id tvaru, rozhodnutí. Soubor vzniká v ${CLAUDE_PLUGIN_DATA}; bez té proměnné se nezapisuje nic a hook mlčí.",
+    "auditFile": "gate-audit.jsonl",
     "protectedBranches": ["main"],
 
     "_sqlClientsComment": "Nástroje, jejichž ARGUMENTY se čtou jako SQL. Bez tohoto seznamu běžely SQL vzory nad surovým textem a `git commit -m \"Add DROP TABLE migration\"` končilo dotazem. GSD je PostgreSQL-only (ADR-008), proto tu nejsou klienti cizích stacků.",
@@ -52,7 +55,6 @@
     ],
 
     "askPatterns": [
-      { "id": "git-rebase",         "pattern": "^git\\s+rebase(\\s|$)",                                "shape": "git rebase" },
       { "id": "ef-migrations-rm",   "pattern": "^dotnet\\s+ef\\s+migrations\\s+remove(\\s|$)",         "shape": "dotnet ef migrations remove" },
       { "id": "invoke-expression",  "pattern": "^(invoke-expression|iex)(\\s|$)",                      "shape": "Invoke-Expression" }
     ],

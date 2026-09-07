@@ -74,7 +74,11 @@ function Get-RowKey($Hook, $Tool, $Value) {
 $doc = [System.IO.File]::ReadAllText($invPath, $utf8) | ConvertFrom-Json
 $existing = @($doc.rows)
 
-$seen = @{}
+# 🔴 Nalez Hestia N27: `@{}` je v PowerShellu case-INSENSITIVE, takze `git clean -fdX`
+# a `git clean -fdx` splynuly v JEDEN klic - a prave na tom rozdilu tahle brana stoji
+# (`-X` je uklid buildu, `-x` maze i neverzovane soubory). Generator z toho hlasil
+# falesny SPOR. Porovnava se proto ordinalne.
+$seen = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
 foreach ($row in $existing) {
     $hook = if ($row.PSObject.Properties['hook']) { [string]$row.hook } else { 'gate' }
     $seen[(Get-RowKey $hook $row.tool $row.cmd)] = [string]$row.expect

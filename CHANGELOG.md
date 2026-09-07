@@ -3,6 +3,70 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.9] — 2026-09-07
+
+**Rozhodnutí Toma 2026-09-07/T36-F1 T-10 A** nad čísly ze sekce *Dotazy a bloky*
+(hlášení 08). Není to změkčení pravidel, ale **změna rozsahu brány, kterou vydal
+zadavatel** — a u SQL ji doprovází evidence.
+
+### Změněno — `git rebase` a `git clean -fdX` → `allow`
+
+| příkaz | 0.1.8 | 0.1.9 |
+|---|---|---|
+| `git rebase main`, `git rebase -i HEAD~3` | ask | **allow** |
+| `git clean -fdX` (jen ignorované soubory) | ask | **allow** |
+
+**Kontrolní skupina:** `git clean -fdx` a `git clean -fd` zůstávají `deny`. Rozdíl je
+**case-sensitivní** a drží ho `-ccontains`.
+
+### Změněno — SQL, které v příkazu není vidět → `allow` + zápis do JSONL
+
+| příkaz | 0.1.8 | 0.1.9 |
+|---|---|---|
+| `psql -h prod -f migrace.sql` | ask | **allow** + audit |
+| `psql -h prod < drop.sql` | ask | **allow** + audit |
+| `psql -h prod <<< $SQL` | ask | **allow** + audit |
+| `cat drop.sql \| psql -h prod` | ask | **allow** + audit |
+
+Zapisuje se do `${CLAUDE_PLUGIN_DATA}/gate-audit.jsonl` (`gate.auditFile`), a to
+**událost, ne obsah**: čas, nástroj, id tvaru, rozhodnutí. Text příkazu do souboru
+nejde (zadání §4 bod 8 — riziko úniku). Bez `CLAUDE_PLUGIN_DATA` se nezapisuje nic
+a hook mlčí; evidence je **fail-open** a nesmí být důvod, proč brána spadne.
+
+🔴 **Kontrolní skupina je tu nejdůležitější část:** SQL, které v příkazu **vidět je**,
+se rozhoduje dál podle hostitele — `echo "DROP TABLE users" | psql -h prod` a
+`psql -h prod -c "DROP TABLE x"` zůstávají `deny`, `psql -h localhost -c "DROP TABLE x"`
+zůstává `ask`, `psql -h prod <<< "DROP TABLE x"` zůstává `deny`.
+
+### Beze změny — třídy `ask`, které zůstávají
+
+`.claude/settings.local.json` (čtení) · nerozebratelný obal (`bash -c "$CMD"`) ·
+`ssh host "…"` · krátká absolutní cesta `/xxx` · spuštění proměnné (`& $cmd`).
+Rozhodnutí T-10 A jmenuje i to, co se **nemění**, a sada to drží fixturami.
+
+### Opraveno — N27 (vlastní nález): generátor invariantu neodlišil `-fdX` od `-fdx`
+
+Hashtable `@{}` je v PowerShellu **case-insensitive**, takže klíč
+`gate|Bash|git clean -fdX` a `…-fdx` splynuly v jeden a generátor hlásil **falešný spor**
+(„invariant říká allow, sada deny"). A je to přesně ten rozdíl, na kterém tahle brána
+stojí. Porovnává se nově **ordinálně**.
+
+### 🔴 Co se z T-10 A NEPODAŘILO dodat
+
+`$sql | psql -h prod` (PowerShell) zůstává **`ask`**. Změřeno: ten dotaz nepochází ze
+SQL pravidla, ale z pravidla Z3 („proměnná v pozici příkazu"), protože `$sql` je
+samostatný článek roury. Pokus rozšířit `Test-ExpressionStatement` o holou proměnnou
+jsem **zavedla a zase vzala zpět** — změřeno, že tím `& $cmd` spadlo z `ask` na `allow`
+(informace o `&` se ztrácí už ve `Split-CommandLine`). Otevřít tenhle tvar bez otevření
+spuštění proměnné vyžaduje přepis toho, jak `Split-SqlPipeline` vrací `Rest` — to je víc
+než tenhle bod. → **v0.2**.
+
+### Invariant
+
+Devět řádků **změnilo očekávání**. Append-only pravidlo dovoluje řádek změnit jen
+s citovaným rozhodnutím, takže citace stojí **přímo v řádku** (pole `since`:
+`… | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A`). 536 → **548** řádků.
+
 ## [0.1.8] — 2026-09-07
 
 Revize Ady nad kolem 6. Obě položky jsou **následky oprav z kola 6**, ne nové tvary —
@@ -634,6 +698,7 @@ První verze. Čtyři hooky, Windows-first, bez externích závislostí.
 - **`userConfig` pluginu se nepoužívá** — ukládá se do globálních user settings,
   tedy společně pro všechny projekty na stroji.
 
+[0.1.9]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.9
 [0.1.8]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.8
 [0.1.7]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.7
 [0.1.6]: https://github.com/SinogardCZ/sinogard_hooks/releases/tag/v0.1.6

@@ -173,7 +173,6 @@ $metisCases = @(
 # ----------------------------------------------------------------- ask (Z2) ---
 
 $askCases = @(
-    (Case 'rebase'                     'git rebase main' 'ask')
     (Case 'force-with-lease jina'      'git push --force-with-lease origin feature/x' 'ask')
     (Case 'force push jina vetev'      'git push --force origin feature/x' 'ask')
     (Case 'force push bez cile'        'git push --force origin' 'ask')
@@ -183,7 +182,6 @@ $askCases = @(
     (Case 'Invoke-Expression'          'Invoke-Expression $cmd' 'ask' 'PowerShell')
     (Case 'iex'                        'iex $cmd' 'ask' 'PowerShell')
     (Case 'ef migrations remove'       'dotnet ef migrations remove' 'ask')
-    (Case 'clean -fdX'                 'git clean -fdX' 'ask')
     (Case 'DROP TABLE bez hostu'       'psql -c "DROP TABLE Record"' 'ask')
     (Case 'dropdb lokalni'             'dropdb gsd_test_e2e_1' 'ask')
     (Case 'ef database drop lokalni'   'dotnet ef database drop' 'ask')
@@ -358,8 +356,9 @@ $amber2Cases = @(
     # --- C1: regrese, kterou zavedla oprava B4. Roura do SQL klienta. ---
     (Case 'C1 echo do psql'             'echo "DROP TABLE users" | psql -h db.firma.cz' 'deny')
     (Case 'C1 echo lokalne'             'echo "TRUNCATE users" | psql' 'ask')
-    (Case 'C1 cat souboru do psql'      'cat drop.sql | psql -h db.firma.cz' 'ask')
-    (Case 'C1 Get-Content do psql'      'Get-Content drop.sql | psql -h db.firma.cz' 'ask' 'PowerShell')
+    # T-10 A: SQL, ktere v prikazu neni videt, uz nezastavuje - zapise se do auditu.
+    (Case 'C1 cat souboru do psql'      'cat drop.sql | psql -h db.firma.cz' 'allow')
+    (Case 'C1 Get-Content do psql'      'Get-Content drop.sql | psql -h db.firma.cz' 'allow' 'PowerShell')
     # kontrolni skupina
     (Case 'C1 kontrola SELECT'          'echo "SELECT 1" | psql -h db.firma.cz' 'allow')
     (Case 'C1 kontrola cizi sink'       'echo "DROP TABLE x" | grep -i drop' 'allow')
@@ -394,8 +393,8 @@ $amber2Cases = @(
     (Case 'C4 docker exec psql'         "docker exec -i db psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
     (Case 'C4 sqlcmd -S -Q'             'sqlcmd -S db.firma.cz -Q "DROP TABLE x"' 'deny')
     (Case 'C4 sqlcmd lokalne'           'sqlcmd -Q "TRUNCATE TABLE x"' 'ask')
-    (Case 'C4 psql -f souborem'         'psql -h db.firma.cz -f migrace.sql' 'ask')
-    (Case 'C4 sqlcmd -i souborem'       'sqlcmd -S db.firma.cz -i migrace.sql' 'ask')
+    (Case 'C4 psql -f souborem'         'psql -h db.firma.cz -f migrace.sql' 'allow')
+    (Case 'C4 sqlcmd -i souborem'       'sqlcmd -S db.firma.cz -i migrace.sql' 'allow')
     (Case 'C4 kontrola sudo SELECT'     "sudo -u postgres psql -h db.firma.cz <<SQL`nSELECT 1`nSQL" 'allow')
 
     # --- C7: prava strana prirazeni bez volani ---
@@ -776,12 +775,12 @@ $ada6Cases = @(
     (Case 'N23 roura v -c retezci'       'psql -h localhost -c "SELECT ''a|b''"' 'allow')
 
     # N20 - presmerovani stdin do SQL klienta
-    (Case 'N20 stdin ze souboru'         'psql -h prod < drop.sql' 'ask')
-    (Case 'N20 here-string z promenne'   'psql -h prod <<< $SQL' 'ask')
+    (Case 'N20 stdin ze souboru'         'psql -h prod < drop.sql' 'allow')
+    (Case 'N20 here-string z promenne'   'psql -h prod <<< $SQL' 'allow')
     (Case 'N20 here-string literal'      'psql -h prod <<< "DROP TABLE x"' 'deny')
     # 🔴 kontrolni skupina: `<` UVNITR retezce neni presmerovani
     (Case 'N20 kontrola < v dotazu'      'psql -h prod -c "SELECT * FROM t WHERE a < 5"' 'allow')
-    (Case 'N20 kontrola -f drzi'         'psql -h prod -f drop.sql' 'ask')
+    (Case 'N20 kontrola -f drzi'         'psql -h prod -f drop.sql' 'allow')
 
     # N22 - UPDATE ... SET bez WHERE (rozsireni rozsahu, rozhodl Tom T-9 A)
     (Case 'N22 update bez where prod'    'psql -h prod -c "UPDATE users SET active=0"' 'deny')
@@ -828,6 +827,74 @@ $ada6bCases = @(
 )
 
 Test-Cases 'revize Ady nad kolem 6 (N24, N25)' $ada6bCases
+
+# ================================================================================
+#  ROZHODNUTI TOMA 2026-09-07/T36-F1 T-10 A - tridy `ask` prehodnocene nad cisly
+#
+#  Sekce "Dotazy a bloky" v hlaseni 08 dala pocty misto dojmu; Tom nad nimi rozhodl,
+#  ktere tridy `ask` uz branou byt nemaji. NENI to zmekceni pravidla - je to zmena
+#  ROZSAHU brany, kterou vydal zadavatel, a u SQL ji doprovazi EVIDENCE.
+# ================================================================================
+
+$t10Cases = @(
+    # git rebase a git clean -fdX -> ALLOW (bezna prace)
+    (Case 'T10 rebase'                  'git rebase main' 'allow')
+    (Case 'T10 rebase -i'               'git rebase -i HEAD~3' 'allow')
+    (Case 'T10 clean -fdX'              'git clean -fdX' 'allow')
+    # !! kontrolni skupina: `-x` je jine pismeno a jine rozhodnuti
+    (Case 'T10 kontrola clean -fdx'     'git clean -fdx' 'deny')
+    (Case 'T10 kontrola clean -fd'      'git clean -fd' 'deny')
+
+    # SQL, ktere v prikazu NENI videt -> ALLOW + zapis do JSONL
+    (Case 'T10 psql -f'                 'psql -h prod -f migrace.sql' 'allow')
+    (Case 'T10 stdin ze souboru'        'psql -h prod < drop.sql' 'allow')
+    (Case 'T10 here-string z promenne'  'psql -h prod <<< $SQL' 'allow')
+    (Case 'T10 cat do psql'             'cat drop.sql | psql -h prod' 'allow')
+    # !! kontrolni skupina: SQL, ktere VIDET JE, se rozhoduje dal podle hostitele
+    (Case 'T10 kontrola literal v roure' 'echo "DROP TABLE users" | psql -h prod' 'deny')
+    (Case 'T10 kontrola -c na prod'      'psql -h prod -c "DROP TABLE x"' 'deny')
+    (Case 'T10 kontrola -c na localhost' 'psql -h localhost -c "DROP TABLE x"' 'ask')
+    (Case 'T10 kontrola here-string literal' 'psql -h prod <<< "DROP TABLE x"' 'deny')
+
+    # !! tridy, ktere ask ZUSTAVAJI (rozhodnuti T-10 A jmenuje i to, co se NEMENI)
+    (Case 'T10 zustava obal s promennou' 'bash -c "$CMD"' 'ask')
+    (Case 'T10 zustava ssh s prikazem'   'ssh host "rm -rf /"' 'ask')
+    (Case 'T10 zustava kratka cesta'     'rm -rf /srv' 'ask')
+    (Case 'T10 zustava spusteni promenne' '& $cmd' 'ask' 'PowerShell')
+)
+
+Test-Cases 'rozhodnuti Toma T-10 A (tridy ask)' $t10Cases
+
+# --------------------------------------------- evidence misto brany (T-10 A) ---
+#
+# "allow + audit" je jine tvrzeni nez "allow". Kdyby se radek nezapsal, zmenilo by se
+# rozhodnuti a NEZUSTALA by po nem stopa - a presne to Tom timhle rozhodnutim nechtel.
+# Tvrdi se proto OBOJI: ze radek vznikne, a ze v nem NENI text prikazu.
+
+Start-Case 'T-10 A: SQL neviditelne v prikazu se ZAPISE do auditu'
+$auditDir = Join-Path $script:TempDir ('audit-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+$auditPath = Join-Path $auditDir 'gate-audit.jsonl'
+$jsonAudit = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'psql -h prod -f migrace.sql' }
+$rAudit = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonAudit -Environment @{ 'CLAUDE_PLUGIN_DATA' = $auditDir }
+Assert-Equal 'allow' (Get-Decision $rAudit) '[audit] rozhodnuti je allow'
+Assert-True ([System.IO.File]::Exists($auditPath)) '[audit] radek se zapsal'
+if ([System.IO.File]::Exists($auditPath)) {
+    $auditLine = [System.IO.File]::ReadAllText($auditPath, ([System.Text.UTF8Encoding]::new($false)))
+    Assert-True ($auditLine -match '"shape":"sqlFromFile"') '[audit] nese id tvaru'
+    Assert-True ($auditLine -match '"decision":"allow"') '[audit] nese rozhodnuti'
+    Assert-True ($auditLine -match '"tool":"Bash"') '[audit] nese nastroj'
+    # 🔴 zadani par. 4 bod 8: obsah prikazu se NELOGUJE (riziko uniku)
+    Assert-True ($auditLine -notmatch 'migrace\.sql') '[audit] NEOBSAHUJE text prikazu'
+    Assert-True ($auditLine -notmatch 'psql') '[audit] NEOBSAHUJE jmeno klienta z prikazu'
+}
+
+# 🔴 kontrolni skupina: bez datoveho adresare se nezapisuje NIC a hook se tim nezastavi
+Start-Case 'T-10 A: bez CLAUDE_PLUGIN_DATA se nezapisuje nic (fail-open)'
+$auditDir2 = Join-Path $script:TempDir ('audit-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+$rAudit2 = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonAudit -Environment @{ 'CLAUDE_PLUGIN_DATA' = '' }
+Assert-Equal 'allow' (Get-Decision $rAudit2) '[audit/kontrola] rozhodnuti je porad allow'
+Assert-Equal 0 $rAudit2.Exit '[audit/kontrola] navratovy kod 0'
+Assert-True (-not [System.IO.Directory]::Exists($auditDir2)) '[audit/kontrola] zadny soubor nevznikl'
 
 # ================================================================================
 #  REGRESNI INVARIANT (Amber, bod 2 kola 3)

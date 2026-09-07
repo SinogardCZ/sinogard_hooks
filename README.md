@@ -35,6 +35,31 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 V režimu `bypassPermissions` se **`ask` vydává jako `deny`**: v bypassu by se dotaz
 nezobrazil, takže šedá zóna by tiše propadla. Důvod to říká nahlas.
 
+### Třídy `ask` — a proč některé od 0.1.9 už `ask` nejsou
+
+Rozsah brány je **rozhodnutí zadavatele**, ne technická nutnost. Po první ostré session
+se spočítalo, co se doopravdy ptalo, a nad těmi čísly padlo rozhodnutí
+(Tom, 2026-09-07/T36-F1 T-10 A):
+
+| třída | do 0.1.8 | od 0.1.9 | proč |
+|---|---|---|---|
+| `git rebase` | ask | **allow** | běžná práce s historií vlastní větve |
+| `git clean -fdX` (jen ignorované) | ask | **allow** | úklid buildu; `-fdx` zůstává `deny` |
+| SQL, které v příkazu **není vidět** (`-f`, `<`, `<<< $VAR`, `cat x.sql \| psql`) | ask | **allow + audit** | rozsah neznáme, ale je to běžná práce — místo dotazu se událost **zapíše** |
+| čtení `.claude/settings.local.json` | ask | ask | nese hodnoty secrets |
+| nerozebratelný obal (`bash -c "$CMD"`) | ask | ask | slepé místo, ne známý tvar |
+| `ssh host "příkaz"` | ask | ask | cizí stroj, kde naše pravidla neplatí |
+| krátká absolutní cesta `/xxx` | ask | ask | od přepínače `cmd` k nerozeznání |
+| spuštění proměnné (`& $cmd`) | ask | ask | obsah se spustí, a ten nevidíme |
+
+🔴 **„allow + audit" není totéž co „allow".** Událost jde do
+`${CLAUDE_PLUGIN_DATA}/gate-audit.jsonl`: čas, nástroj, id tvaru, rozhodnutí —
+**nikdy obsah příkazu**. Bez `CLAUDE_PLUGIN_DATA` se nezapisuje nic a hook mlčí:
+evidence je fail-open a nesmí být důvod, proč brána spadne.
+
+🔴 **Co se tím NEotevřelo:** SQL, které v příkazu **vidět je**, se rozhoduje dál podle
+hostitele. `echo "DROP TABLE users" | psql -h prod` je pořád `deny`.
+
 ---
 
 ## Instalace

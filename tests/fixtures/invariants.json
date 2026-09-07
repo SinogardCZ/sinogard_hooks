@@ -1,8 +1,7 @@
 {
   "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli sad, ne rucnim vyberem - generator je tests/_generate-invariants.ps1 (nalez Amber H2: soubor se na generator odvolaval, ale ten v repu nebyl). Radek bez klice 'hook'/'kind' je z prvniho vydani, kdy byl invariant jen pro branu nad prikazy; chybejici klic znamena 'gate' / 'cmd' a dopisovat ho zpetne by znamenalo prepsat 142 radku, ktere prepsat nemam.",
   "_odebrano": "2026-09-05: tvar 'echo DROP | TABLE users | psql' - radek nikdy neplatil. 'DROP | TABLE' neni platne SQL, takze deny bylo MOJE chybne ocekavani z tehoz kola, ne drivejsi chovani. Nahrazeno tvarem, ktery roury i stredniky v retezci testuje na platnem SQL.",
-  "rows":
-  [
+  "rows": [
     {
       "tool": "Bash",
       "cmd": "git push --force origin main",
@@ -912,8 +911,8 @@
     {
       "tool": "Bash",
       "cmd": "git rebase main",
-      "expect": "ask",
-      "since": "rebase"
+      "expect": "allow",
+      "since": "rebase | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
@@ -972,8 +971,8 @@
     {
       "tool": "Bash",
       "cmd": "git clean -fdX",
-      "expect": "ask",
-      "since": "clean -fdX"
+      "expect": "allow",
+      "since": "clean -fdX | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
@@ -1326,14 +1325,14 @@
     {
       "tool": "Bash",
       "cmd": "cat drop.sql | psql -h db.firma.cz",
-      "expect": "ask",
-      "since": "C1 cat souboru do psql"
+      "expect": "allow",
+      "since": "C1 cat souboru do psql | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "PowerShell",
       "cmd": "Get-Content drop.sql | psql -h db.firma.cz",
-      "expect": "ask",
-      "since": "C1 Get-Content do psql"
+      "expect": "allow",
+      "since": "C1 Get-Content do psql | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
@@ -1368,14 +1367,14 @@
     {
       "tool": "Bash",
       "cmd": "psql -h db.firma.cz -f migrace.sql",
-      "expect": "ask",
-      "since": "C4 psql -f souborem"
+      "expect": "allow",
+      "since": "C4 psql -f souborem | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
       "cmd": "sqlcmd -S db.firma.cz -i migrace.sql",
-      "expect": "ask",
-      "since": "C4 sqlcmd -i souborem"
+      "expect": "allow",
+      "since": "C4 sqlcmd -i souborem | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
@@ -3225,14 +3224,14 @@
     {
       "tool": "Bash",
       "cmd": "psql -h prod < drop.sql",
-      "expect": "ask",
-      "since": "N20 stdin ze souboru"
+      "expect": "allow",
+      "since": "N20 stdin ze souboru | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
       "cmd": "psql -h prod <<< $SQL",
-      "expect": "ask",
-      "since": "N20 here-string z promenne"
+      "expect": "allow",
+      "since": "N20 here-string z promenne | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
@@ -3249,8 +3248,8 @@
     {
       "tool": "Bash",
       "cmd": "psql -h prod -f drop.sql",
-      "expect": "ask",
-      "since": "N20 kontrola -f drzi"
+      "expect": "allow",
+      "since": "N20 kontrola -f drzi | zmeneno rozhodnutim Toma 2026-09-07/T36-F1 T-10 A"
     },
     {
       "tool": "Bash",
@@ -3416,5 +3415,80 @@
       "expect": "ask",
       "since": "N26 kontrola cp glob",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/x",
+      "expect": "deny",
+      "since": "branch -d"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git rebase -i HEAD~3",
+      "expect": "allow",
+      "since": "T10 rebase -i"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git clean -fdx",
+      "expect": "deny",
+      "since": "T10 kontrola clean -fdx"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -f migrace.sql",
+      "expect": "allow",
+      "since": "T10 psql -f"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat drop.sql | psql -h prod",
+      "expect": "allow",
+      "since": "T10 cat do psql"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "T10 kontrola -c na prod"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h localhost -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "T10 kontrola -c na localhost"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"$CMD\"",
+      "expect": "ask",
+      "since": "T10 zustava obal s promennou"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rm -rf /srv",
+      "expect": "ask",
+      "since": "T10 zustava kratka cesta"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& $cmd",
+      "expect": "ask",
+      "since": "T10 zustava spusteni promenne"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:Path",
+      "expect": "allow",
+      "since": "C6 kontrola Path",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "echo $env:github_token",
+      "expect": "ask",
+      "since": "H1 env:github_token",
+      "hook": "secrets"
     }
-  ]}
+  ]
+}

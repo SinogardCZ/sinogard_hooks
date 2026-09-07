@@ -451,7 +451,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     if ($trimmed -eq '') { return $out }
     if ($Depth -gt 5) { [void]$out.Add(@{ Kind = 'opaque'; Raw = $trimmed }); return $out }
 
+    # `&` je operator SPUSTENI. Rozdil je podstatny az u hole promenne: `$sql | psql`
+    # posila HODNOTU, kdezto `& $cmd` obsah promenne SPUSTI. Priznak se proto nese dal.
+    $invoked = $false
     if ($trimmed.StartsWith('&') -and -not $trimmed.StartsWith('&&')) {
+        $invoked = $true
         $trimmed = $trimmed.Substring(1).Trim()
         if ($trimmed -eq '') { return $out }
     }
@@ -494,7 +498,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # Nalez Amber L1: cteni vlastnosti ani `$i++` neni prikaz. Detail a duvod, proc
     # to nesmi platit v Bashi, jsou u Test-ExpressionStatement; escape skeneru je
     # jediny spolehlivy ukazatel jazyka (prepina ho i sestup do vnorenneho shellu).
-    if ((Get-ScannerEscape) -eq '`' -and (Test-ExpressionStatement $stripped)) { return $out }
+    if ((Get-ScannerEscape) -eq '`' -and (-not $invoked) -and (Test-ExpressionStatement $stripped)) { return $out }
 
     # Nalez Amber C7b (zmereno): zavorkovy obal `(git reset --hard)` dal argv[0] = `(git`,
     # z toho exe `(git`, a zadne pravidlo se nechytilo -> allow. Obal se strhne a vnitrek
@@ -884,8 +888,11 @@ function Test-GitCleanRule($Leaf, $Config) {
 
     # -ccontains, ne -contains: `-contains` je case-INSENSITIVE a neodlisil by
     # `git clean -X` (jen ignorovane, legitimni uklid) od `-x` (i neverzovane).
+    # Rozhodnuti Toma 2026-09-07/T36-F1 T-10 A: `git clean -fdX` (jen IGNOROVANE soubory,
+    # tedy uklid buildu) je bezna prace a konci ALLOW. `-x` (i neverzovane) zustava deny -
+    # rozdil je case-SENSITIVNI a drzi ho `-ccontains`.
     if (($letters -ccontains 'X') -and -not ($letters -ccontains 'x')) {
-        return @{ Decision = 'ask'; Shape = (Get-Field $shapes 'gitCleanIgnored' 'git clean -X') }
+        return $null
     }
     return @{ Decision = 'deny'; Shape = (Get-Field $shapes 'gitClean' 'git clean -f') }
 }
@@ -1211,9 +1218,10 @@ function Test-DatabaseRule($Leaf, $Config) {
 
     # SQL prislo ze souboru nebo z roury - obsah nevidime, rozsah nezname (Z3 -> ask).
     if ($sql -match '__SQL_ZE_SOUBORU__') {
-        return @{ Decision = 'ask'
-                  Shape = ((Get-Field $shapes 'sqlFromPipe' 'SQL, ktery neni v prikazu videt ({text})') `
-                           -replace '\{text\}', $Leaf.Text) }
+        # T-10 A: `psql -f migrace.sql`, `psql < drop.sql`, `psql <<< $SQL` - obsah videt
+        # neni, ale je to bezna prace. Audit misto brany.
+        Write-GateAudit $script:ToolName 'sqlFromFile' 'allow' $Config
+        return $null
     }
 
     $sqlDestructive = $false
@@ -1282,6 +1290,36 @@ function Get-RemoteShellPositional($Argv) {
     return $out
 }
 
+# Rozhodnuti Toma T-10 A: tvary, kde SQL v prikazu NENI videt, uz nezastavuji - ale
+# ZAZNAMENAVAJI se. Audit misto brany.
+#
+# !! Loguje se UDALOST, ne obsah: cas, nastroj, id tvaru a rozhodnuti. Text prikazu do
+# souboru NEJDE (zadani par. 4 bod 8 - riziko uniku). Bez CLAUDE_PLUGIN_DATA se nezapisuje
+# nic a hook mlci; evidence nesmi byt duvod, proc brana spadne.
+function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision, $Config) {
+    try {
+        $dir = $env:CLAUDE_PLUGIN_DATA
+        if ([string]::IsNullOrWhiteSpace($dir)) { return }
+        $file = [string](Get-Field (Get-Field $Config 'gate') 'auditFile' 'gate-audit.jsonl')
+        $path = Join-SafePath $dir $file
+        if ($null -eq $path) { return }
+        [void][System.IO.Directory]::CreateDirectory($dir)
+        $line = [ordered]@{
+            ts       = (Get-Date).ToString('o')
+            tool     = $ToolName
+            shape    = $ShapeId
+            decision = $Decision
+        } | ConvertTo-Json -Depth 3 -Compress
+        $bytes = ([System.Text.UTF8Encoding]::new($false)).GetBytes($line + "`n")
+        $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Append,
+                                         [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Dispose()
+    } catch {
+        # Evidence je fail-OPEN: kdyz se zapsat nepodari, brana se tim nesmi zastavit.
+    }
+}
+
 function Test-Leaf($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
@@ -1315,8 +1353,10 @@ function Test-Leaf($Leaf, $Config) {
     # Nalez Amber C1: do SQL klienta tece neco, co v prikazu neni videt
     # (`cat drop.sql | psql`, `$sql | psql`). Rozsah nezname -> Z3.
     if ($Leaf.Kind -eq 'sqlPipeOpaque') {
-        return @{ Decision = 'ask'
-                  Shape = ((Get-Field $shapes 'sqlFromPipe' 'SQL z roury ({text})') -replace '\{text\}', $Leaf.Text) }
+        # T-10 A: rozsah nezname, ale `cat migrace.sql | psql` je bezna prace. Misto
+        # dotazu se udalost ZAPISE (audit) a pusti se dal.
+        Write-GateAudit $script:ToolName 'sqlFromPipe' 'allow' $Config
+        return $null
     }
 
     # Nalez Amber D3: telo heredocu je DATA, ne prikazova radka. Bez teto zavory
@@ -1429,6 +1469,9 @@ if ([string]::IsNullOrWhiteSpace($command)) {
 # Escape znak skeneru je jiny v Bashi (`\`) a v PowerShellu (zpetny apostrof) a zamena
 # dela diru obema smery - viz komentar u Set-ScannerEscape (nalez Amber G1).
 Set-ScannerEscape $toolName
+# Jmeno nastroje potrebuje evidence T-10 A hluboko v rozhodovani, kam se parametrem
+# neprotahne bez refaktoru vsech podpisu.
+$script:ToolName = $toolName
 
 if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 
