@@ -109,6 +109,33 @@ začátku. Kontrolní skupina: `& { rm -rf src }`, `& { git status; rm -rf src }
 `& (git reset --hard)` a `foo & rm -rf src` zůstávají `deny`, `& { Get-Date }`
 a `dotnet test &` zůstávají bez rozhodnutí.
 
+### Dokumentováno — mělké slučování + rostoucí klíč `gate` (nález K2-1 review Amber)
+
+`Get-HookConfig` nahrazuje **celý** top-level klíč. Override, který nese jen jednu
+hodnotu z `gate`, tedy zahodí `denyPatterns`, `askPatterns`, `allowedRemoveRoots`,
+`shapes`, `sqlClients`, `codeInterpreters` i `interpreterDestructiveTokens`. Je to
+**stará vlastnost** (0.1.x), ale 0.1.10 do `gate` přidává dva klíče a README dosud
+takový částečný override sám předváděl.
+
+Změřeno s override `{"gate":{"opaque":{"variable":"audit"}}}`:
+
+| příkaz | bez override | s ním |
+|---|---|---|
+| `git reset --hard`, `git branch -D x`, `git filter-branch` | `deny` | **žádné rozhodnutí** |
+| `rm -rf bin` (povolená složka) | žádné rozhodnutí | **`deny`** |
+| `rm -rf src`, `psql -h prod -c "DROP TABLE x"`, `& $cmd` | deny / deny / ask | beze změny |
+
+🔴 Jde to **oběma směry**: brána ztratí tvary, které měla držet, a zároveň začne
+blokovat běžnou práci. Pravidla žijící v kódu drží dál — proto se ztráta nepozná podle
+toho, že by „přestalo fungovat všechno".
+
+**Kód se nemění.** README §Konfigurace dostal vlastní 🔴 sekci s tou tabulkou a příklad
+už částečný `gate` nepředvádí; sada nese sedm případů jako **doklad omezení**
+(`K2-1: override gate bez denyPatterns`), včetně kontrolní skupiny pro pravidla v kódu.
+Tvar hlubšího slučování (per podklíč `gate.*`, nebo `opaque` a
+`interpreterDestructiveTokens` na top-level) je rozhodnutí do **v0.2** — nese ho
+TASK-106 bod 10.
+
 ### Přidáno — fixtura `tests/fixtures/ask-vypis-2026-09-07.json`
 
 Všech **46** příkazů, na které se 0.1.9 ptal v sessions 7. 9. (GSD 31, HRMS 5,

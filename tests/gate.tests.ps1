@@ -1033,6 +1033,48 @@ Test-OpaquePolicy 'ask'   'ask'   'ask'
 # 🔴 Neznama hodnota NESMI znamenat audit: preklep v override by branu tise otevrel.
 Test-OpaquePolicy 'neznama' 'maybe' 'ask'
 
+# ------------------------------------- HRANICE melkeho slucovani (K2-1) ---
+#
+# 🔴 Tohle NENI oprava, je to DOKLAD OMEZENI. Slouceni je melke na nejvyssi urovni,
+# takze override, ktery nese jen jednu hodnotu z `gate`, zahodi cely zbytek klice -
+# `denyPatterns`, `allowedRemoveRoots`, `shapes`, ... - a ty padnou na fallbacky.
+# Je to stara vlastnost (0.1.x), ale 0.1.10 do `gate` pridava dva klice, takze je
+# nove mnohem pravdepodobnejsi, ze si nekdo `gate` prepise castecne.
+#
+# Jde to OBEMA smery a prave to je na tom zradne:
+#   `git reset --hard` PRESTANE byt deny (pravidlo bylo v `denyPatterns`)
+#   `rm -rf bin`       ZACNE byt deny  (povolena slozka byla v `allowedRemoveRoots`)
+# Kdyby to slo jen jednim smerem, poznalo by se to; takhle brana dal neco blokuje,
+# takze "porad funguje" je pravdive pozorovani a zaroven falesny zaver.
+#
+# Tvar hlubsiho slucovani je rozhodnuti do v0.2 (TASK-106 bod 10). Az se zmeni,
+# tenhle pripad ZCERVENA - a to je zamer: doklad omezeni musi padnout, jakmile
+# omezeni prestane platit.
+function Test-PartialGateOverride([string]$Name, [string]$Tool, [string]$Cmd, [string]$Expect) {
+    $dir = Join-Path $script:TempDir ('partial-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $dir '.claude'))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $dir '.claude/sinogard-hooks.json'),
+        '{"gate":{"opaque":{"variable":"audit"}}}',
+        ([System.Text.UTF8Encoding]::new($false)))
+    $template = if ($Tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+    $json = New-HookInput $template @{ 'tool_input.command' = $Cmd }
+    $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment @{ CLAUDE_PROJECT_DIR = $dir }
+    Assert-Equal $Expect (Get-Decision $r) ("[K2-1/{0}] {1}" -f $Name, $Cmd)
+}
+
+Start-Case 'K2-1: override `gate` bez `denyPatterns` ZTRATI tvary (doklad omezeni)'
+Test-PartialGateOverride 'reset --hard mizi'  'Bash' 'git reset --hard' 'allow'
+Test-PartialGateOverride 'branch -D mizi'     'Bash' 'git branch -D feature/x' 'allow'
+Test-PartialGateOverride 'filter-branch mizi' 'Bash' 'git filter-branch --tree-filter x HEAD' 'allow'
+# 🔴 druhy smer teze ztraty: povolena slozka zmizi taky, takze vznikne FALESNY BLOK
+Test-PartialGateOverride 'rm -rf bin blokuje' 'Bash' 'rm -rf bin' 'deny'
+# 🔴 kontrolni skupina: pravidla, ktera ziji v KODU (ne v konfiguraci), drzi dal -
+#    bez ni by se dalo cist, ze override vypne branu celou, a to je nepravda
+Test-PartialGateOverride 'rm -rf src drzi'    'Bash' 'rm -rf src' 'deny'
+Test-PartialGateOverride 'DB podle hosta drzi' 'Bash' 'psql -h db.firma.cz -c "DROP TABLE users"' 'deny'
+Test-PartialGateOverride 'invoked drzi'       'PowerShell' '& $cmd' 'ask'
+
 # ================================================================================
 #  VYPIS DOTAZU 7. 9. 2026 - 46 PRIKAZU ZE TRI SESSIONS (GSD 31, HRMS 5, Utraty 10)
 #

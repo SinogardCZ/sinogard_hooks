@@ -99,21 +99,40 @@ Projekt je může přepsat souborem `.claude/sinogard-hooks.json` ve své složc
 ```jsonc
 {
   "hooks": { "gate": true, "secrets": true, "resumeCost": true, "notify": false },
-  "gate": {
-    "allowedRemoveRoots": ["bin", "obj", "node_modules", "tmp", "dist", "TestResults"],
-    "localDbHosts": ["localhost", "127.0.0.1", "::1"],
-    "protectedBranches": ["main"],
-    "opaque": {
-      "variable": "audit", "interpreter": "audit", "heredocUnterminated": "audit",
-      "depth": "audit", "invoked": "ask", "encoded": "ask"
-    }
-  },
   "notify": { "channel": "osc9" }
 }
 ```
 
-**Slučování je mělké:** klíč v override nahradí celý klíč z defaults. Je to záměr —
+**Slučování je mělké:** klíč v override nahradí **celý** klíč z defaults. Je to záměr —
 při hlubokém slučování by z override šlo položku seznamu jen přidat, nikdy odebrat.
+
+### 🔴 Chcete-li přepsat cokoli uvnitř `gate`, musíte zkopírovat CELÝ klíč `gate`
+
+Mělké slučování se nedívá dovnitř. Override, který nese jen jednu hodnotu z `gate`,
+**zahodí všechno ostatní** — `denyPatterns`, `askPatterns`, `allowedRemoveRoots`,
+`shapes`, `sqlClients`, `codeInterpreters`, `interpreterDestructiveTokens` — a ty pak
+padnou na vestavěné fallbacky, tedy většinou na prázdný seznam.
+
+Změřeno (0.1.10) s override `{"gate":{"opaque":{"variable":"audit"}}}`:
+
+| příkaz | bez override | s tímhle override |
+|---|---|---|
+| `git reset --hard` | `deny` | **žádné rozhodnutí** |
+| `git branch -D feature/x` | `deny` | **žádné rozhodnutí** |
+| `git filter-branch …` | `deny` | **žádné rozhodnutí** |
+| `rm -rf bin` (povolená složka) | žádné rozhodnutí | **`deny`** |
+| `rm -rf src`, `psql -h prod -c "DROP TABLE x"` | `deny` | `deny` |
+
+Jde to **oběma směry**: brána ztratí tvary, které měla držet, a zároveň začne blokovat
+běžnou práci, protože `allowedRemoveRoots` zmizely s ní. Pravidla, která žijí v kódu
+(rekurzivní mazání, DB podle hostitele), drží dál — proto se ta ztráta nepozná podle
+toho, že by „přestalo fungovat všechno".
+
+**Bezpečný postup:** zkopírujte celý objekt `gate` z
+[`hooks/config/defaults.json`](hooks/config/defaults.json) a upravte v kopii jednu
+hodnotu. Sada nese případ, který tuhle hranici drží jako doklad
+(*„override `gate` bez `denyPatterns`"*), ne jako opravu — tvar hlubšího slučování je
+rozhodnutí do v0.2 (nález K2-1 review Amber, 2026-09-07).
 
 `userConfig` pluginu se vědomě nepoužívá: ukládá se do globálních user settings, tedy
 společně pro všechny projekty na stroji. Zábradlí musí jít nastavit **per projekt**.
