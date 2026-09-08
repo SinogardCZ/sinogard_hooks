@@ -1311,19 +1311,32 @@ function Test-DatabaseRule($Leaf, $Config) {
                           (Test-UpdateWithoutWhere $sqlVisible)
     }
 
-    # SQL prislo ze souboru nebo z roury - obsah nevidime, rozsah nezname (Z3).
-    # T-10 A: `psql -f migrace.sql`, `psql < drop.sql`, `psql <<< $SQL` je bezna prace,
-    # takze audit misto brany. Az TADY, po rozhodnuti o tom, co videt JE (N28).
-    if ($sqlFromFile -and -not $sqlDestructive) {
-        Write-GateAudit $script:ToolName 'sqlFromFile' 'allow' $Config
-        return $null
-    }
-
+    # !! Nalez Amber A-1 (kolo 1 nad 01afb82): prvni oprava N28 zavrela bypass jen pro
+    # SQL v TEXTU. Destruktivnost ale nese jeste DVA zdroje, ktere s textem nemaji nic
+    # spolecneho - jmeno spustitelneho souboru (`dropdb`) a `dotnet ef database drop`.
+    # `dropdb` je pritom v `sqlClients`, takze mu `Get-SqlText` marker taky prida:
+    #   dropdb -h prod mydb < /dev/null   melo byt deny, bylo allow + audit
+    #   dropdb -h prod mydb -f x.sql      melo byt deny, bylo allow + audit
+    # Tataz trida jako N28, o jeden radek niz. Duvod je stejny: podminka auditu se
+    # ptala na UZSI vec (`$sqlDestructive`), nez na kterou se pta pravidlo (`$destructive`).
+    # Proto se `$destructive` i `$update` pocitaji PRED auditem a audit se uplatni az
+    # tehdy, kdyz nestrili ANI JEDEN z nich.
+    # (`dotnet ef` v `sqlClients` neni, takze marker nikdy nedostane - overeno mericim
+    # behem; je tu pro uplnost podminky, ne kvuli znamemu tvaru.)
     $destructive = $sqlDestructive -or
                    ($Leaf.Exe -eq 'dropdb') -or
                    ([regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'drop\b'), 'IgnoreCase'))
 
     $update = [regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'update\b'), 'IgnoreCase')
+
+    # SQL prislo ze souboru nebo z roury - obsah nevidime, rozsah nezname (Z3).
+    # T-10 A: `psql -f migrace.sql`, `psql < drop.sql`, `psql <<< $SQL` je bezna prace,
+    # takze audit misto brany. Az TADY, po rozhodnuti o vsem, co videt JE (N28 + A-1).
+    if ($sqlFromFile -and -not $destructive -and -not $update) {
+        Write-GateAudit $script:ToolName 'sqlFromFile' 'allow' $Config
+        return $null
+    }
+
     if (-not $destructive -and -not $update) { return $null }
 
     # U tela heredocu i roury je nastrojem uvozujici prikaz, ne 'heredoc'.

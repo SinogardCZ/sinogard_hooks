@@ -49,6 +49,7 @@ V 0.1.11 pak nálezy Ady N28, N34 a N35 ukázaly, že tři z těch tříd byly p
 | `git clean -fdX` (jen ignorované) | ask | **allow** | allow | allow | úklid buildu; `-fdx` zůstává `deny` |
 | SQL, které v příkazu **není vidět** (`-f`, `<`, `<<< $VAR`, `cat x.sql \| psql`) | ask | **allow + audit** | allow + audit | allow + audit | rozsah neznáme, ale je to běžná práce — místo dotazu se událost **zapíše** |
 | 🔴 **viditelné destruktivní SQL vedle `-f` / `<`** (`psql -h prod -c "DROP TABLE x" < /dev/null`) | ask | allow + audit | allow + audit | **deny** | N28: marker „ze souboru" se vyhodnocoval **dřív** než pravidlo — obcházení `deny` → `allow` |
+| 🔴 **`dropdb` vedle `-f` / `<`** (`dropdb -h prod mydb < /dev/null`) | ask | allow + audit | allow + audit | **deny** | A-1: táž třída o řádek níž — destruktivnost nese i **jméno programu**, nejen text SQL |
 | **obal, ve kterém se obsah proměnné SPUSTÍ** (`bash -c "$x"`, `eval $cmd`, `cmd /c %X%`, `pwsh -c $x`, `Start-Process $x`, `. $x`, `iex $cmd`) | ask | ask | **audit** | **ask** | N34: rozlišovač v kódu dělil „PS operátor `&`" × zbytek, ne „spustí se" × „nespustí se" |
 | **hodnota / výraz s proměnnou** (`"EXIT=$code"`, `$out \| Select-String`, `[Math]::Truncate($x)`, `$TOOL git push`) | ask | ask | **audit** | audit | slepé místo pluginu; rozhodne o něm normální tok oprávnění Claude Code |
 | **nerozebratelný tvar s destruktivním literálem** (`Where-Object { … -or (git reset --hard) }`, `$_.Delete()`, `$SUDO git reset --hard`) | ask | ask | **audit** | **ask** | N35: hlavu rozebrat neumíme, ale literál v ní **vidět je** |
@@ -265,9 +266,18 @@ aby si je nikdo nemusel objevit sám.
 10. **SQL, které v příkazu není vidět, se ZAPÍŠE DO AUDITU a pustí dál.**
     `psql -f migrace.sql`, `sqlcmd -i migrace.sql`, `psql -h prod < drop.sql`,
     `psql -h prod <<< $SQL` i `cat migrace.sql | psql` — obsah souboru ani roury hook
-    nečte, takže rozsah nezná; od 0.1.9 z toho **není dotaz**, ale řádek `sqlFromFile`
-    v auditu (rozhodnutí `T-10 A`). Dotaz zůstává jen u `$sql | psql` (tvar
-    `sqlFromPipe`). Literál z `echo "…" | psql` i z `psql <<< "DROP TABLE x"` se rozebere.
+    nečte, takže rozsah nezná; od 0.1.9 z toho **není dotaz**, ale řádek v auditu
+    (rozhodnutí `T-10 A`). **V téhle třídě nezůstal ani jeden dotaz** — změřeno nad
+    0.1.11:
+
+    | tvar | rozhodnutí | tvar v auditu |
+    |---|---|---|
+    | `psql -f m.sql`, `psql -h prod < drop.sql`, `psql <<< $SQL` | ticho | `sqlFromFile` |
+    | `cat drop.sql \| psql -h prod` | ticho | `sqlFromPipe` |
+    | `$sql \| psql -h prod` | ticho | `opaque:variable` *(hlava je proměnná)* |
+    | `echo "DROP TABLE x" \| psql -h prod` | **deny** | — *(literál je vidět)* |
+
+    Literál z `echo "…" | psql` i z `psql <<< "DROP TABLE x"` se rozebere.
     🔴 **Do 0.1.10 tu stálo *„končí `ask`"* a bylo to nepravdivé** — a o pár obrazovek
     výš to táž README říkala správně (nález Ada N30).
     🔴 **A od 0.1.11 platí navíc druhá věta, která tu chyběla úplně** (nález Ada N28):
@@ -277,6 +287,12 @@ aby si je nikdo nemusel objevit sám.
     přilepit `< /dev/null` a brána se neprovedla vůbec — příznak „ze souboru" se
     vyhodnocoval **dřív** než pravidlo. Audit se od 0.1.11 uplatní až tehdy, když
     nic viditelného nestřílí.
+    ➕ **Platí to i pro `dropdb`** (nález Amber A-1, opraveno v témž vydání):
+    `dropdb -h prod mydb < /dev/null` i `dropdb -h prod mydb -f x.sql` končí `deny`.
+    Byla to táž třída o řádek níž — destruktivnost totiž nenese jen **text SQL**, ale
+    i **jméno programu** (`dropdb`) a `dotnet ef database drop`, a první oprava
+    podmínila audit jen tím textem. *„Vyhodnotit výjimku až po pravidle" nestačí —
+    musí se vyhodnotit po **celém** pravidle.*
 11. **Příkaz uvnitř kontejneru se nerozebírá.** `docker exec` a `docker run` se odloupnou
     jen kvůli jménu klienta (`docker exec -i db psql …` je pořád `psql`), ale to, co se
     spustí *uvnitř* kontejneru, se pravidly nad cestami neposuzuje. Důvod je věcný:

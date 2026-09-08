@@ -1051,6 +1051,23 @@ $v0111Cases = @(
     #     další viditelné tvary vedle markeru
     (Case 'N28 truncate vedle -f'       'psql -h prod -f m.sql -c "TRUNCATE users"' 'deny')
     (Case 'N28 delete bez where'        'psql -h prod -c "DELETE FROM users" < /dev/null' 'deny')
+    # --- A-1 (review Amber, kolo 1): tataz trida o radek niz. Destruktivnost nese
+    #     jeste jmeno spustitelneho souboru (`dropdb`), ne jen TEXT SQL - a `dropdb`
+    #     je v `sqlClients`, takze mu Get-SqlText marker taky prida. Prvni oprava N28
+    #     se ptala na `$sqlDestructive`, pravidlo se pta na `$destructive`.
+    (Case 'A-1 dropdb prod + redirect'  'dropdb -h prod mydb < /dev/null' 'deny')
+    (Case 'A-1 dropdb prod + -f'        'dropdb -h prod mydb -f x.sql' 'deny')
+    (Case 'A-1 dropdb localhost + redir' 'dropdb -h localhost x < /dev/null' 'ask')
+    # 🔴 kontrolni skupina A-1: bez markeru se nic nemeni
+    (Case 'A-1 kontrola dropdb prod'    'dropdb -h prod x' 'deny')
+    (Case 'A-1 kontrola dropdb local'   'dropdb -h localhost x' 'ask')
+    #     `dotnet ef` v `sqlClients` NENI, takze marker nedostane - zmereno, ne
+    #     odhadnuto: presmerovani na jeho rozhodnuti nema vliv (obojí `ask`, protoze
+    #     bez `--connection` nema hostitele a plati "lokalni").
+    (Case 'A-1 kontrola ef drop'        'dotnet ef database drop' 'ask')
+    (Case 'A-1 kontrola ef drop redir'  'dotnet ef database drop < /dev/null' 'ask')
+    (Case 'A-1 kontrola ef update prod' 'dotnet ef database update --connection "Host=prod" < /dev/null' 'deny')
+
     # 🔴 kontrolni skupina: marker SAM (bez viditelneho SQL) zustava auditem - jinak
     #    by oprava zabila bezne `psql -f migrace.sql` a brana by se do tydne vypnula
     (Case 'N28 kontrola samotny -f'     'psql -h prod -f m.sql' 'allow')
@@ -1112,6 +1129,38 @@ $v0111Cases = @(
 )
 
 Test-Cases 'v0.1.11 - nalezy Ady N28, N33-N35, N49, N50' $v0111Cases
+
+# ------------------------ K-2: tvary v auditu u "SQL neni videt" (review Amber) ---
+#
+# 🔴 README ted nese TABULKU tvaru, ne vetu - a tabulka je tvrzeni, ktere musi jit
+# vyvratit. Puvodni veta ("dotaz zustava jen u `$sql | psql`, tvar `sqlFromPipe`")
+# byla dvakrat nepravdiva: dotaz tam nezustal zadny a `$sql | psql` nese `opaque:variable`
+# (hlava je promenna), zatimco `sqlFromPipe` nese `cat x.sql | psql`.
+# TASK-106 bod 8 (L2) to popisoval SPRAVNE - lhala README.
+
+function Test-AuditShape([string]$Name, [string]$Cmd, [string]$Shape) {
+    $dir = Join-Path $script:TempDir ('audit-k2-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    $path = Join-Path $dir 'gate-audit.jsonl'
+    $json = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = $Cmd }
+    $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment @{ 'CLAUDE_PLUGIN_DATA' = $dir }
+    Assert-Equal 'allow' (Get-Decision $r) ("[K-2/{0}] hook mlci" -f $Name)
+    Assert-True ([System.IO.File]::Exists($path)) ("[K-2/{0}] radek auditu vznikl" -f $Name)
+    if ([System.IO.File]::Exists($path)) {
+        $line = [System.IO.File]::ReadAllText($path, ([System.Text.UTF8Encoding]::new($false)))
+        Assert-True ($line -match ('"shape":"' + [regex]::Escape($Shape) + '"')) `
+                    ("[K-2/{0}] tvar je {1}" -f $Name, $Shape)
+    }
+}
+
+Start-Case 'K-2: "SQL neni videt" - ktery tvar nese ktery zapis'
+Test-AuditShape 'psql -f'        'psql -h prod -f m.sql'          'sqlFromFile'
+Test-AuditShape 'psql < soubor'  'psql -h prod < drop.sql'        'sqlFromFile'
+Test-AuditShape 'cat do psql'    'cat drop.sql | psql -h prod'    'sqlFromPipe'
+Test-AuditShape 'promenna do psql' '$sql | psql -h prod'          'opaque:variable'
+# 🔴 kontrolni skupina: literal VIDET JE, takze se nerozhoduje auditem, ale hostitelem
+$jsonK2 = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'echo "DROP TABLE x" | psql -h prod' }
+Assert-Equal 'deny' (Get-Decision (Invoke-Hook -Script 'gate.ps1' -InputJson $jsonK2)) `
+             '[K-2/kontrola] literal v roure je deny, ne audit'
 
 # ------------------------------------------ T36-Q7 = A: audit v bypassu se PRIZNA ---
 #

@@ -3754,6 +3754,48 @@
       "cmd": "python -c \"q = \u0027DELETE FROM t WHERE id=1\u0027\"",
       "expect": "allow",
       "since": "N50 interpret DELETE FROM"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dropdb -h prod mydb \u003c /dev/null",
+      "expect": "deny",
+      "since": "A-1 dropdb prod + redirect"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dropdb -h prod mydb -f x.sql",
+      "expect": "deny",
+      "since": "A-1 dropdb prod + -f"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dropdb -h localhost x \u003c /dev/null",
+      "expect": "ask",
+      "since": "A-1 dropdb localhost + redir"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dropdb -h prod x",
+      "expect": "deny",
+      "since": "A-1 kontrola dropdb prod"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dropdb -h localhost x",
+      "expect": "ask",
+      "since": "A-1 kontrola dropdb local"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database drop \u003c /dev/null",
+      "expect": "ask",
+      "since": "A-1 kontrola ef drop redir"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dotnet ef database update --connection \"Host=prod\" \u003c /dev/null",
+      "expect": "deny",
+      "since": "A-1 kontrola ef update prod"
     }
   ]
 }

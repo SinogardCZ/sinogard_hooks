@@ -28,6 +28,24 @@ nevšiml; `T-10` z ní udělala `allow`. Oprava je **pořadí**, ne nové pravid
 destruktivnost se počítá nad SQL **bez markeru**, audit se uplatní až když nic
 viditelného nestřílí. Hláška a tvar u `deny` beze změny.
 
+🔴 **A-1 (review Amber, kolo 1) — táž třída o jeden řádek níž.** První oprava zavřela
+bypass jen pro SQL v **textu**. Destruktivnost ale nese ještě **jméno programu**
+(`dropdb` — a ten je v `sqlClients`, takže marker dostane taky) a `dotnet ef database
+drop`. Audit byl podmíněný **užší** veličinou (`$sqlDestructive`), než na kterou se
+ptá pravidlo (`$destructive`):
+
+| tvar | do 0.1.10 i po první opravě | od 0.1.11 |
+|---|---|---|
+| `dropdb -h prod mydb < /dev/null` | **allow + audit** | `deny` |
+| `dropdb -h prod mydb -f x.sql` | **allow + audit** | `deny` |
+| `dropdb -h localhost x < /dev/null` | **allow + audit** | `ask` |
+
+`$destructive` i `$update` se teď počítají **před** větví auditu. Poučení je obecnější
+než ten řádek: *„vyhodnotit výjimku až po pravidle" nestačí — musí se vyhodnotit po
+**celém** pravidle; zúžená podmínka vypadá jako táž podmínka.*
+ℹ️ `dotnet ef` v `sqlClients` **není**, takže marker nikdy nedostane — ověřeno měřením
+(`drop` i `drop < /dev/null` dávají shodně `ask`); v podmínce stojí pro úplnost.
+
 ### Opraveno — rozlišovač „obsah proměnné se spustí" neodpovídal kódu (N34, volba i)
 
 README od 0.1.10 tvrdilo, že `ask` zůstává tam, kde se obsah proměnné **spustí**.
@@ -126,6 +144,13 @@ ne sloučení → v0.2.
 - **Omezení 10** tvrdilo *„SQL, které v příkazu není vidět, končí `ask`"* — od 0.1.9
   to platilo jen pro `$sql | psql`; `-f`, `<`, `<<<` i `cat x.sql | psql` končily
   auditem, a táž README to o pár obrazovek výš říkala správně (N30).
+  🔴 **A oprava toho omezení lhala podruhé** (nález Amber K-2): napsala jsem
+  *„dotaz zůstává jen u `$sql | psql` (tvar `sqlFromPipe`)"* — nepravda dvakrát.
+  Dotaz v té třídě **nezůstal žádný** a `$sql | psql` nese `opaque:variable`
+  (hlava je proměnná), zatímco `sqlFromPipe` nese `cat x.sql | psql`. Věta je
+  nahrazená **tabulkou tvarů** a tu drží sekce `K-2` v `gate.tests.ps1`, která
+  kontroluje **id tvaru v auditu**, ne jen rozhodnutí. TASK-106 bod 8 to přitom celou
+  dobu popisoval správně — lhala README.
 - **Omezení 2 a 8** popisovala rozlišovač, který v kódu nebyl (N34).
 - **Omezení 6** neslo cenu, kterou N35 zrušila — citováno jako zrušené, ne smazáno.
 - **Omezení 19** přiznává, že v bypassu druhá vrstva není (`T36-Q7 = A`).
@@ -136,7 +161,9 @@ ne sloučení → v0.2.
 ### Testy
 
 Invariant: **7 řádků** `allow` → `ask` nástrojem `-Prijmout` (`T36-N34 (i) / T36-N35`),
-**žádný `deny` řádek se nezměnil**, 44 nových řádků, 548 → 592.
+**žádný `deny` řádek se nezměnil**; 44 nových řádků v prvním kole a 7 v kole po review
+(A-1), tedy **548 → 599** (deny 288 / ask 117 / allow 194). Přírůstek kola 1 je
+`42 vloženo / 0 smazáno` — čistě append, žádné existující očekávání se nezměnilo.
 
 🔴 **Změřeno, ne odhadnuto** (opravená očekávání proti zadání):
 - řetěz **obalů** (`sudo nice nohup … rm -rf src`) hloubku nezvyšuje —
