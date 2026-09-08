@@ -30,7 +30,13 @@
 #>
 param(
     [switch]$WhatIf,
-    [string]$Interpreter = 'pwsh'
+    [string]$Interpreter = 'pwsh',
+    # !! Nalez Ady N38 (0.1.11): zmena OCEKAVANI byla dosud rucni editace souboru, tedy
+    # jediny ukon nad invariantem, ktery nemel nastroj ani stopu. `-Prijmout <citace>`
+    # je ta cesta: prepise jen radky, na kterych generator hlasi SPOR, a do hlavicky
+    # `_zmeneno` doplni datum, citaci, smer a vycet tvaru. Bez citace se nezapise nic -
+    # radek invariantu meni ocekavani vzdy s tim, kdo o tom rozhodl.
+    [string]$Prijmout = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,7 +80,7 @@ function Get-RowKey($Hook, $Tool, $Value) {
 $doc = [System.IO.File]::ReadAllText($invPath, $utf8) | ConvertFrom-Json
 $existing = @($doc.rows)
 
-# 🔴 Nalez Hestia N27: `@{}` je v PowerShellu case-INSENSITIVE, takze `git clean -fdX`
+# !! Nalez Hestia N27: `@{}` je v PowerShellu case-INSENSITIVE, takze `git clean -fdX`
 # a `git clean -fdx` splynuly v JEDEN klic - a prave na tom rozdilu tahle brana stoji
 # (`-X` je uklid buildu, `-x` maze i neverzovane soubory). Generator z toho hlasil
 # falesny SPOR. Porovnava se proto ordinalne.
@@ -108,11 +114,128 @@ foreach ($suite in @('gate', 'secrets')) {
     }
 }
 
-if ($conflicts.Count -gt 0) {
+if ($conflicts.Count -gt 0 -and $Prijmout -eq '') {
     Write-Host 'SPOR - tvar uz v invariantu je, ale s jinym ocekavanim:' -ForegroundColor Red
     foreach ($c in $conflicts) { Write-Host ("  " + $c) -ForegroundColor Red }
     Write-Host 'Nic se nezapisuje. Rozhodnuti patri cloveku.' -ForegroundColor Red
+    Write-Host 'Je-li rozhodnute, prijmi ho citaci: -Prijmout "T36-N34 (i)"' -ForegroundColor Yellow
     exit 1
+}
+
+# ------------------------------------------------ -Prijmout: zmena ocekavani ---
+#
+# !! Zapisuje se JEN to, co generator sam oznacil za spor. Nejde tudy pridat radek,
+# odebrat radek ani zmenit tvar prikazu - jen ocekavani u tvaru, ktery uz v souboru
+# je a ktery sada ted tvrdi jinak. Append-only pravidlo tim drzi.
+if ($Prijmout -ne '') {
+    if ($conflicts.Count -eq 0) {
+        Write-Host '-Prijmout: zadny spor, neni co menit.' -ForegroundColor Yellow
+    } else {
+        $utf8b = New-Object System.Text.UTF8Encoding($false)
+        $text = [System.IO.File]::ReadAllText($invPath, $utf8b)
+        $doc2 = $text | ConvertFrom-Json
+        $vsechny = @($doc2.rows)
+
+        # Mapa klic -> nove ocekavani, sestavena znovu ze SADY (ne z hlaseni o sporu:
+        # to je text pro cloveka a parsovat ho zpatky by byl druhy zdroj pravdy).
+        $nove = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+        foreach ($suite in @('gate', 'secrets')) {
+            foreach ($c in (Get-SuiteCases $suite)) {
+                $nove[(Get-RowKey $c.hook $c.tool $c.cmd)] = [string]$c.expect
+            }
+        }
+
+        # !! Nahrazuje se PO RADCICH uvnitr jednoho objektu, ne serializaci celeho
+        # souboru: ta by preformatovala 548 radku, ktere prepsat nemam.
+        #
+        # !! Zmereno, ne odhadnuto: hledat radek podle `ConvertTo-Json $cmd` NEFUNGUJE -
+        # PowerShell escapuje `<` a `>` jako `<` / `>`, takze tvar
+        # `bash <<EOF\ngit status` se ve vygenerovanem vzoru nikdy nepotka s tim, co
+        # v souboru doopravdy stoji. Klic proto vznika ROZBOREM bloku, ne jeho
+        # skladanim: kazdy objekt se prelozi zpet z JSONu a porovna se hodnotami.
+        $radky = $text -split "`n"
+        $zmeneno = New-Object System.Collections.ArrayList
+        $zacatek = -1
+        for ($i = 0; $i -lt $radky.Count; $i++) {
+            $l = $radky[$i]
+            if ($l -match '^\s{4}\{\s*$') { $zacatek = $i; continue }
+            if ($zacatek -lt 0) { continue }
+            if ($l -notmatch '^\s{4}\}') { continue }
+
+            $blokText = ($radky[$zacatek..$i] -join "`n").TrimEnd(",`r`n ".ToCharArray())
+            $zacatek = -1
+            $obj = $null
+            try { $obj = $blokText | ConvertFrom-Json } catch { continue }
+            if ($null -eq $obj -or -not $obj.PSObject.Properties['expect']) { continue }
+
+            $hook = if ($obj.PSObject.Properties['hook']) { [string]$obj.hook } else { 'gate' }
+            $key = Get-RowKey $hook $obj.tool $obj.cmd
+            if (-not $nove.ContainsKey($key)) { continue }
+            $stary = [string]$obj.expect
+            $novy = [string]$nove[$key]
+            if ($stary -eq $novy) { continue }
+
+            # Prepise se prave ten radek `"expect"` uvnitr TOHOTO objektu.
+            $trefa = $false
+            for ($k = $i; $k -ge 0; $k--) {
+                if ($radky[$k] -match '^(\s*"expect": )"' + [regex]::Escape($stary) + '"(,?)\s*\r?$') {
+                    $radky[$k] = $Matches[1] + '"' + $novy + '"' + $Matches[2]
+                    $trefa = $true
+                    break
+                }
+            }
+            if (-not $trefa) { throw ("Radek `"expect`" se nenasel u tvaru: {0}" -f $obj.cmd) }
+            [void]$zmeneno.Add([pscustomobject]@{ Cmd = [string]$obj.cmd; Z = $stary; Na = $novy })
+        }
+        $text = $radky -join "`n"
+
+        if ($zmeneno.Count -eq 0) {
+            Write-Host '-Prijmout: spor hlasi sada, ale v souboru nic k prepsani neni.' -ForegroundColor Red
+            exit 1
+        }
+
+        # Hlavicka `_zmeneno` se PRIPISUJE, nenahrazuje - je to historie rozhodnuti.
+        #
+        # !! Tyz mechanismus jako u radku, jen o vrstvu vys, a poprve to projelo tise:
+        # slozit hledany text pres `ConvertTo-Json $stara` NEFUNGUJE, protoze PowerShell
+        # escapuje `<` a `>` (`u003c`/`u003e`) - a stara hlavicka nese `bash <<EOF`.
+        # `String.Replace`, ktery nic nenajde, vrati puvodni retezec BEZ CHYBY, takze
+        # zapis probehl a hlavicka se nezmenila. Hleda se proto RADEK podle klice
+        # a nova hodnota se serializuje az jako nahrada.
+        $stara = ''
+        if ($doc2.PSObject.Properties['_zmeneno']) { $stara = [string]$doc2._zmeneno }
+        $smery = @($zmeneno | ForEach-Object { $_.Z + ' -> ' + $_.Na } | Sort-Object -Unique) -join ', '
+        $novaVeta = ("{0}, {1}: {2} radkum se zmenilo ocekavani ({3}). Seznam: {4}." -f `
+                     (Get-Date -Format 'yyyy-MM-dd'), $Prijmout, $zmeneno.Count, $smery,
+                     (($zmeneno | ForEach-Object { $_.Cmd -replace '\r?\n', ' / ' }) -join ' - '))
+        $celaHlavicka = if ([string]::IsNullOrWhiteSpace($stara)) { $novaVeta } else { $stara + ' || ' + $novaVeta }
+        $radky2 = $text -split "`n"
+        $hlavickaTrefa = $false
+        for ($h = 0; $h -lt $radky2.Count; $h++) {
+            if ($radky2[$h] -match '^(\s*"_zmeneno": ).*?(,?)\s*\r?$') {
+                $radky2[$h] = $Matches[1] + (ConvertTo-Json $celaHlavicka -Compress) + $Matches[2]
+                $hlavickaTrefa = $true
+                break
+            }
+        }
+        if (-not $hlavickaTrefa) { throw 'Hlavicka "_zmeneno" se v souboru nenasla.' }
+        $text = $radky2 -join "`n"
+
+        if ($WhatIf) {
+            Write-Host ("-Prijmout ({0}) - zmenilo by se {1} radku:" -f $Prijmout, $zmeneno.Count) -ForegroundColor Yellow
+            foreach ($z in $zmeneno) { Write-Host ("  ~ [{0} -> {1}] {2}" -f $z.Z, $z.Na, $z.Cmd) }
+            exit 0
+        }
+
+        [System.IO.File]::WriteAllText($invPath, $text, $utf8b)
+        $kontrola = [System.IO.File]::ReadAllText($invPath, $utf8b) | ConvertFrom-Json
+        if (@($kontrola.rows).Count -ne $vsechny.Count) {
+            throw ("Pocet radku se zmenil: bylo {0}, je {1}." -f $vsechny.Count, @($kontrola.rows).Count)
+        }
+        Write-Host ("-Prijmout ({0}): zmeneno {1} radku, pocet radku beze zmeny ({2})." -f `
+                    $Prijmout, $zmeneno.Count, $vsechny.Count) -ForegroundColor Green
+        foreach ($z in $zmeneno) { Write-Host ("  ~ [{0} -> {1}] {2}" -f $z.Z, $z.Na, $z.Cmd) }
+    }
 }
 
 Write-Host ("Existujicich radku: {0}" -f $existing.Count)

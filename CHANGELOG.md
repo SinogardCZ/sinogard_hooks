@@ -3,6 +3,147 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.1.11] — 2026-09-08
+
+Kolo nálezů **Ady** (N28, N30, N33–N43, N45, N46, N48–N51) nad `93a50eb`, rozhodnutí
+Toma `2026-09-07/T36-Q6a = (a)`, `2026-09-08/T36-Q7 = A`, `T36-Q10 = A`, `T36-Q12 = B`.
+Společné jádro tří z nich: **výjimka vyhodnocená před pravidlem je bypass** —
+klasifikace rozhodla dřív, než se kdokoli podíval na text.
+
+### Opraveno — 🔴 obcházení `deny` → `allow` (N28)
+
+`Test-DatabaseRule` vyhodnocovala marker *„SQL ze souboru"* **před** destruktivností
+viditelného SQL. Marker přitom `Get-SqlText` přidává **vedle** textu z `-c`, takže
+k libovolnému destruktivnímu příkazu stačilo přilepit `< /dev/null` nebo `-f x.sql`:
+
+| tvar | do 0.1.10 | od 0.1.11 |
+|---|---|---|
+| `psql -h prod -c "DROP TABLE x" < /dev/null` | **allow + audit** | `deny` |
+| `psql -h prod -f m.sql -c "DROP TABLE x"` | **allow + audit** | `deny` |
+| `psql -h localhost -c "DROP TABLE x" < x` | **allow + audit** | `ask` |
+| `psql -h prod -f m.sql` (kontrolní) | allow + audit | beze změny |
+
+Do 0.1.8 přednost markeru degradovala `deny` jen na `ask`, proto si toho nikdo
+nevšiml; `T-10` z ní udělala `allow`. Oprava je **pořadí**, ne nové pravidlo:
+destruktivnost se počítá nad SQL **bez markeru**, audit se uplatní až když nic
+viditelného nestřílí. Hláška a tvar u `deny` beze změny.
+
+### Opraveno — rozlišovač „obsah proměnné se spustí" neodpovídal kódu (N34, volba i)
+
+README od 0.1.10 tvrdilo, že `ask` zůstává tam, kde se obsah proměnné **spustí**.
+Skutečný rozlišovač v kódu byl **„PowerShell operátor `&`"** proti všemu ostatnímu,
+takže `eval $cmd`, `bash -c "$x"`, `sh -c "$x"`, `cmd /c %X%`, `pwsh -c $x`
+i `Start-Process $x` spouštěly obsah proměnné stejně — a končily auditem.
+Všechny nesou nově příčinu **`invoked`** → `ask`.
+
+- ➕ **`. $x`** (dot-source, N33) se řeší jako operátor vedle `&`, ne jako `exe` —
+  kdyby se čekalo na `Split-Arguments`, byl by argv[0] jen tečka a příznak by se ztratil.
+- ➕ **`iex` / `Invoke-Expression`** (N33 zúžený): literál se **rozebere** jako tělo
+  `bash -c` (`iex 'git reset --hard'` → `deny`, `iex 'git status'` → nic), proměnná
+  spadne do `invoked`. `askPatterns.invoke-expression` zůstává jako pás pro tvary,
+  které sem nedojdou (`"x" | iex`, `iex` bez argumentu).
+- 🔴 **Proměnná jako CESTA není kód** (N49): `pwsh -File $p`, `bash $script`
+  i `Start-Process -FilePath 'pwsh' … -RedirectStandardOutput $log` zůstávají beze
+  změny — platí omezení 1 (skript souborem je neprůhledný).
+- **Hodnota a výraz** (`"EXIT=$x"`, `$out | Select-String`, `[Math]::Truncate($x)`,
+  `$TOOL git push`) zůstávají auditem.
+
+### Opraveno — destruktivní literál pod nerozebratelnou hlavou (N35, N50)
+
+Sourozenec N28: klasifikace před pohledem na text. Nový klíč
+`gate.rawDestructiveTokens` dělá nad `Leaf.Raw` týž token-test, jaký 0.1.10 zavedla
+nad tělem interpretu — pro příčiny `variable`, `heredocUnterminated` a `depth`.
+`ask`, ne `deny`: hlavu rozebrat neumíme, takže kontext neznáme.
+
+Tím se **ruší** cena pojmenovaná v 0.1.10: `Where-Object { … -or (git reset --hard) }`
+a `ForEach-Object { $_.Delete() }` jsou zase `ask`. **Cena nad výpisem 46 skutečných
+dotazů ze 7. 9.: 0.**
+
+- `opaque.depth` a `opaque.heredocUnterminated` → **`ask`** (obě mají ve výpisu
+  46 dotazů **0 výskytů**, takže default `ask` nestojí ani jeden dotaz navíc).
+- **N50, asymetrie s důvodem:** `DELETE FROM` je v `rawDestructiveTokens`, ale
+  **není** v `interpreterDestructiveTokens` — tělo interpretu běžně nese SQL řetězce
+  s `WHERE`, které token-test ověřit neumí.
+
+### Opraveno — 🔴 částečný override zahazoval zbytek klíče (N37, N42, N43; TASK-106 bod 10)
+
+`Get-HookConfig` slučuje **jednoúrovňově nad každým top-level objektem**: objekt se
+sloučí o jednu úroveň, pole a skaláry se nahrazují celé. Do 0.1.10 zahodilo
+`{"gate":{"opaque":{"variable":"ask"}}}` i `denyPatterns` a `allowedRemoveRoots` —
+takže `git reset --hard` přestal být `deny` a zároveň `rm -rf bin` **začal** být
+`deny`. Šlo to oběma směry, proto se to nepoznalo.
+
+**N43:** táž stavba je u `secrets` — `{"secrets":{"envFile":{…}}}` by zahodilo
+`denyPathPatterns`, tedy `id_rsa`, `.envrc` i `secrets.json`. Pravidlo je proto
+**generické**, ne vyjmenované pro `gate`. Sekce `K2-1` v sadě změnila roli
+z **dokladu omezení** na **doklad opravy**; `secrets.tests.ps1` nese případ N43.
+ℹ️ Věta *„tvar hlubšího slučování je rozhodnutí do v0.2"* (N42) tím **přestala platit**.
+
+### Změněno — audit v `bypassPermissions` se přizná (N36 / `T36-Q7 = A`)
+
+V `bypassPermissions` nad pluginem už žádná vrstva není, takže audit tam neznamená
+„rozhodne o tom Claude Code". Řádek proto nese `"decision":"allow-bypass"` místo
+`"allow"`. **Nic se neblokuje** — evidence jen přestává tvrdit, co v tom režimu
+neplatí. Mapuje se ve `Write-GateAudit`, aby na to nešlo u jednoho volání zapomenout.
+
+### Změněno — sada rozlišuje ticho od `permissionDecision: allow` (N46)
+
+Plugin **žádný allow writer nemá** (`_common.ps1` umí jen `Write-DenyDecision`
+a `Write-AskDecision`), takže každý řádek `allow` v invariantu je tvrzení o **tichu**
+(prázdný stdout + `exit 0`). `Get-Decision` vrací pro `permissionDecision: allow`
+nově `DECISION-ALLOW`, což se nerovná žádnému očekávání — takový hook zčervená na
+**každém** řádku, ne jen tam, kde si toho někdo všimne. Slovo `silent` se nezavádí
+(jeden slovník); fixtura 46 příkazů ho přejmenovala na `allow`.
+
+### Přidáno — `-Prijmout` u generátoru invariantu (N38)
+
+Změna **očekávání** byla dosud jediný úkon nad invariantem bez nástroje a bez stopy.
+`tests/_generate-invariants.ps1 -Prijmout "<citace>"` přepíše jen řádky, na kterých
+generátor hlásí **spor**, a do hlavičky `_zmeneno` doplní datum, citaci, směr a výčet.
+Bez citace se nezapíše nic. Ruční editace `expect` je v README pojmenovaná jako zakázaná.
+
+### Neuděláno vědomě — sloučení `gate` + `secrets` do jednoho procesu (`T36-Q10 = A`)
+
+`Q10 = A` padlo nad **součtem** dvou studených startů. Claude Code ale spouští hooky
+téhož matcheru **paralelně**, takže úsporu musí ukázat **wall-time**. Změřeno
+(12 běhů po zahřívacím kole, `powershell.exe` 5.1, payload `git status --short`, medián):
+
+| veličina | ms |
+|---|---|
+| společná část (start + `_common.ps1` + `defaults.json`) | 432 |
+| `gate.ps1` sám | 752 |
+| `secrets.ps1` sám | 595 |
+| **oba souběžně (dnešní skutečnost)** | **762** |
+| odhad sloučeného (`gate + secrets − společná část`) | 915 |
+
+Souběžný běh stojí ≈ **max** z obou, ne součet. Sloučení by bylo o **152 ms
+pomalejší**; hranice „úspora ≥ 300 ms" nesepnula, takže `hooks/hooks.json` zůstává
+se dvěma záznamy `PreToolUse`. Skutečná páka je **432 ms společné části na hook**,
+ne sloučení → v0.2.
+
+### Opraveno — dokumentace, která lhala
+
+- **Omezení 10** tvrdilo *„SQL, které v příkazu není vidět, končí `ask`"* — od 0.1.9
+  to platilo jen pro `$sql | psql`; `-f`, `<`, `<<<` i `cat x.sql | psql` končily
+  auditem, a táž README to o pár obrazovek výš říkala správně (N30).
+- **Omezení 2 a 8** popisovala rozlišovač, který v kódu nebyl (N34).
+- **Omezení 6** neslo cenu, kterou N35 zrušila — citováno jako zrušené, ne smazáno.
+- **Omezení 19** přiznává, že v bypassu druhá vrstva není (`T36-Q7 = A`).
+- **Omezení 20** vysvětluje asymetrii `DELETE FROM` (N50); **21** je nové (N35).
+- **§Konfigurace** popisuje jednoúrovňové slučování; **§Regresní invariant** nese
+  `allow` = ticho a `-Prijmout`.
+
+### Testy
+
+Invariant: **7 řádků** `allow` → `ask` nástrojem `-Prijmout` (`T36-N34 (i) / T36-N35`),
+**žádný `deny` řádek se nezměnil**, 44 nových řádků, 548 → 592.
+
+🔴 **Změřeno, ne odhadnuto** (opravená očekávání proti zadání):
+- řetěz **obalů** (`sudo nice nohup … rm -rf src`) hloubku nezvyšuje —
+  `Get-WrapperTail` je strhne najednou; `depth` vyrábí každá **závorka** a přiřazení.
+- neukončený heredoc s destruktivním **tělem** končí `deny`, ne `ask` — tělo se
+  rozebere a `deny` přebije `ask` z příčiny `heredocUnterminated`.
+
 ## [0.1.10] — 2026-09-07
 
 **Rozhodnutí Toma 2026-09-07/`T36-O5 = A`:** *„chci, abychom budovali automatizaci,

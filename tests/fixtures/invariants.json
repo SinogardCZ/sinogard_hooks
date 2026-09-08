@@ -1,7 +1,7 @@
 {
   "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli sad, ne rucnim vyberem - generator je tests/_generate-invariants.ps1 (nalez Amber H2: soubor se na generator odvolaval, ale ten v repu nebyl). Radek bez klice 'hook'/'kind' je z prvniho vydani, kdy byl invariant jen pro branu nad prikazy; chybejici klic znamena 'gate' / 'cmd' a dopisovat ho zpetne by znamenalo prepsat 142 radku, ktere prepsat nemam.",
   "_odebrano": "2026-09-05: tvar 'echo DROP | TABLE users | psql' - radek nikdy neplatil. 'DROP | TABLE' neni platne SQL, takze deny bylo MOJE chybne ocekavani z tehoz kola, ne drivejsi chovani. Nahrazeno tvarem, ktery roury i stredniky v retezci testuje na platnem SQL.",
-  "_zmeneno": "2026-09-07, rozhodnuti Toma T36-O5 = A (audit misto dotazu u nerozebratelnych tvaru): 11 radkum se zmenilo ocekavani z \"ask\" na \"allow\". Radek z invariantu NEODESEL zadny. Seznam: $tool build - bash -c \"$x\" - cmd /c %X% - eval $cmd - $TOOL git push - [Math]::Truncate($x) - neukonceny heredoc (bash <<EOF / git status) - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq (x) -or (git reset --hard) } - $_.Name -like \"*.cs\" (Bash) - bash -c \"$CMD\". Vsechny jsou trida \"nerozebratelne\" (pricina variable, interpreter nebo heredocUnterminated); od 0.1.10 o nich rozhoduje vrstva opravneni Claude Code, ne plugin. NEZMENILY se: & $cmd, pwsh -enc, ssh host \"cmd\", ssh prod <<EOF, git -c alias., python -c s destruktivnim tokenem - a ZADNY radek s \"deny\".",
+  "_zmeneno": "2026-09-07, rozhodnuti Toma T36-O5 = A (audit misto dotazu u nerozebratelnych tvaru): 11 radkum se zmenilo ocekavani z \"ask\" na \"allow\". Radek z invariantu NEODESEL zadny. Seznam: $tool build - bash -c \"$x\" - cmd /c %X% - eval $cmd - $TOOL git push - [Math]::Truncate($x) - neukonceny heredoc (bash \u003c\u003cEOF / git status) - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq (x) -or (git reset --hard) } - $_.Name -like \"*.cs\" (Bash) - bash -c \"$CMD\". Vsechny jsou trida \"nerozebratelne\" (pricina variable, interpreter nebo heredocUnterminated); od 0.1.10 o nich rozhoduje vrstva opravneni Claude Code, ne plugin. NEZMENILY se: \u0026 $cmd, pwsh -enc, ssh host \"cmd\", ssh prod \u003c\u003cEOF, git -c alias., python -c s destruktivnim tokenem - a ZADNY radek s \"deny\". || 2026-09-08, T36-N34 (i) / T36-N35: 7 radkum se zmenilo ocekavani (allow -\u003e ask). Seznam: bash -c \"$x\" - cmd /c %X% - eval $cmd - bash \u003c\u003cEOF / git status - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq \u0027x\u0027 -or (git reset --hard) } - bash -c \"$CMD\".",
   "rows": [
     {
       "tool": "Bash",
@@ -870,19 +870,19 @@
     {
       "tool": "Bash",
       "cmd": "bash -c \"$x\"",
-      "expect": "allow",
+      "expect": "ask",
       "since": "bash -c s promennou"
     },
     {
       "tool": "Bash",
       "cmd": "cmd /c %X%",
-      "expect": "allow",
+      "expect": "ask",
       "since": "cmd /c s promennou"
     },
     {
       "tool": "Bash",
       "cmd": "eval $cmd",
-      "expect": "allow",
+      "expect": "ask",
       "since": "eval s promennou"
     },
     {
@@ -1458,7 +1458,7 @@
     {
       "tool": "Bash",
       "cmd": "bash <<EOF\ngit status",
-      "expect": "allow",
+      "expect": "ask",
       "since": "E2 neukonceny heredoc"
     },
     {
@@ -3121,13 +3121,13 @@
     {
       "tool": "PowerShell",
       "cmd": "Get-ChildItem | ForEach-Object { $_.Delete() }",
-      "expect": "allow",
+      "expect": "ask",
       "since": "L1 kontrola volani metody"
     },
     {
       "tool": "PowerShell",
       "cmd": "Where-Object { $_.Name -eq 'x' -or (git reset --hard) }",
-      "expect": "allow",
+      "expect": "ask",
       "since": "L1 kontrola podvyraz"
     },
     {
@@ -3462,7 +3462,7 @@
     {
       "tool": "Bash",
       "cmd": "bash -c \"$CMD\"",
-      "expect": "allow",
+      "expect": "ask",
       "since": "T10 zustava obal s promennou"
     },
     {
@@ -3490,6 +3490,270 @@
       "expect": "ask",
       "since": "H1 env:github_token",
       "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "\u0026 $cmd -Force",
+      "expect": "ask",
+      "since": "T36 spusteni promenne arg"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -enc UmVtb3ZlLUl0ZW0=",
+      "expect": "ask",
+      "since": "T36 -enc"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh prod \"rm -rf /\"",
+      "expect": "ask",
+      "since": "T36 ssh s prikazem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c alias.bd=\u0027branch -D\u0027 bd x",
+      "expect": "ask",
+      "since": "T36 git alias"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "\"EXIT=$LASTEXITCODE\"",
+      "expect": "allow",
+      "since": "T36 retezec s promennou"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[System.IO.File]::ReadAllText($f)",
+      "expect": "allow",
+      "since": "T36 ReadAllText promenna"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python -c \"print(1)\"",
+      "expect": "allow",
+      "since": "T36 python neskodny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python -c \"import io; io.open(\u0027x\u0027).read()\"",
+      "expect": "allow",
+      "since": "T36 python read_text"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python -c \"import os; os.remove(\u0027x\u0027)\"",
+      "expect": "ask",
+      "since": "T36 python os.remove"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "node -e \"console.log(require(\u0027./p.json\u0027).name)\"",
+      "expect": "allow",
+      "since": "T36 node neskodny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python \u003c\u003cEOF\nprint(1)\nEOF",
+      "expect": "allow",
+      "since": "T36 python heredoc neskodny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python -c \"x.remove_item(1)\"",
+      "expect": "allow",
+      "since": "T36 token jinou velikosti"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, $true)",
+      "expect": "ask",
+      "since": "T36 VB promenna"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(\u0027src\u0027)",
+      "expect": "deny",
+      "since": "T36 VB literal src"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(\u0027bin\u0027)",
+      "expect": "allow",
+      "since": "T36 VB literal bin"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(\u0027src/a.cs\u0027)",
+      "expect": "deny",
+      "since": "T36 VB DeleteFile literal"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)",
+      "expect": "ask",
+      "since": "T36 VB recycle bin"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.File]::Delete($f)",
+      "expect": "ask",
+      "since": "T36 IO.File promenna"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"DROP TABLE x\" \u003c /dev/null",
+      "expect": "deny",
+      "since": "N28 -c a redirect na prod"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -f m.sql -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "N28 -f vedle -c na prod"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h localhost -c \"DROP TABLE x\" \u003c x",
+      "expect": "ask",
+      "since": "N28 -c a redirect localhost"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -f m.sql -c \"TRUNCATE users\"",
+      "expect": "deny",
+      "since": "N28 truncate vedle -f"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"DELETE FROM users\" \u003c /dev/null",
+      "expect": "deny",
+      "since": "N28 delete bez where"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -f m.sql",
+      "expect": "allow",
+      "since": "N28 kontrola samotny -f"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h prod -c \"SELECT 1\" \u003c /dev/null",
+      "expect": "allow",
+      "since": "N28 kontrola neskodne -c"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sh -c \"$x\"",
+      "expect": "ask",
+      "since": "N34 sh -c"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -c $x",
+      "expect": "ask",
+      "since": "N34 pwsh -c"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process $x",
+      "expect": "ask",
+      "since": "N34 Start-Process promenna"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": ". $x",
+      "expect": "ask",
+      "since": "N33 dot-source promenne"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "iex \u0027git reset --hard\u0027",
+      "expect": "deny",
+      "since": "N33 iex literal destruktivni"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "iex \u0027git status\u0027",
+      "expect": "allow",
+      "since": "N33 iex literal neskodny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Invoke-Expression -Command \u0027git branch -D x\u0027",
+      "expect": "deny",
+      "since": "N33 iex -Command literal"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -File $p",
+      "expect": "allow",
+      "since": "N49 pwsh -File promenna"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash $script",
+      "expect": "allow",
+      "since": "N49 bash skript promennou"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process -FilePath \u0027pwsh\u0027 -ArgumentList \u0027-File\u0027,\u0027x.ps1\u0027 -RedirectStandardOutput $log",
+      "expect": "allow",
+      "since": "N49 Start-Process literal"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "\"EXIT=$x\"",
+      "expect": "allow",
+      "since": "N34 kontrola retezec"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$out | Select-String x",
+      "expect": "allow",
+      "since": "N34 kontrola roura hodnoty"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ls ..",
+      "expect": "allow",
+      "since": "N33 kontrola nadrazeny adresar"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "$SUDO git reset --hard",
+      "expect": "ask",
+      "since": "N35 promenna v hlave"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash \u003c\u003cEOF\ngit reset --hard",
+      "expect": "deny",
+      "since": "N35 neukonceny heredoc destr"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "(((((((rm -rf src)))))))",
+      "expect": "ask",
+      "since": "N40 zanoreni depth s rm"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "(((((((rm -rf bin)))))))",
+      "expect": "ask",
+      "since": "N40 zanoreni depth bez rm"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "$SQL DELETE FROM users",
+      "expect": "ask",
+      "since": "N50 raw DELETE FROM"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "python -c \"q = \u0027DELETE FROM t WHERE id=1\u0027\"",
+      "expect": "allow",
+      "since": "N50 interpret DELETE FROM"
     }
   ]
 }
