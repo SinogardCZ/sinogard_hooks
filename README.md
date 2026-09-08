@@ -35,24 +35,36 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 V režimu `bypassPermissions` se **`ask` vydává jako `deny`**: v bypassu by se dotaz
 nezobrazil, takže šedá zóna by tiše propadla. Důvod to říká nahlas.
 
-### Třídy `ask` — a proč některé od 0.1.9 a 0.1.10 už `ask` nejsou
+### Třídy `ask` — a jak se měnily od 0.1.8
 
 Rozsah brány je **rozhodnutí zadavatele**, ne technická nutnost. Po prvních ostrých
-sessions se spočítalo, co se doopravdy ptalo, a nad těmi čísly padla dvě rozhodnutí
-(Tom, 2026-09-07/T36-F1 `T-10 A` a 2026-09-07/`T36-O5 A`):
+sessions se spočítalo, co se doopravdy ptalo, a nad těmi čísly padla rozhodnutí
+Toma 2026-09-07/T36-F1 `T-10 A`, 2026-09-07/`T36-O5 A` a 2026-09-08/`T36-Q7 A`.
+V 0.1.11 pak nálezy Ady N28, N34 a N35 ukázaly, že tři z těch tříd byly popsané
+**jinak, než jak se chovaly**:
 
-| třída | do 0.1.8 | od 0.1.9 | od 0.1.10 | proč |
-|---|---|---|---|---|
-| `git rebase` | ask | **allow** | allow | běžná práce s historií vlastní větve |
-| `git clean -fdX` (jen ignorované) | ask | **allow** | allow | úklid buildu; `-fdx` zůstává `deny` |
-| SQL, které v příkazu **není vidět** (`-f`, `<`, `<<< $VAR`, `cat x.sql \| psql`) | ask | **allow + audit** | allow + audit | rozsah neznáme, ale je to běžná práce — místo dotazu se událost **zapíše** |
-| nerozebratelný obal (`bash -c "$CMD"`), proměnná v pozici příkazu, `python -c`, neukončený heredoc | ask | ask | **audit** | slepé místo pluginu; rozhodne o něm normální tok oprávnění Claude Code |
-| kód interpretu s destruktivním voláním (`python -c "shutil.rmtree(…)"`) | ask | ask | **ask** | jméno volání v těle vidět **je** |
-| čtení `.claude/settings.local.json` | ask | ask | ask | nese hodnoty secrets |
-| `ssh host "příkaz"`, `ssh prod <<EOF` | ask | ask | ask | cizí stroj, kde naše pravidla neplatí |
-| krátká absolutní cesta `/xxx` | ask | ask | ask | od přepínače `cmd` k nerozeznání |
-| spuštění proměnné (`& $cmd`) | ask | ask | ask | obsah se spustí, a ten nevidíme |
-| `-EncodedCommand` a jeho zkratky | ask | ask | ask | příkaz je zakódovaný, ne skrytý omylem |
+| třída | do 0.1.8 | od 0.1.9 | od 0.1.10 | od 0.1.11 | proč |
+|---|---|---|---|---|---|
+| `git rebase` | ask | **allow** | allow | allow | běžná práce s historií vlastní větve |
+| `git clean -fdX` (jen ignorované) | ask | **allow** | allow | allow | úklid buildu; `-fdx` zůstává `deny` |
+| SQL, které v příkazu **není vidět** (`-f`, `<`, `<<< $VAR`, `cat x.sql \| psql`) | ask | **allow + audit** | allow + audit | allow + audit | rozsah neznáme, ale je to běžná práce — místo dotazu se událost **zapíše** |
+| 🔴 **viditelné destruktivní SQL vedle `-f` / `<`** (`psql -h prod -c "DROP TABLE x" < /dev/null`) | ask | allow + audit | allow + audit | **deny** | N28: marker „ze souboru" se vyhodnocoval **dřív** než pravidlo — obcházení `deny` → `allow` |
+| 🔴 **`dropdb` vedle `-f` / `<`** (`dropdb -h prod mydb < /dev/null`) | ask | allow + audit | allow + audit | **deny** | A-1: táž třída o řádek níž — destruktivnost nese i **jméno programu**, nejen text SQL |
+| **obal, ve kterém se obsah proměnné SPUSTÍ** (`bash -c "$x"`, `eval $cmd`, `cmd /c %X%`, `pwsh -c $x`, `Start-Process $x`, `. $x`, `iex $cmd`) | ask | ask | **audit** | **ask** | N34: rozlišovač v kódu dělil „PS operátor `&`" × zbytek, ne „spustí se" × „nespustí se" |
+| **hodnota / výraz s proměnnou** (`"EXIT=$code"`, `$out \| Select-String`, `[Math]::Truncate($x)`, `$TOOL git push`) | ask | ask | **audit** | audit | slepé místo pluginu; rozhodne o něm normální tok oprávnění Claude Code |
+| **nerozebratelný tvar s destruktivním literálem** (`Where-Object { … -or (git reset --hard) }`, `$_.Delete()`, `$SUDO git reset --hard`) | ask | ask | **audit** | **ask** | N35: hlavu rozebrat neumíme, ale literál v ní **vidět je** |
+| neukončený heredoc, zanoření > 5 | ask | ask | **audit** | **ask** | N35: obě mají ve výpisu 46 dotazů **0 výskytů**, takže `ask` nestojí nic |
+| kód interpretu s destruktivním voláním (`python -c "shutil.rmtree(…)"`) | ask | ask | **ask** | ask | jméno volání v těle vidět **je** |
+| `python -c` bez destruktivního tokenu | ask | ask | **audit** | audit | kód nerozebereme, ale token v něm není |
+| čtení `.claude/settings.local.json` | ask | ask | ask | ask | nese hodnoty secrets |
+| `ssh host "příkaz"`, `ssh prod <<EOF` | ask | ask | ask | ask | cizí stroj, kde naše pravidla neplatí |
+| krátká absolutní cesta `/xxx` | ask | ask | ask | ask | od přepínače `cmd` k nerozeznání |
+| spuštění proměnné (`& $cmd`) | ask | ask | ask | ask | obsah se spustí, a ten nevidíme |
+| `-EncodedCommand` a jeho zkratky | ask | ask | ask | ask | příkaz je zakódovaný, ne skrytý omylem |
+
+**Cena 0.1.11 nad reálnými čísly: žádná.** Výpis 46 příkazů, na které se plugin ptal
+7. 9., dává po všech třech opravách pořád **2 `ask`** a **0 `deny`** — sada to drží
+jako fixturu (`tests/fixtures/ask-vypis-2026-09-07.json`), ne jako větu.
 
 🔴 **„audit" není totéž co „allow".** Hook **mlčí** — zapíše řádek do
 `${CLAUDE_PLUGIN_DATA}/gate-audit.jsonl` (čas, nástroj, id tvaru, rozhodnutí —
@@ -103,16 +115,25 @@ Projekt je může přepsat souborem `.claude/sinogard-hooks.json` ve své složc
 }
 ```
 
-**Slučování je mělké:** klíč v override nahradí **celý** klíč z defaults. Je to záměr —
-při hlubokém slučování by z override šlo položku seznamu jen přidat, nikdy odebrat.
+### Slučování je JEDNOÚROVŇOVÉ (od 0.1.11)
 
-### 🔴 Chcete-li přepsat cokoli uvnitř `gate`, musíte zkopírovat CELÝ klíč `gate`
+**Pravidlo je jedno a platí pro každý klíč nejvyšší úrovně stejně** — `gate`, `secrets`,
+`notify`, `hooks`, `resumeCost`:
 
-Mělké slučování se nedívá dovnitř. Override, který nese jen jednu hodnotu z `gate`,
-**zahodí všechno ostatní** — `denyPatterns`, `askPatterns`, `allowedRemoveRoots`,
-`shapes`, `sqlClients`, `codeInterpreters`, `interpreterDestructiveTokens` — a ty pak
-padnou na vestavěné fallbacky, tedy většinou na prázdný seznam.
+- je-li hodnota na obou stranách **objekt**, sloučí se **o jednu úroveň** (klíč po klíči),
+- **pole a skaláry se nahrazují CELÉ**.
 
+Takže `{"gate":{"opaque":{"variable":"ask"}}}` přepíše `gate.opaque` a **nechá být**
+`denyPatterns`, `allowedRemoveRoots` i `shapes`; `{"gate":{"denyPatterns":[]}}` naopak
+ten seznam vyprázdní celý. Důvod původního mělkého slučování tím drží — položku seznamu
+pořád nejde jen odebrat — jen kvůli jednomu klíči už nemizí zbytek objektu.
+Hlouběji než o jednu úroveň se **vědomě nejde**.
+
+<details>
+<summary>🔴 Do 0.1.10 to tak nebylo — a bylo to past (nález K2-1 review Amber)</summary>
+
+Slučování bylo mělké na nejvyšší úrovni, takže override s jednou hodnotou z `gate`
+**zahodil všechno ostatní** a ty klíče padly na vestavěné fallbacky.
 Změřeno (0.1.10) s override `{"gate":{"opaque":{"variable":"audit"}}}`:
 
 | příkaz | bez override | s tímhle override |
@@ -123,16 +144,21 @@ Změřeno (0.1.10) s override `{"gate":{"opaque":{"variable":"audit"}}}`:
 | `rm -rf bin` (povolená složka) | žádné rozhodnutí | **`deny`** |
 | `rm -rf src`, `psql -h prod -c "DROP TABLE x"` | `deny` | `deny` |
 
-Jde to **oběma směry**: brána ztratí tvary, které měla držet, a zároveň začne blokovat
-běžnou práci, protože `allowedRemoveRoots` zmizely s ní. Pravidla, která žijí v kódu
-(rekurzivní mazání, DB podle hostitele), drží dál — proto se ta ztráta nepozná podle
-toho, že by „přestalo fungovat všechno".
+Šlo to **oběma směry**: brána ztratila tvary, které měla držet, a zároveň začala
+blokovat běžnou práci, protože `allowedRemoveRoots` zmizely s ní. Pravidla, která žijí
+v kódu (rekurzivní mazání, DB podle hostitele), držela dál — proto se ta ztráta
+nepoznala podle toho, že by „přestalo fungovat všechno".
 
-**Bezpečný postup:** zkopírujte celý objekt `gate` z
-[`hooks/config/defaults.json`](hooks/config/defaults.json) a upravte v kopii jednu
-hodnotu. Sada nese případ, který tuhle hranici drží jako doklad
-(*„override `gate` bez `denyPatterns`"*), ne jako opravu — tvar hlubšího slučování je
-rozhodnutí do v0.2 (nález K2-1 review Amber, 2026-09-07).
+Táž stavba je u `secrets` (nález Ada N43): `{"secrets":{"envFile":{…}}}` by zahodilo
+`denyPathPatterns`, tedy `id_rsa`, `.envrc` i `secrets.json`. Právě proto je oprava
+generická pro každý top-level objekt, ne vyjmenovaná pro `gate`.
+
+Sada nesla tenhle stav jako **doklad omezení**; od 0.1.11 nese tytéž příkazy jako
+**doklad opravy** (sekce `K2-1` v `tests/gate.tests.ps1`, `N43` v `tests/secrets.tests.ps1`).
+ℹ️ Věta *„tvar hlubšího slučování je rozhodnutí do v0.2"* platila do 0.1.10;
+rozhodlo se v **0.1.11** (TASK-106 bod 10, nález Ada N42).
+
+</details>
 
 `userConfig` pluginu se vědomě nepoužívá: ukládá se do globálních user settings, tedy
 společně pro všechny projekty na stroji. Zábradlí musí jít nastavit **per projekt**.
@@ -165,14 +191,22 @@ aby si je nikdo nemusel objevit sám.
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
    uvnitř byl `git reset --hard`. Obal s literálem (`bash -c "…"`) se rozebere,
    obal se souborem ne.
-2. **Obal s proměnnou plugin nezastaví — zapíše ho a pustí dál.** `bash -c "$CMD"`
-   nejde rozebrat, a od 0.1.10 z toho **není dotaz** (rozhodnutí Toma
-   2026-09-07/`T36-O5 A`): událost jde do auditu jako `opaque:variable` a rozhodne
-   o ní **normální tok oprávnění Claude Code**. Do 0.1.9 tu stálo *„rozhoduje člověk;
-   v `bypassPermissions` se z toho stane `deny`"* — obojí přestalo platit, protože
-   z `ask` se stal audit a v bypassu se `audit` chová stejně jako mimo něj.
-   `ask` zůstává jen tam, kde se obsah proměnné **spustí** (`& $cmd`) nebo je
-   **zakódovaný** (`-EncodedCommand`).
+   ➕ **A platí to i tehdy, když je ta cesta v proměnné** (0.1.11, nález Ada N49):
+   `pwsh -File $p`, `bash $script` ani `Start-Process -FilePath 'pwsh' …
+   -RedirectStandardOutput $log` nejsou spuštění obsahu proměnné — proměnná je tam
+   **cesta**, ne kód. Rozdíl proti omezení 2 je právě tenhle: `-c $x` je kód, `-File $p`
+   je soubor.
+2. **Obal, ve kterém se obsah proměnné SPUSTÍ, končí `ask`; hodnota a výraz končí
+   auditem.** Od 0.1.11 (nález Ada N34, volba **(i)**) je rozlišovač ten, který se
+   celou dobu tvrdil: rozhoduje, jestli se obsah proměnné **provede jako kód**.
+   `ask` proto dávají `& $cmd`, `. $x`, `eval $cmd`, `bash -c "$x"`, `sh -c "$x"`,
+   `cmd /c %X%`, `pwsh -c $x`, `Start-Process $x` i `iex $cmd`; auditem
+   (`opaque:variable`, hook mlčí) končí **hodnota a výraz** — `"EXIT=$code"`,
+   `$out | Select-String`, `[Math]::Truncate($x)`, `$TOOL git push`.
+   🔴 **Do 0.1.10 to tak nebylo a README to říkalo nepravdivě.** Skutečný rozlišovač
+   v kódu byl „PowerShell operátor `&`" proti všemu ostatnímu, takže `bash -c "$x"`
+   spouštěl obsah proměnné úplně stejně jako `& $cmd` — a končil auditem.
+   `-EncodedCommand` zůstává `ask` beze změny.
 3. **Windows-first.** Handlery volají `powershell.exe`. Na Linuxu a macOS plugin
    nefunguje; portace by znamenala druhý běhový tvar, ne jen jinou cestu.
 4. **Rozklad příkazové řádky je tokenizér, ne shell.** Rozdělení na `&&`, `||`, `;`, `|`
@@ -194,10 +228,15 @@ aby si je nikdo nemusel objevit sám.
    jakoukoli expanzi proměnných. Je to **hranice metody, ne nedodělek**.
    🔴 Do 0.1.9 tu stálo *„proto tvary s proměnnou končí `ask`, a ne `allow`"* — to už
    neplatí. Od 0.1.10 končí **auditem**, tedy plugin je nezastaví a rozhoduje o nich
-   vrstva nad ním. Cena za to je pojmenovaná: tvar jako
-   `Where-Object { $_.Name -eq 'x' -or (git reset --hard) }` je dnes `ask`, po 0.1.10
-   ho plugin propustí. Rozsah brány je rozhodnutí zadavatele (`T36-O5 A`), ne odhad
+   vrstva nad ním. Rozsah brány je rozhodnutí zadavatele (`T36-O5 A`), ne odhad
    pluginu — a nemá smysl ptát se 45× na to, kde jsou dva zásahy.
+   🔴 **Věta *„cena za to je pojmenovaná: `Where-Object { … -or (git reset --hard) }`
+   ho plugin propustí"* platila jen pro 0.1.10 a od 0.1.11 je ZRUŠENÁ** (nález Ada
+   N35). Cituje se, ne maže: byla to skutečná cena a je poctivé, že šla vidět.
+   Neplatí proto, že se ukázalo, že nutná nebyla — hlavu rozebrat pořád neumíme, ale
+   destruktivní **literál** v ní vidět je, takže ho chytí token-test nad `Leaf.Raw`
+   (viz omezení 21). Nezměnila se metoda, změnilo se pořadí: klasifikace už
+   nerozhoduje dřív, než se kdokoli podívá na text.
 7. **Timeout hooku propouští.** Když handler nestihne `timeout` z `hooks/hooks.json`,
    Claude Code ho na `PreToolUse` **neblokuje** — příkaz projde. Timeouty jsou proto
    nastavené vysoko nad naměřený studený start a hook nedělá nic, co by mohlo čekat
@@ -209,9 +248,14 @@ aby si je nikdo nemusel objevit sám.
    čtení hodnoty — `$_`, `$var.Prop`, `$var[…]`, `$i++`, porovnání operátorem — nic
    nespouští a projde bez záznamu. Jakákoli **závorka** výjimku ruší. V Bashi výjimka
    neplatí: `$cmd -rf src` je tam příkaz.
-   🔴 **Výjimka z výjimky je `& $cmd`** — operátor `&` obsah proměnné **spustí**, a to
-   zůstává `ask`. Příznak se proto nese až do listu jako příčina `invoked`; bez něj
-   by `& $cmd` a `"EXIT=$code"` měly tutéž politiku.
+   🔴 **Výjimka z výjimky je spuštění obsahu proměnné.** Operátory `&` a `.` a obaly
+   `eval`, `bash|sh|cmd|pwsh -c`, `Start-Process $x` a `iex $cmd` obsah proměnné
+   **spustí** — všechny nesou příčinu `invoked` a zůstávají `ask` (detail v omezení 2).
+   Do 0.1.10 to platilo **jen pro `&`**; ostatní tvary končily auditem, přestože dělají
+   totéž. Příznak se proto nese až do listu; bez něj by `bash -c "$x"` a `"EXIT=$code"`
+   měly tutéž politiku.
+   ➕ **Druhá výjimka je destruktivní literál pod nerozebratelnou hlavou** —
+   viz omezení 21.
 9. **`*.json` se ptá.** Zástupný znak, který může padnout na chráněné jméno (`secrets.json`,
    `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
    Od 0.1.8 (nález N26) se glob vyhodnocuje **jen tam, kde ho shell rozvine**: nad
@@ -219,11 +263,36 @@ aby si je nikdo nemusel objevit sám.
    (čtení a kopírování souborů). `git commit -m "**2**"`, `echo **2**` ani
    `Write-Host "**2**"` tedy nejsou cesty a neptají se — dřív ano, protože glob `**2**`
    sedne na `server.p12`.
-10. **SQL, které v příkazu není vidět, končí `ask`.** `cat migrace.sql | psql`,
-    `psql -f migrace.sql`, `sqlcmd -i migrace.sql` i `$sql | psql` — obsah souboru ani
-    roury hook nečte, takže rozsah nezná. Od 0.1.7 sem patří i **přesměrování stdin** —
-    `psql -h prod < drop.sql` a `psql -h prod <<< $SQL` (nález Ada N20). Literál
-    z `echo "…" | psql` i z `psql <<< "DROP TABLE x"` se rozebere.
+10. **SQL, které v příkazu není vidět, se ZAPÍŠE DO AUDITU a pustí dál.**
+    `psql -f migrace.sql`, `sqlcmd -i migrace.sql`, `psql -h prod < drop.sql`,
+    `psql -h prod <<< $SQL` i `cat migrace.sql | psql` — obsah souboru ani roury hook
+    nečte, takže rozsah nezná; od 0.1.9 z toho **není dotaz**, ale řádek v auditu
+    (rozhodnutí `T-10 A`). **V téhle třídě nezůstal ani jeden dotaz** — změřeno nad
+    0.1.11:
+
+    | tvar | rozhodnutí | tvar v auditu |
+    |---|---|---|
+    | `psql -f m.sql`, `psql -h prod < drop.sql`, `psql <<< $SQL` | ticho | `sqlFromFile` |
+    | `cat drop.sql \| psql -h prod` | ticho | `sqlFromPipe` |
+    | `$sql \| psql -h prod` | ticho | `opaque:variable` *(hlava je proměnná)* |
+    | `echo "DROP TABLE x" \| psql -h prod` | **deny** | — *(literál je vidět)* |
+
+    Literál z `echo "…" | psql` i z `psql <<< "DROP TABLE x"` se rozebere.
+    🔴 **Do 0.1.10 tu stálo *„končí `ask`"* a bylo to nepravdivé** — a o pár obrazovek
+    výš to táž README říkala správně (nález Ada N30).
+    🔴 **A od 0.1.11 platí navíc druhá věta, která tu chyběla úplně** (nález Ada N28):
+    **viditelné destruktivní SQL vedle `-f`, `<` nebo `<<<` je `deny`.**
+    `psql -h prod -c "DROP TABLE x" < /dev/null` i `psql -h prod -f m.sql -c "DROP TABLE x"`
+    končí `deny`, ne auditem. Do 0.1.10 stačilo k libovolnému destruktivnímu `-c`
+    přilepit `< /dev/null` a brána se neprovedla vůbec — příznak „ze souboru" se
+    vyhodnocoval **dřív** než pravidlo. Audit se od 0.1.11 uplatní až tehdy, když
+    nic viditelného nestřílí.
+    ➕ **Platí to i pro `dropdb`** (nález Amber A-1, opraveno v témž vydání):
+    `dropdb -h prod mydb < /dev/null` i `dropdb -h prod mydb -f x.sql` končí `deny`.
+    Byla to táž třída o řádek níž — destruktivnost totiž nenese jen **text SQL**, ale
+    i **jméno programu** (`dropdb`) a `dotnet ef database drop`, a první oprava
+    podmínila audit jen tím textem. *„Vyhodnotit výjimku až po pravidle" nestačí —
+    musí se vyhodnotit po **celém** pravidle.*
 11. **Příkaz uvnitř kontejneru se nerozebírá.** `docker exec` a `docker run` se odloupnou
     jen kvůli jménu klienta (`docker exec -i db psql …` je pořád `psql`), ale to, co se
     spustí *uvnitř* kontejneru, se pravidly nad cestami neposuzuje. Důvod je věcný:
@@ -270,15 +339,35 @@ aby si je nikdo nemusel objevit sám.
 19. 🔴 **Co audit NEVIDÍ.** Od 0.1.10 propadá nerozebratelný tvar do normálního toku
     oprávnění Claude Code — a to znamená, že o něm **rozhoduje vrstva nad pluginem**
     (klasifikátor auto režimu, `permissions.allow` / `permissions.deny` projektu).
-    `bash -c "$CMD"` tedy neběží „bez brány", ale běží **pod jinou** — a plugin o ní
+    `$TOOL git push` tedy neběží „bez brány", ale běží **pod jinou** — a plugin o ní
     nic netvrdí. Řádek v `gate-audit.jsonl` říká, že se tvar objevil; **neříká, jestli
     se provedl**. Kdo chce vědět to druhé, musí se zeptat Claude Code, ne pluginu.
+    🔴 **A v `bypassPermissions` žádná taková vrstva není** (přiznáno v 0.1.11,
+    rozhodl Tom `2026-09-08/T36-Q7 = A`). Audit tam znamená „prošlo bez druhé
+    kontroly", ne „rozhodne o tom Claude Code". Řádek to proto říká sám: nese
+    `"decision":"allow-bypass"` místo `"allow"`. **Nic se kvůli tomu neblokuje** —
+    kdo si zapne bypass, ten si ho zapnul; evidence jen přestává tvrdit něco, co
+    v tom režimu neplatí.
 20. **Destruktivní volání v kódu interpretu se hledá TOKENEM, ne parserem.**
     `gate.interpreterDestructiveTokens` je seznam řetězců a porovnává se
     **case-sensitivně** prostým výskytem v těle. Z toho plyne obojí: `python -c
     "shutil.rmtree('x')"` se ptá, a `python -c "getattr(shutil, 'rm' + 'tree')(x)"` ne.
     Rozbor kódu Pythonu ani JavaScriptu tenhle plugin nedělá a dělat nebude — proto je
     seznam **konfigurace**, ne pravidlo v kódu.
+    🔴 **`DELETE FROM` v tomhle seznamu schválně NENÍ** (0.1.11, nález Ada N50), zatímco
+    v `gate.rawDestructiveTokens` je. Není to nedůslednost, je to asymetrie s důvodem:
+    tělo interpretu běžně nese SQL řetězce **s `WHERE`**, které token-test ověřit
+    neumí, takže by `DELETE FROM` vyrobil dotaz nad běžnou prací. U nerozebratelného
+    tvaru (omezení 21) o obsahu nevíme nic jiného, takže je `ask` levný.
+21. **Destruktivní literál pod nerozebratelnou hlavou končí `ask` — token, ne parser.**
+    (0.1.11, nález Ada N35.) Je-li příčina `variable`, `heredocUnterminated` nebo
+    `depth` a v `Leaf.Raw` se vyskytne řetězec z `gate.rawDestructiveTokens`, hook se
+    zeptá. `ask`, ne `deny`: hlavu rozebrat neumíme, takže kontext neznáme —
+    `$SUDO git reset --hard` může být cokoli. Porovnání je stejné jako u omezení 20:
+    `IndexOf`, ordinálně, case-sensitivně, žádný parser. Cena nad výpisem 46 skutečných
+    dotazů ze 7. 9.: **0** — žádný z nich token nenese.
+    ⚠️ **Co to nechytí:** literál složený až za běhu (`$a = 'git reset'; "$a --hard"`),
+    protože platí omezení 6. Je to zúžení díry, ne její uzavření.
 
 ---
 
@@ -358,6 +447,33 @@ ho každá sada, které se týká (`Invoke-InvariantRows`). Roste **generátorem
 (`tests/_generate-invariants.ps1 -WhatIf` pro náhled), ne ruční editací — a generátor
 při **sporu** (týž tvar, jiné očekávání) nezapíše nic a skončí nenulově. Řádek odsud
 odchází jen s citovaným rozhodnutím.
+
+**`allow` v invariantu znamená, že hook MLČÍ** — prázdný stdout a `exit 0`, tedy platí
+normální tok oprávnění Claude Code. Není to `permissionDecision: allow`; ten by tu
+vrstvu přeskočil. Plugin žádný allow writer nemá (`_common.ps1` umí jen
+`Write-DenyDecision` a `Write-AskDecision`), takže **každý řádek `allow` je tvrzení
+o tichu**. Rozdíl drží `Get-Decision` v `tests/_harness.ps1`: uvidí-li
+`permissionDecision: allow`, vrátí `DECISION-ALLOW` — a to se nerovná žádnému očekávání
+v žádné fixtuře, takže takový hook zčervená na **každém** řádku. (0.1.11, nález Ada N46.
+Druhé jméno pro tichu se schválně nezavádí: jeden slovník, rozdíl se čte tady.)
+
+#### Změna očekávání jde jen nástrojem
+
+🔴 **Ruční editace `expect` v `invariants.json` je zakázaná.** Očekávání se mění
+výhradně přepínačem `-Prijmout`, který k zápisu vyžaduje **citaci rozhodnutí**:
+
+```powershell
+# náhled: co by se změnilo a proč
+pwsh -NoProfile -File tests/_generate-invariants.ps1 -Prijmout "T36-N34 (i)" -WhatIf
+
+# zápis: změní expect u sporných řádků a doplní hlavičku `_zmeneno`
+pwsh -NoProfile -File tests/_generate-invariants.ps1 -Prijmout "T36-N34 (i)"
+```
+
+Bez citace nástroj nezapíše nic a skončí nenulově. Zapisuje **jen ty řádky, na kterých
+generátor hlásil spor** (týž tvar, jiné očekávání v sadě), a do hlavičky `_zmeneno`
+připojí datum, citaci, směr změny a výčet tvarů. Append-only pravidlo tím zůstává:
+řádek nikdy neodchází, jen mění očekávání — a vždy s tím, kdo o tom rozhodl.
 
 ---
 

@@ -42,14 +42,22 @@
     "remoteShells": ["ssh", "plink"],
 
     "_opaqueComment": "Rozhodnutí Toma 2026-09-07/T36-O5 = A: „nerozebratelné“ přestalo být jednou třídou. Do 0.1.9 končil každý takový tvar dotazem — nad reálnými čísly 7. 9. to bylo 45 dotazů ze 46 při DVOU skutečných zásazích §6. Politika je per PŘÍČINA. 🔴 `audit` znamená, že hook MLČÍ (zapíše řádek a nevydá rozhodnutí) — NE `permissionDecision: allow`; ten by přeskočil vrstvu oprávnění Claude Code, a právě ta má nadále rozhodovat. Hodnoty: `audit` | `ask`; cokoli jiného se čte jako `ask` (fail-closed). `invoked` = `& $cmd`, tedy obsah proměnné se SPUSTÍ; `encoded` = `-EncodedCommand`. Obojí zůstává dotazem — je to kontrolní skupina celé změny.",
+    "_opaque0111Comment": "0.1.11 (nález Ady N35): `depth` a `heredocUnterminated` se vracejí na `ask`. Ve výpisu 46 dotazů ze 7. 9. mají OBĚ příčiny **0 výskytů**, takže default `ask` nestojí ani jeden dotaz navíc — a u tvaru, kde nevíme ani kde tělo končí, je audit tvrzení, které nemáme čím podložit. `variable` a `interpreter` zůstávají `audit`: ty ta čísla nesou.",
     "opaque": {
       "variable": "audit",
       "interpreter": "audit",
-      "heredocUnterminated": "audit",
-      "depth": "audit",
+      "heredocUnterminated": "ask",
+      "depth": "ask",
       "invoked": "ask",
       "encoded": "ask"
     },
+
+    "_rawDestructiveTokensComment": "🔴 Nález Ady N35 (0.1.11), sourozenec N28: klasifikace PŘED pohledem na text. `Where-Object { … -or (git reset --hard) }`, `ForEach-Object { $_.Delete() }` a `$SUDO git reset --hard` mají hlavu nerozebratelnou, ale destruktivní literál v nich VIDĚT JE — a od 0.1.10 končily auditem. Shoda nad `Leaf.Raw` u příčin `variable`, `heredocUnterminated` a `depth` → `ask` (ne `deny`: kontext neznáme). Porovnání je stejné jako u `interpreterDestructiveTokens` — IndexOf, Ordinal, case-SENSITIVNÍ, žádný parser. N50 — asymetrie s důvodem: `DELETE FROM` je TADY (o tvaru nevíme nic jiného, ask je levný), v `interpreterDestructiveTokens` NENÍ (tělo interpretu běžně nese SQL řetězce s WHERE, které ověřit nejde). Cena nad výpisem 46 dotazů: 0.",
+    "rawDestructiveTokens": [
+      "git reset --hard", "push -f", "push --force", "branch -D", "clean -fd",
+      "rm -rf", "Remove-Item", "-Recurse", "Delete(",
+      "DROP TABLE", "TRUNCATE", "DELETE FROM"
+    ],
 
     "_interpreterDestructiveTokensComment": "Kód interpretu (`python -c`, `node -e`, tělo heredocu interpretu) se nerozebírá — ale JMÉNO destruktivního volání v něm vidět je. Je to test na TOKEN, ne parser jazyka: prostý case-SENSITIVNÍ výskyt v těle → `ask`. Case-sensitivní schválně — `Remove-Item` ano, `remove-item` ne; jinak by seznam falešně chytal běžná anglická slova. Kontrolní skupina 7. 9. (15 příkazů HRMS + Útraty: `pathlib`, `read_text`/`write_text`, `io.open`, `node -e require(...)`) žádný z nich nenese. `.rmSync(`, `.rmdirSync(` a `.unlinkSync(` jsou tu proto, že Node se píše `require('fs').rmSync(`, ne `fs.rmSync` — vzor postavený na druhém tvaru by minul invariantní řádek `node -e \"require('fs').rmSync('src')\"`.",
     "interpreterDestructiveTokens": [
@@ -96,7 +104,8 @@
       "pushDeleteRefspec": "smazání vzdálené větve prázdným refspecem",
       "deleteFromPipeline": "mazání se vstupem z roury (cíl není v příkazu vidět)",
       "opaque": "příkaz, který nejde rozebrat ({text})",
-      "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})"
+      "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})",
+      "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})"
     }
   },
 

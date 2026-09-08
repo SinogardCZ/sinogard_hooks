@@ -431,5 +431,16 @@ function Get-Decision($Result) {
     if ($null -eq $hso) { return 'NO-HOOKSPECIFICOUTPUT' }
     $pd = $hso.Value.PSObject.Properties['permissionDecision']
     if ($null -eq $pd) { return 'NO-DECISION' }
+    # 🔴 Nalez Ady N46 (0.1.11): `allow` v sade znamena JEDNU vec - hook MLCI, tedy
+    # plati normalni tok opravneni Claude Code. Plugin zadny allow writer nema
+    # (`_common.ps1`: jen Write-DenyDecision / Write-AskDecision), takze KAZDY
+    # radek `allow` v invariantu je tvrzeni o TICHU. Kdyby hook zacal vydavat
+    # `permissionDecision: allow`, tu vrstvu by PRESKOCIL - a do 0.1.10 to sada
+    # nepoznala, protoze obe veci vracela jako retezec 'allow'.
+    #
+    # Slovo `silent` se schvalne nezavadi: jeden slovnik, dva vyznamy se rozlisi tady.
+    # `DECISION-ALLOW` se nerovna zadnemu ocekavani v zadne fixture, takze takovy hook
+    # zcervena na KAZDEM radku, ne jen tam, kde si toho nekdo vsimne.
+    if (([string]$pd.Value) -eq 'allow') { return 'DECISION-ALLOW' }
     return [string]$pd.Value
 }

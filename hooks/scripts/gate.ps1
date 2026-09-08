@@ -37,6 +37,11 @@ $ErrorActionPreference = 'Stop'
 
 $PluginRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 
+# Vychozi hodnota MUSI stat driv, nez ji nekdo precte: pod Set-StrictMode je cteni
+# nenastavene promenne vyjimka, a v tele Write-GateAudit by ji spolkl jeho `catch`
+# (evidence je fail-OPEN) - audit by tise prestal chodit.
+$script:PermissionMode = 'default'
+
 # ------------------------------------------------------------- pomocne ---
 
 # List je hashtable a ne kazdy nese kazdy klic. Pod StrictMode je pristup k chybejicimu
@@ -482,6 +487,15 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         $trimmed = $trimmed.Substring(1).Trim()
         if ($trimmed -eq '') { return $out }
     }
+    # N33: dot-source je DRUHY operator spusteni - `. $x` obsah promenne spusti stejne
+    # jako `& $x`, jen v aktualnim scope. Resi se tady vedle `&`, ne jako `exe`: kdyby
+    # se cekalo az na Split-Arguments, byl by argv[0] jen tecka a priznak by se ztratil.
+    # Bila znaka za teckou je podminka - `./script.sh` ani `cd ..` dot-source nejsou.
+    elseif ($trimmed -match '^\.\s') {
+        $invoked = $true
+        $trimmed = $trimmed.Substring(1).Trim()
+        if ($trimmed -eq '') { return $out }
+    }
 
     # Raw se bere PRED odstranenim prefixu promennych - hostitel DB muze byt prave tam
     # (ConnectionStrings__Default="Host=..." dotnet ef database update).
@@ -644,7 +658,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             if ($file -eq '') { return $out }
             $inner = ($file + ' ' + $argList).Trim()
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $raw 'variable')); return $out }
+            # N34 (i) + N49: `Start-Process $x` spousti obsah promenne jako FilePath ->
+            # `invoked`. Promenna jako CESTA (`pwsh -File $p`, `bash $script`) sem nevede -
+            # tam se soubor jen predava a plati README omezeni 1 (skript souborem je
+            # nepruhledny). Kontrolni tvar `Start-Process -FilePath 'pwsh' ...
+            # -RedirectStandardOutput $log` ma FilePath literalni, takze do teto vetve
+            # vubec nepada.
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $raw 'invoked')); return $out }
             # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
             foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
@@ -659,7 +679,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 return $out
             }
             $inner = $rest[$idx + 1]
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
+            # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
             # Nalez Amber I2: escape znak patri tomu shellu, ktery text SPUSTI, ne tomu,
             # ktery ho predal dal. Bez prepnuti se `bash -c 'echo \" ; git reset --hard'`
             # psane z PowerShell nastroje rozebiralo PS pravidly a propadlo na allow.
@@ -686,7 +707,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($isFile) { return $out }
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
+            # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
             # Nalez Amber I2, opacny smer: `pwsh -c '...'` psane z Bash nastroje.
             foreach ($l in (Get-NestedShellLeaf $inner 'PowerShell' $Depth)) { [void]$out.Add($l) }
             return $out
@@ -698,14 +720,30 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
+            # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
             # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
+            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
+            return $out
+        }
+        '^(iex|invoke-expression)$' {
+            # N33 (zuzeny, Ada 8. 9.): `iex` je treti tvar spusteni textu. Literal se
+            # ROZEBERE jako u `bash -c '...'` (`iex 'git reset --hard'` -> deny,
+            # `iex 'git status'` -> nic), promenna spadne do `invoked` -> ask.
+            # Pozicni i `-Command` tvar; jine tvary (`"x" | iex`, `iex` bez argumentu)
+            # sem nedojdou a drzi je dal pas `askPatterns.invoke-expression`.
+            $skip = 0
+            if ($rest.Count -gt 0 -and (Test-ParameterPrefix ($rest[0].ToLowerInvariant()) 'command')) { $skip = 1 }
+            $inner = (Join-CommandString ($rest | Select-Object -Skip $skip))
+            if ($inner -eq '') { return $out }
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
             foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
         '^(eval)$' {
             $inner = (Join-CommandString $rest)
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'variable')); return $out }
+            # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
+            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
             # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
             foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
             return $out
@@ -1249,27 +1287,56 @@ function Test-DatabaseRule($Leaf, $Config) {
     # `dotnet[- ]ef`: nalez Metis 10 - primo nainstalovany nastroj se jmenuje `dotnet-ef`.
     $gap = '(?:\s|/\*.*?\*/)+'
 
-    # SQL prislo ze souboru nebo z roury - obsah nevidime, rozsah nezname (Z3 -> ask).
-    if ($sql -match '__SQL_ZE_SOUBORU__') {
-        # T-10 A: `psql -f migrace.sql`, `psql < drop.sql`, `psql <<< $SQL` - obsah videt
-        # neni, ale je to bezna prace. Audit misto brany.
-        Write-GateAudit $script:ToolName 'sqlFromFile' 'allow' $Config
-        return $null
-    }
+    # !! Nalez Ada N28 (0.1.11): marker "SQL ze souboru" je PRIZNAK, ne text SQL.
+    # Get-SqlText ho pridava VEDLE viditelneho SQL z `-c`/uvozovek, takze do 0.1.10
+    # stacilo k libovolnemu destruktivnimu `-c` prilepit `< /dev/null` nebo `-f x.sql`
+    # a vetev markeru rozhodla driv, nez se na viditelny text kdokoli podival:
+    #   psql -h prod -c "DROP TABLE x" < /dev/null  ma byt deny, bylo allow + audit
+    #   psql -h prod -f m.sql -c "DROP TABLE x"     ma byt deny, bylo allow + audit
+    # Do 0.1.8 prednost markeru degradovala deny jen na ask, takze si toho nikdo nevsiml;
+    # T-10 z ni udelala allow. Trida: VYJIMKA VYHODNOCENA PRED PRAVIDLEM JE BYPASS -
+    # tataz, kterou plugin sam zapsal u `cmd /c` a u bloku s ocasem.
+    #
+    # Oprava je PORADI, ne nove pravidlo: marker se z textu odstrani, destruktivnost se
+    # pocita nad tim, co je VIDET, a audit se uplatni az kdyz nic viditelneho nestrili.
+    # Hlaska ani tvar u deny se nemeni (host prod x localhost zustava beze zmeny).
+    $sqlFromFile = ($sql -match '__SQL_ZE_SOUBORU__')
+    $sqlVisible = ($sql -replace '__SQL_ZE_SOUBORU__', ' ').Trim()
 
     $sqlDestructive = $false
-    if ($sql -ne '') {
-        $sqlDestructive = ([regex]::IsMatch($sql, ('\bdrop' + $gap + '(table|database|schema)\b'), 'IgnoreCase')) -or
-                          ([regex]::IsMatch($sql, '\btruncate\b', 'IgnoreCase')) -or
-                          (Test-DeleteWithoutWhere $sql) -or
-                          (Test-UpdateWithoutWhere $sql)
+    if ($sqlVisible -ne '') {
+        $sqlDestructive = ([regex]::IsMatch($sqlVisible, ('\bdrop' + $gap + '(table|database|schema)\b'), 'IgnoreCase')) -or
+                          ([regex]::IsMatch($sqlVisible, '\btruncate\b', 'IgnoreCase')) -or
+                          (Test-DeleteWithoutWhere $sqlVisible) -or
+                          (Test-UpdateWithoutWhere $sqlVisible)
     }
 
+    # !! Nalez Amber A-1 (kolo 1 nad 01afb82): prvni oprava N28 zavrela bypass jen pro
+    # SQL v TEXTU. Destruktivnost ale nese jeste DVA zdroje, ktere s textem nemaji nic
+    # spolecneho - jmeno spustitelneho souboru (`dropdb`) a `dotnet ef database drop`.
+    # `dropdb` je pritom v `sqlClients`, takze mu `Get-SqlText` marker taky prida:
+    #   dropdb -h prod mydb < /dev/null   melo byt deny, bylo allow + audit
+    #   dropdb -h prod mydb -f x.sql      melo byt deny, bylo allow + audit
+    # Tataz trida jako N28, o jeden radek niz. Duvod je stejny: podminka auditu se
+    # ptala na UZSI vec (`$sqlDestructive`), nez na kterou se pta pravidlo (`$destructive`).
+    # Proto se `$destructive` i `$update` pocitaji PRED auditem a audit se uplatni az
+    # tehdy, kdyz nestrili ANI JEDEN z nich.
+    # (`dotnet ef` v `sqlClients` neni, takze marker nikdy nedostane - overeno mericim
+    # behem; je tu pro uplnost podminky, ne kvuli znamemu tvaru.)
     $destructive = $sqlDestructive -or
                    ($Leaf.Exe -eq 'dropdb') -or
                    ([regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'drop\b'), 'IgnoreCase'))
 
     $update = [regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'update\b'), 'IgnoreCase')
+
+    # SQL prislo ze souboru nebo z roury - obsah nevidime, rozsah nezname (Z3).
+    # T-10 A: `psql -f migrace.sql`, `psql < drop.sql`, `psql <<< $SQL` je bezna prace,
+    # takze audit misto brany. Az TADY, po rozhodnuti o vsem, co videt JE (N28 + A-1).
+    if ($sqlFromFile -and -not $destructive -and -not $update) {
+        Write-GateAudit $script:ToolName 'sqlFromFile' 'allow' $Config
+        return $null
+    }
+
     if (-not $destructive -and -not $update) { return $null }
 
     # U tela heredocu i roury je nastrojem uvozujici prikaz, ne 'heredoc'.
@@ -1331,6 +1398,13 @@ function Get-RemoteShellPositional($Argv) {
 # nic a hook mlci; evidence nesmi byt duvod, proc brana spadne.
 function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision, $Config) {
     try {
+        # T36-Q7 = A (Tom, 8. 9.): v `bypassPermissions` nad pluginem uz zadna vrstva
+        # neni - audit tam znamena "proslo bez druhe kontroly", ne "rozhodne to
+        # opravneni Claude Code". Radek to proto rekne sam; nic se neblokuje.
+        # Mapuje se TADY, ne na volajicich mistech, aby na to neslo u jednoho zapomenout.
+        if ($Decision -eq 'allow' -and $script:PermissionMode -eq 'bypassPermissions') {
+            $Decision = 'allow-bypass'
+        }
         $dir = $env:CLAUDE_PLUGIN_DATA
         if ([string]::IsNullOrWhiteSpace($dir)) { return }
         $file = [string](Get-Field (Get-Field $Config 'gate') 'auditFile' 'gate-audit.jsonl')
@@ -1382,6 +1456,29 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
         }
     }
 
+    # !! Nalez Ada N35 (0.1.11), sourozenec N28: klasifikace PRED pohledem na text.
+    # `Where-Object { ... -or (git reset --hard) }`, `$SUDO git reset --hard` (hlava
+    # promenna, ocas viditelny) i neukonceny heredoc s destruktivnim telem koncily od
+    # 0.1.10 auditem, prestoze destruktivni LITERAL je v nich VIDET. Neni to nutna cena:
+    # 1C uz presne tenhle token-test dela nad telem interpretu - tady se dela nad `Raw`.
+    #
+    # `ask`, ne `deny`: kontext nezname (hlavu rozebrat neumime), takze se pta clovek.
+    # Porovnani je stejne jako u `interpreterDestructiveTokens` - IndexOf, Ordinal,
+    # zadny parser. N50: `DELETE FROM` v tomhle seznamu JE (o tvaru nevime nic jineho,
+    # ask je levny), v `interpreterDestructiveTokens` NENI (telo interpretu bezne nese
+    # SQL retezce s WHERE, ktere overit nejde).
+    if (@('variable', 'heredocUnterminated', 'depth') -ccontains $Why -and $Raw -ne '') {
+        foreach ($t in @(Get-Field $gate 'rawDestructiveTokens' @())) {
+            $token = [string]$t
+            if ($token -eq '') { continue }
+            if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+                return @{ Decision = 'ask'
+                          Shape = ((Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})') `
+                                   -replace '\{token\}', $token) }
+            }
+        }
+    }
+
     if (([string](Get-Field (Get-Field $gate 'opaque') $Why 'ask')) -eq 'audit') {
         Write-GateAudit $script:ToolName ('opaque:' + $Why) 'allow' $Config
         return $null
@@ -1398,7 +1495,12 @@ function Test-Leaf($Leaf, $Config) {
     $shapes = Get-Field $gate 'shapes'
 
     if ($Leaf.Kind -eq 'opaque') {
-        return (Resolve-OpaqueDecision ([string](Get-LeafField $Leaf 'Why' 'variable')) `
+        # N39: chybejici `Why` NESMI tise dedit politiku `variable` (dnes `audit`) -
+        # to by z vady konstrukce udelalo ticho. `unknown` neni klic v `gate.opaque`,
+        # takze Resolve-OpaqueDecision vezme svuj vlastni default `ask`. Je to
+        # fail-closed KONSTRUKCI, ne testem: list bez `Why` zvenci vyrobit nejde -
+        # New-OpaqueLeaf ma `Why` povinny parametr a vsech osm volani ho predava.
+        return (Resolve-OpaqueDecision ([string](Get-LeafField $Leaf 'Why' 'unknown')) `
                                        ([string]$Leaf.Raw) `
                                        ([string](Get-LeafField $Leaf 'Body' '')) $Config)
     }
@@ -1552,6 +1654,9 @@ Set-ScannerEscape $toolName
 # Jmeno nastroje potrebuje evidence T-10 A hluboko v rozhodovani, kam se parametrem
 # neprotahne bez refaktoru vsech podpisu.
 $script:ToolName = $toolName
+# T36-Q7 = A: rezim opravneni potrebuje evidence (Write-GateAudit) ze stejneho duvodu
+# jako jmeno nastroje - parametrem se tam bez refaktoru vsech podpisu neprotahne.
+$script:PermissionMode = $mode
 
 if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 

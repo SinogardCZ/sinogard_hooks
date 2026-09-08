@@ -81,16 +81,54 @@ function Get-HookConfig([string]$PluginRoot, [string]$ProjectDir) {
     $overridePath = Join-SafePath $ProjectDir '.claude/sinogard-hooks.json'
     if (-not (Test-SafePath $overridePath)) { return $config }
 
-    # Melke slouceni: klic v override NAHRAZUJE cely klic defaults. Zadny hluboky
-    # merge - jinak by z override neslo polozku seznamu odebrat, jen pridat.
+    # !! Nalez K2-1 (review Amber) + Ada N37/N43, opraveno v 0.1.11: slouceni je
+    # JEDNOUROVNOVE nad KAZDYM top-level objektem, ne uplne melke.
+    #
+    # Do 0.1.10 nahrazoval klic z override cely klic defaults, takze
+    # `{"gate":{"opaque":{"variable":"ask"}}}` zahodilo `denyPatterns`,
+    # `allowedRemoveRoots` i `shapes`. Slo to OBEMA smery a prave proto se to
+    # nepoznalo: `git reset --hard` prestal byt deny a zaroven `rm -rf bin` ZACAL byt
+    # deny, takze "brana porad neco blokuje" bylo pravdive pozorovani a falesny zaver.
+    # Tataz stavba je u `secrets` (N43): `{"secrets":{"envFile":{...}}}` by zahodilo
+    # `denyPathPatterns`, tedy `id_rsa`, `.envrc` i `secrets.json`.
+    #
+    # Pravidlo je proto GENERICKE, ne vyjmenovane pro `gate`: je-li hodnota na obou
+    # stranach OBJEKT, slouci se o JEDNU uroven (klic po klici); pole a skalary se
+    # nahrazuji CELE. Duvod melkeho slucovani tim drzi - polozku seznamu porad nejde
+    # z override jen odebrat - jen uz kvuli jednomu klici nemizi zbytek objektu.
+    # Hloub nez o jednu uroven se vedome nejde (TASK-106 bod 10; N42: rozhodnuto
+    # v 0.1.11, ne odlozeno do v0.2).
     $override = ConvertFrom-Json (Read-Utf8File $overridePath)
     foreach ($prop in $override.PSObject.Properties) {
+        $current = $null
+        if ($config.PSObject.Properties[$prop.Name]) {
+            $current = $config.PSObject.Properties[$prop.Name].Value
+        }
+        $value = $prop.Value
+        if ((Test-MergeableObject $current) -and (Test-MergeableObject $value)) {
+            foreach ($inner in $value.PSObject.Properties) {
+                if ($current.PSObject.Properties[$inner.Name]) {
+                    $current.PSObject.Properties.Remove($inner.Name)
+                }
+                $current | Add-Member -NotePropertyName $inner.Name -NotePropertyValue $inner.Value
+            }
+            continue
+        }
         if ($config.PSObject.Properties[$prop.Name]) {
             $config.PSObject.Properties.Remove($prop.Name)
         }
-        $config | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value
+        $config | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $value
     }
     return $config
+}
+
+# Objekt z ConvertFrom-Json je PSCustomObject. Pole ani skalar se neslucuji - pole by
+# se slucovanim nedalo zkratit a skalar zadne klice nema. `$null` taky ne: klic, ktery
+# v defaults vubec neni, se pridava cely.
+function Test-MergeableObject($Value) {
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [System.Array]) { return $false }
+    return ($Value -is [System.Management.Automation.PSCustomObject])
 }
 
 function Test-HookEnabled($Config, [string]$HookName) {

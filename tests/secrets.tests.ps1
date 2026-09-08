@@ -400,6 +400,38 @@ $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json -Environment @{
 Assert-Equal 'allow' (Get-Decision $r) '[override] vypnuty secrets nerozhoduje'
 Assert-Equal 0 $r.Exit '[override] vypnuty secrets exit 0'
 
+# --------------------- N43: castecny override `secrets` uz zbytek klice NEZTRATI ---
+#
+# 🔴 Nalez Ady N43: `secrets` ma tutez stavbu jako `gate` - pole (`denyPathPatterns`,
+# `askPathPatterns`, `selfProtectPathPatterns`, `protectedBaseNames`, `pathCommands`)
+# vedle objektu (`envFile`, `shapes`). Do 0.1.10 by proto override, ktery nese jen
+# `envFile`, zahodil `denyPathPatterns` - a `id_rsa`, `.envrc` i `secrets.json` by
+# prestaly byt deny, aniz by o tom kdokoli vedel.
+#
+# Oprava v `Get-HookConfig` (0.1.11) je GENERICKA pro kazdy top-level objekt, ne
+# vyjmenovana pro `gate` - a prave tenhle pripad ten rozdil tvrdi.
+function Test-PartialSecretsOverride([string]$Name, [string]$Path, [string]$Expect, [string]$Override) {
+    $dir = Join-Path $script:TempDir ('sec-partial-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $dir '.claude'))
+    [System.IO.File]::WriteAllText(
+        (Join-Path $dir '.claude/sinogard-hooks.json'),
+        $Override,
+        ([System.Text.UTF8Encoding]::new($false)))
+    $j = New-HookInput 'pretooluse-read' @{ 'tool_input.file_path' = $Path }
+    $res = Invoke-Hook -Script 'secrets.ps1' -InputJson $j -Environment @{ CLAUDE_PROJECT_DIR = $dir }
+    Assert-Equal $Expect (Get-Decision $res) ("[N43/{0}] {1}" -f $Name, $Path)
+}
+
+Start-Case 'N43: override jednoho klice `secrets` nezahodi `denyPathPatterns`'
+$ovAskEmpty = '{"secrets":{"askPathPatterns":[]}}'
+Test-PartialSecretsOverride 'id_rsa drzi' 'id_rsa' 'deny' $ovAskEmpty
+Test-PartialSecretsOverride '.env drzi'   '.env'   'deny' $ovAskEmpty
+$ovEnvFile = '{"secrets":{"envFile":{"maxBytes":1024}}}'
+Test-PartialSecretsOverride 'id_rsa drzi i pri override envFile' 'id_rsa' 'deny' $ovEnvFile
+# 🔴 kontrolni skupina: co override skutecne prepsal, PLATI - jinak by "nic se
+#    neztratilo" mohlo znamenat "override se vubec nenacetl"
+Test-PartialSecretsOverride 'prazdne askPathPatterns plati' '.claude/settings.local.json' 'allow' $ovAskEmpty
+
 # ------------------------------------------------- cesta na cizi jednotce ---
 
 # Tataz regrese jako u gate: secrets.ps1 navic saha na cwd pri zjistovani, jestli
