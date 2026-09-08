@@ -433,8 +433,8 @@ function Get-Decision($Result) {
     if ($null -eq $pd) { return 'NO-DECISION' }
     # 🔴 Nalez Ady N46 (0.1.11): `allow` v sade znamena JEDNU vec - hook MLCI, tedy
     # plati normalni tok opravneni Claude Code. Plugin zadny allow writer nema
-    # (`_common.ps1`: jen Write-DenyDecision / Write-AskDecision), takze vsech 183
-    # radku `allow` v invariantu je tvrzeni o TICHU. Kdyby hook zacal vydavat
+    # (`_common.ps1`: jen Write-DenyDecision / Write-AskDecision), takze KAZDY
+    # radek `allow` v invariantu je tvrzeni o TICHU. Kdyby hook zacal vydavat
     # `permissionDecision: allow`, tu vrstvu by PRESKOCIL - a do 0.1.10 to sada
     # nepoznala, protoze obe veci vracela jako retezec 'allow'.
     #

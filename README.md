@@ -435,7 +435,7 @@ odchází jen s citovaným rozhodnutím.
 **`allow` v invariantu znamená, že hook MLČÍ** — prázdný stdout a `exit 0`, tedy platí
 normální tok oprávnění Claude Code. Není to `permissionDecision: allow`; ten by tu
 vrstvu přeskočil. Plugin žádný allow writer nemá (`_common.ps1` umí jen
-`Write-DenyDecision` a `Write-AskDecision`), takže **všech 183 řádků `allow` je tvrzení
+`Write-DenyDecision` a `Write-AskDecision`), takže **každý řádek `allow` je tvrzení
 o tichu**. Rozdíl drží `Get-Decision` v `tests/_harness.ps1`: uvidí-li
 `permissionDecision: allow`, vrátí `DECISION-ALLOW` — a to se nerovná žádnému očekávání
 v žádné fixtuře, takže takový hook zčervená na **každém** řádku. (0.1.11, nález Ada N46.
