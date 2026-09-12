@@ -103,6 +103,8 @@
       "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
       "pushDeleteRefspec": "smazání vzdálené větve prázdným refspecem",
       "deleteFromPipeline": "mazání se vstupem z roury (cíl není v příkazu vidět)",
+      "_shortAbsolutePathComment": "TASK-106 bod 4 (nález Amber I6, 0.2.0): `rm -rf /srv` končilo ask s hláškou o rouře. Skutečná příčina: `/xxx` do tří znaků je od přepínače cmd (`/s`, `/q`) k nerozeznání, cíl není vidět. Rozhodnutí se nemění, věta ano.",
+      "shortAbsolutePath": "rekurzivní mazání s krátkou absolutní cestou ({target}) — do tří znaků je od přepínače cmd (/s, /q) k nerozeznání, cíl není vidět",
       "opaque": "příkaz, který nejde rozebrat ({text})",
       "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})",
       "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})"

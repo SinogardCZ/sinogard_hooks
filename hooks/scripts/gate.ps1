@@ -42,6 +42,13 @@ $PluginRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 # (evidence je fail-OPEN) - audit by tise prestal chodit.
 $script:PermissionMode = 'default'
 
+# TASK-106 bod 15 (0.2.0): rozbor vnitrku obalu, ktery text SPOUSTI (`bash -c`, `pwsh
+# -Command`, `cmd /c`, `eval`, `iex`, `Start-Process`). Uvnitr nej je promenna v HLAVE
+# statementu obsah, ktery se spusti - tedy `invoked`, ne `variable`. Priznak se nese
+# script-scope, protoze Get-CommandLeaf konfiguraci ani kontext parametrem nedostava
+# (refaktor podpisu je mimo rozsah, zadani par. 6 bod 5).
+$script:InvokedContext = $false
+
 # ------------------------------------------------------------- pomocne ---
 
 # List je hashtable a ne kazdy nese kazdy klic. Pod StrictMode je pristup k chybejicimu
@@ -426,6 +433,31 @@ function Get-NestedShellLeaf([string]$Inner, [string]$ShellTool, [int]$Depth) {
     return $out
 }
 
+# TASK-106 bod 15 (gamma, 0.2.0): vnitrek obalu, ktery text SPOUSTI. Do 0.1.11 stal pred
+# rozborem `if (Test-Unexpandable $inner) -> invoked` nad CELYM vnitrkem, takze promenna
+# KDEKOLI v tele (`pwsh -Command "git status; Write-Host $x"`) udelala z obalu spusteni
+# promenne. Mereni faze 1 (2026-09-12): 44 dotazu `invoked`, 41 tohoto tvaru, pravych 0.
+# Vnitrek se proto rozebira tymz retezem jako hlavni beh a `invoked` je jen statement,
+# jehoz HLAVA je promenna nebo substituce (obsah se spusti) - to drzi Get-CommandLeaf
+# pres $script:InvokedContext. `bash -c "$x"`, `pwsh -c "$x"`, `cmd /c %X%`, `eval $cmd`
+# i `bash -c "$(cat cmd.txt)"` zustavaji ask (kontrolni skupina v sade).
+# `$ShellTool` prazdny = tyz shell jako hostitel (cmd /c, eval, iex, Start-Process).
+function Get-InvokedLeaves([string]$Inner, [string]$ShellTool, [int]$Depth) {
+    $out = New-Object System.Collections.ArrayList
+    $prev = $script:InvokedContext
+    $script:InvokedContext = $true
+    try {
+        if ($ShellTool -eq '') {
+            foreach ($l in (Get-CommandLineLeaves $Inner ($Depth + 1))) { [void]$out.Add($l) }
+        } else {
+            foreach ($l in (Get-NestedShellLeaf $Inner $ShellTool $Depth)) { [void]$out.Add($l) }
+        }
+    } finally {
+        $script:InvokedContext = $prev
+    }
+    return $out
+}
+
 # Nalez Ada N19: hlavni beh proustel prikaz TREMI pruchody - Split-Heredoc,
 # Split-SqlPipeline a teprve pak Split-CommandLine. Rekurze (bash -c, cmd /c, eval,
 # telo bloku, telo heredocu do shellu) volala JEN posledni clanek, takze dva
@@ -552,22 +584,33 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # Nalez Amber I1: blok `{ ... }` nemusi stat na zacatku statementu. Regex ukotveny
     # na zacatek nechal `if ($x) { git reset --hard }` i viceradkovou variantu projit
     # jako exe `if` -> allow. Telo se proto hleda kvotove korektne kdekoli.
-    $block = Get-ScriptBlockBody $stripped
-    if ($null -ne $block -and $block.Body.Trim() -ne '') {
+    # Nalez Amber K2 (TASK-106 bod 6, 0.2.0): rozebiraji se VSECHNY bloky statementu,
+    # ne jen ten, kterym statement konci - `if ($x) { rm -rf src } else { git status }`
+    # mel destruktivni prikaz v PRVNIM bloku a prosel nerozebrany.
+    $blocks = Get-ScriptBlockBodies $stripped
+    foreach ($block in $blocks.Blocks) {
+        if ($block.Body.Trim() -eq '') { continue }
         # Nalez Amber G4: vnitrek se rozebira jako PRIKAZOVA RADKA, ne jako jediny
         # prikaz - `& { git reset --hard; rm -rf src }` jsou dva prikazy a driv se
         # z nich cetl jen prvni. Skener uz `{ }` zna, takze se sem dostane cely blok.
         # Nalez Ada N19: telo bloku prochazi tymz retezem jako hlavni beh.
         foreach ($l in (Get-CommandLineLeaves $block.Body ($Depth + 1))) { [void]$out.Add($l) }
-        # Nalez Amber K1: hlava pred zavorkou se ZAHAZOVALA. `rm -rf {src,lib}` neni
-        # blok, ale jeden prikaz s literalnim argumentem - telo `src,lib` neznamena nic
-        # a `return` po nem schoval mazani. Kdyz hlava neco nese, statement se rozebira
-        # DAL jako bezny prikaz; rekurze tu neni, blok uz v `$out` je.
-        if ($block.Head -eq '') { return $out }
     }
+    # Nalez Amber K1: hlava pred zavorkou se ZAHAZOVALA. `rm -rf {src,lib}` neni
+    # blok, ale jeden prikaz s literalnim argumentem - telo `src,lib` neznamena nic
+    # a `return` po nem schoval mazani. Kdyz hlava (nebo ocas) neco nese, statement se
+    # rozebira DAL jako bezny prikaz; rekurze tu neni, bloky uz v `$out` jsou.
+    if ($blocks.Whole) { return $out }
 
     $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
     if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
+        # TASK-106 bod 15: uvnitr obalu, ktery text spousti, je substituce v hlave
+        # (`bash -c "$(cat cmd.txt)"`) obsah, ktery se SPUSTI - tedy `invoked`. Bez teto
+        # zavory by se `$(...)` rozebralo jen jako vnitrni prikaz (`cat cmd.txt`) a vysledek
+        # substituce, ktery bash spusti, by nikdo nevidel.
+        if ($script:InvokedContext -and $stripped -match '^\s*(?:&\s*)?\$\(') {
+            [void]$out.Add((New-OpaqueLeaf $raw 'invoked')); return $out
+        }
         foreach ($l in (Get-CommandLeaf $paren.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
         return $out
     }
@@ -578,7 +621,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     if (Test-Unexpandable $argv[0]) {
         # `& $cmd` obsah promenne SPUSTI, `$out` nebo `"EXIT=$code"` ne. Priznak `$invoked`
         # se proto musi DONEST az sem - jinak by obe veci mely tutez politiku.
-        $why = if ($invoked) { 'invoked' } else { 'variable' }
+        # TASK-106 bod 15: uvnitr obalu, ktery text spousti (Get-InvokedLeaves), je promenna
+        # v hlave statementu tez spusteni obsahu - `bash -c "$cmd arg"`, `pwsh -c "$x"`.
+        $why = if ($invoked -or $script:InvokedContext) { 'invoked' } else { 'variable' }
         [void]$out.Add((New-OpaqueLeaf $raw $why)); return $out
     }
 
@@ -664,9 +709,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             # nepruhledny). Kontrolni tvar `Start-Process -FilePath 'pwsh' ...
             # -RedirectStandardOutput $log` ma FilePath literalni, takze do teto vetve
             # vubec nepada.
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $raw 'invoked')); return $out }
-            # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
-            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
+            # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni - promenna v HLAVE je
+            # `invoked`, promenna v argumentu uz ne. Nalez Ada N19: cely retez pruchodu.
+            foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(bash|sh|zsh|dash|ksh)$' {
@@ -680,11 +725,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             }
             $inner = $rest[$idx + 1]
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
+            # TASK-106 bod 15 (0.2.0): do 0.1.11 tu stal `Test-Unexpandable $inner` nad CELYM
+            # vnitrkem; ted se vnitrek rozebira a `invoked` je jen statement s promennou
+            # v HLAVE (`bash -c "$x"`, `bash -c "$cmd arg"`), ne `bash -c "echo $HOME"`.
             # Nalez Amber I2: escape znak patri tomu shellu, ktery text SPUSTI, ne tomu,
             # ktery ho predal dal. Bez prepnuti se `bash -c 'echo \" ; git reset --hard'`
             # psane z PowerShell nastroje rozebiralo PS pravidly a propadlo na allow.
-            foreach ($l in (Get-NestedShellLeaf $inner 'Bash' $Depth)) { [void]$out.Add($l) }
+            foreach ($l in (Get-InvokedLeaves $inner 'Bash' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(pwsh|powershell)$' {
@@ -708,9 +755,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
+            # TASK-106 bod 15 (0.2.0): 41 ze 44 dotazu `invoked` ve vzorku faze 1 mel PRAVE
+            # tenhle tvar s literalni hlavou (`pwsh -Command ". 'x.ps1'; ...; $env:X = 1"`).
+            # Vnitrek se rozebira; `invoked` je jen statement s promennou v hlave.
             # Nalez Amber I2, opacny smer: `pwsh -c '...'` psane z Bash nastroje.
-            foreach ($l in (Get-NestedShellLeaf $inner 'PowerShell' $Depth)) { [void]$out.Add($l) }
+            foreach ($l in (Get-InvokedLeaves $inner 'PowerShell' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(cmd)$' {
@@ -721,9 +770,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
             $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
-            # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
-            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
+            # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni (`cmd /c %X%` zustava ask,
+            # `cmd /c "echo %PATH% && dir"` uz ne). Nalez Ada N19: cely retez pruchodu.
+            foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(iex|invoke-expression)$' {
@@ -736,16 +785,16 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($rest.Count -gt 0 -and (Test-ParameterPrefix ($rest[0].ToLowerInvariant()) 'command')) { $skip = 1 }
             $inner = (Join-CommandString ($rest | Select-Object -Skip $skip))
             if ($inner -eq '') { return $out }
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
-            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
+            # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni - `iex $cmd` zustava ask.
+            foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(eval)$' {
             $inner = (Join-CommandString $rest)
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
-            if (Test-Unexpandable $inner) { [void]$out.Add((New-OpaqueLeaf $inner 'invoked')); return $out }
-            # Nalez Ada N19: cely retez pruchodu, ne jen posledni clanek.
-            foreach ($l in (Get-CommandLineLeaves $inner ($Depth + 1))) { [void]$out.Add($l) }
+            # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni (`eval $cmd` zustava ask,
+            # `eval "echo $x"` uz ne). Nalez Ada N19: cely retez pruchodu.
+            foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(xargs)$' {
@@ -989,8 +1038,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
     # allow. Zadani par. 2.3: obal s promennou -> ask. Cil nezname, tak se pta.
     if ($Leaf.Exe -eq 'net-delete' -and $targets.Count -eq 0) {
         return @{ Decision = 'ask'
-                  Shape = ((Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})') `
-                           -replace '\{text\}', $Leaf.Text) }
+                  Shape = (([string](Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})')).Replace('{text}', [string]($Leaf.Text))) }
     }
 
     if (-not $recursive) {
@@ -1006,11 +1054,24 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
             if ($a -match '^-r(e|ec|ecu|ecur|ecurs|ecurse)?$') { $recursive = $true }
             if ($a -match '^/s$') { $recursive = $true }
         }
+        $shortAbsolute = New-Object System.Collections.ArrayList
         foreach ($a in $rest) {
             if ($a.StartsWith('-')) { continue }
-            # cmd prepinac je /s /q /f - ale /etc/x je ABSOLUTNI CESTA, ne prepinac
-            if ($a -match '^/[a-zA-Z]{1,3}$') { continue }
+            # cmd prepinac je /s /q /f - ale /etc/x je ABSOLUTNI CESTA, ne prepinac.
+            # `/srv` (do tri pismen) je od prepinace k nerozeznani - cil se NEBERE, ale
+            # pamatuje se, ze tu byl (TASK-106 bod 4).
+            if ($a -match '^/[a-zA-Z]{1,3}$') { [void]$shortAbsolute.Add($a); continue }
             [void]$targets.Add($a)
+        }
+
+        # Nalez Amber I6 (TASK-106 bod 4, 0.2.0): `rm -rf /srv` konci ask, ale do 0.1.11
+        # nesl duvod "mazani se vstupem z roury" - hlaska lhala o pricine. Skutecna pricina
+        # je kratka absolutni cesta, kterou od prepinace `cmd` nejde odlisit, a tak cil neni
+        # videt. Rozhodnuti `ask` se nemeni, meni se veta; tvar `deleteFromPipeline` zustava
+        # tomu, co roura opravdu je (kontrolni skupina: Metis 8).
+        if ($targets.Count -eq 0 -and $shortAbsolute.Count -gt 0) {
+            return @{ Decision = 'ask'
+                      Shape = (([string](Get-Field $shapes 'shortAbsolutePath' 'mazani s kratkou absolutni cestou ({target})')).Replace('{target}', [string]([string]$shortAbsolute[0]))) }
         }
 
         # Nalez Metis 8: `Get-ChildItem src -Recurse -File | Remove-Item -Force` -
@@ -1043,13 +1104,13 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
             $bare = ($norm -replace '[\*\?]', '').TrimEnd('/')
             if ($bare -eq '' -or $bare -match '^[a-z]:$' -or $bare -eq $homeNorm) {
                 return @{ Decision = 'deny'
-                          Shape = ((Get-Field $shapes 'recursiveDelete' 'rm -rf {target}') -replace '\{target\}', $t) }
+                          Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
             if ($norm.StartsWith($cwdNorm + '/')) {
                 $rel = $norm.Substring($cwdNorm.Length + 1)
             } else {
                 return @{ Decision = 'deny'
-                          Shape = ((Get-Field $shapes 'recursiveDelete' 'rm -rf {target}') -replace '\{target\}', $t) }
+                          Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
         }
 
@@ -1067,18 +1128,18 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
             if ($hasVar) {
                 if ($null -eq $worst) {
                     $worst = @{ Decision = 'ask'
-                                Shape = ((Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}') -replace '\{target\}', $t) }
+                                Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
                 }
                 continue
             }
             return @{ Decision = 'deny'
-                      Shape = ((Get-Field $shapes 'recursiveDelete' 'rm -rf {target}') -replace '\{target\}', $t) }
+                      Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
         }
 
         if ($hasStar -or $hasDotDot -or $hasVar) {
             if ($null -eq $worst) {
                 $worst = @{ Decision = 'ask'
-                            Shape = ((Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}') -replace '\{target\}', $t) }
+                            Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
         }
     }
@@ -1348,14 +1409,14 @@ function Test-DatabaseRule($Leaf, $Config) {
     if ($destructive) {
         if (-not $isLocal) {
             return @{ Decision = 'deny'
-                      Shape = ((Get-Field $shapes 'dbDestroyRemote' 'DB {host}') -replace '\{host\}', $dbHost) }
+                      Shape = (([string](Get-Field $shapes 'dbDestroyRemote' 'DB {host}')).Replace('{host}', [string]($dbHost))) }
         }
         return @{ Decision = 'ask'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }
     }
 
     if ($update -and -not $isLocal) {
         return @{ Decision = 'deny'
-                  Shape = ((Get-Field $shapes 'efUpdateRemote' 'ef update {host}') -replace '\{host\}', $dbHost) }
+                  Shape = (([string](Get-Field $shapes 'efUpdateRemote' 'ef update {host}')).Replace('{host}', [string]($dbHost))) }
     }
     return $null
 }
@@ -1450,8 +1511,7 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
             if ($token -eq '') { continue }
             if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
                 return @{ Decision = 'ask'
-                          Shape = ((Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})') `
-                                   -replace '\{token\}', $token) }
+                          Shape = (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))) }
             }
         }
     }
@@ -1473,8 +1533,7 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
             if ($token -eq '') { continue }
             if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
                 return @{ Decision = 'ask'
-                          Shape = ((Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})') `
-                                   -replace '\{token\}', $token) }
+                          Shape = (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))) }
             }
         }
     }
@@ -1487,7 +1546,7 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
     $text = [string]$Raw
     if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
     return @{ Decision = 'ask'
-              Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+              Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
 }
 
 function Test-Leaf($Leaf, $Config) {
@@ -1519,7 +1578,7 @@ function Test-Leaf($Leaf, $Config) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
                 return @{ Decision = 'ask'
-                          Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+                          Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
             }
         }
     }
@@ -1579,7 +1638,7 @@ function Test-Leaf($Leaf, $Config) {
             $text = [string]$Leaf.Raw
             if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
             return @{ Decision = 'ask'
-                      Shape = ((Get-Field $shapes 'opaque' 'neznamy prikaz ({text})') -replace '\{text\}', $text) }
+                      Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
         }
 
         # Jinak je telo DATA (`cat > NOTES.md <<EOF`) a pravidla se na nej neuplatnuji.
@@ -1592,7 +1651,7 @@ function Test-Leaf($Leaf, $Config) {
         foreach ($cfg in $Leaf.GitConfig) {
             if ($cfg -match '(?i)^alias\.') {
                 return @{ Decision = 'ask'
-                          Shape = ((Get-Field $shapes 'opaque' '{text}') -replace '\{text\}', $cfg) }
+                          Shape = (([string](Get-Field $shapes 'opaque' '{text}')).Replace('{text}', [string]($cfg))) }
             }
         }
     }
@@ -1678,7 +1737,7 @@ foreach ($leaf in $leaves) {
 
 if ($null -eq $decision) { exit 0 }
 
-$reason = (Get-Text $config 'gateReason' 'Brana par. 6: {shape}') -replace '\{shape\}', $decision.Shape
+$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
 
 if ($decision.Decision -eq 'ask' -and $mode -eq 'bypassPermissions') {
     $reason = $reason + (Get-Text $config 'bypassSuffix' ' bypass')

@@ -1130,6 +1130,138 @@ $v0111Cases = @(
 
 Test-Cases 'v0.1.11 - nalezy Ady N28, N33-N35, N49, N50' $v0111Cases
 
+# ================================================================================
+#  v0.2.0 - TASK-106 faze 2, davka D1 (gate.ps1): bod 15 (gamma), bod 1, bod 4,
+#  bod 6, N-H6. Vyroky Amber 2026-09-12 (mandat Toma: deset bodu ve dvou davkach).
+#
+#  🔴 Kazdy pripad jmenuje mutanta a ma kontrolni skupinu v JINEM stavu (zadani §7):
+#  zelena bez cervene, ktera by sla vyrobit, netvrdi nic.
+# ================================================================================
+
+$d1Cases = @(
+    # --- bod 15 / gamma (N-H5): obal s LITERALNI hlavou uz neni `invoked`.
+    #     Mereni faze 1 (157 udalosti / 156 tool calls): 44 dotazu `invoked`, z toho 41 melo
+    #     tvar `pwsh -Command "<literal>; ... $x ..."` - Test-Unexpandable bezel nad CELYM
+    #     vnitrkem obalu, takze promenna KDEKOLI v tele udelala z obalu spusteni promenne.
+    #     Pravych nalezu 0 ze 44. Oprava: vnitrek se ROZEBERE (tyz retez jako hlavni beh)
+    #     a `invoked` je jen statement, jehoz HLAVA je promenna nebo substituce.
+    #     Mutant: vratit `if (Test-Unexpandable $inner)` pred rozbor -> cervena.
+    (Case 'B15 pwsh -Command literal hlava, promenna v tele' 'pwsh -NoProfile -Command "git status; Write-Host $x"' 'allow' 'PowerShell')
+    (Case 'B15 pwsh -Command dot-source literalu'  'pwsh -NoProfile -Command ". ''W:\dev\x\scripts\dev-common.ps1''; Import-DevEnvironmentFile; $env:GSD_TEST_PG = ''x''; dotnet test"' 'allow' 'PowerShell')
+    (Case 'B15 pwsh -Command Where-Object'         'pwsh -Command "Get-ChildItem | Where-Object { $_.Name -like ''*.cs'' }"' 'allow' 'PowerShell')
+    (Case 'B15 bash -c literal hlava'              'bash -c "echo $HOME; git status"' 'allow')
+    (Case 'B15 bash -c retezec s promennou'        'bash -c ''echo "EXIT=$code"''' 'allow')
+    (Case 'B15 cmd /c literal hlava'               'cmd /c "echo %PATH% && dir"' 'allow')
+    (Case 'B15 eval literal hlava'                 'eval "echo $x"' 'allow')
+    (Case 'B15 iex literal hlava'                  'iex "git status $x"' 'allow' 'PowerShell')
+    # 🔴 kontrolni skupina: hlava PROMENNA nebo SUBSTITUCE = obsah se SPUSTI -> `invoked` -> ask.
+    #    Tvary `pwsh -c "$x"` a `bash -c "$cmd arg"` ve vzorku faze 1 NEBYLY (Amber, vyroky §4) -
+    #    doklada je az tenhle test, a je to podminka, ne bonus.
+    (Case 'B15 kontrola bash -c $x'                'bash -c "$x"' 'ask')
+    (Case 'B15 kontrola bash -c $cmd arg'          'bash -c "$cmd arg"' 'ask')
+    (Case 'B15 kontrola pwsh -c $x'                'pwsh -c "$x"' 'ask' 'PowerShell')
+    (Case 'B15 kontrola pwsh -Command $cmd -Force' 'pwsh -Command "$cmd -Force"' 'ask' 'PowerShell')
+    (Case 'B15 kontrola promenna v DRUHEM statementu' 'bash -c "echo hi; $cmd"' 'ask')
+    (Case 'B15 kontrola substituce v hlave'        'bash -c "$(cat cmd.txt)"' 'ask')
+    (Case 'B15 kontrola cmd /c %X%'                'cmd /c %X%' 'ask')
+    (Case 'B15 kontrola eval $cmd'                 'eval $cmd' 'ask')
+    (Case 'B15 kontrola iex $cmd'                  'iex $cmd' 'ask' 'PowerShell')
+    (Case 'B15 kontrola Start-Process $x'          'Start-Process $x' 'ask' 'PowerShell')
+    (Case 'B15 kontrola & $cmd (konstrukce A)'     '& $cmd' 'ask' 'PowerShell')
+    # 🔴 destruktivni LITERAL uvnitr obalu je deny dal - zuzeni nesmi nic propustit
+    (Case 'B15 kontrola deny v pwsh -Command'      'pwsh -Command "git reset --hard; Write-Host $x"' 'deny' 'PowerShell')
+    (Case 'B15 kontrola deny v bash -c'            'bash -c "echo $x; git reset --hard"' 'deny')
+
+    # --- bod 6 (nalez Amber K2, vyrok 2 Amber = DO ROZSAHU): rozebiraji se VSECHNY bloky
+    #     ve statementu, ne jen ten, kterym statement konci. Mutant: vratit
+    #     Get-ScriptBlockBody (jen koncovy blok) -> cervena.
+    (Case 'B6 if/else, destruktivni v PRVNIM bloku' 'if ($x) { rm -rf src } else { git status }' 'deny' 'PowerShell')
+    (Case 'B6 try/catch, destruktivni v try'       'try { git reset --hard } catch { Write-Host $_ }' 'deny' 'PowerShell')
+    (Case 'B6 blok s komentarem za nim'            '{ rm -rf src } # poznamka' 'deny' 'PowerShell')
+    (Case 'B6 if/elseif/else, destruktivni v POSLEDNIM' 'if ($a) { git status } elseif ($b) { git log } else { git branch -D x }' 'deny' 'PowerShell')
+    (Case 'B6 -Begin/-Process, mazani v druhem bloku' 'Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $_.Delete() }' 'ask' 'PowerShell')
+    (Case 'B6 Bash blok s presmerovanim za nim'    '{ rm -rf src; } 2>/dev/null' 'deny')
+    # 🔴 kontrolni skupina (podminka vyroku 2): neskodne bloky se ptat NESMEJI
+    (Case 'B6 kontrola if/else neskodne'           'if ($x) { git status } else { git log }' 'allow' 'PowerShell')
+    (Case 'B6 kontrola try/catch neskodne'         'try { dotnet build } catch { Write-Host ''chyba'' }' 'allow' 'PowerShell')
+    (Case 'B6 kontrola -Begin/-Process neskodne'   'Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $i++ }' 'allow' 'PowerShell')
+    (Case 'B6 kontrola Where + ForEach'            'Get-ChildItem | Where-Object { $_.Length -gt 0 } | ForEach-Object { $_.Name }' 'allow' 'PowerShell')
+    # 🔴 K1 drzi: hlava pred blokem se rozebira dal, `{` za `@` neni blok
+    (Case 'B6 kontrola K1 {src,lib}'               'rm -rf {src,lib}' 'deny')
+    (Case 'B6 kontrola K1 stash@{0}'               'git stash drop stash@{0}' 'deny')
+    (Case 'B6 kontrola K1 hashtable'               "@{ Path = 'src' }" 'allow' 'PowerShell')
+
+    # --- N-H6 (gate): zpetny apostrof v -m / heredocu. Ve vzorku: `git merge -m "... \`& \$cmd\` ..."`
+    #     skoncil `invoked` - obsah mezi zpetnymi apostrofy se bral REGEXEM bez ohledu na
+    #     escape a uvozovky. V Bashi je `\`` literal a v jednoduchych uvozovkach substituce
+    #     neexistuje; v PowerShellu je zpetny apostrof ESCAPE, ne substituce.
+    #     Mutant: vratit `[regex]::Matches($Command, '`([^`]+)`')` -> cervena.
+    (Case 'NH6 escapovane zpetne apostrofy v -m'   'git merge --no-ff x -m "text \`& \$cmd\` konec"' 'allow')
+    (Case 'NH6 jednoduche uvozovky v -m'           'git commit -m ''text `& $cmd` konec''' 'allow')
+    (Case 'NH6 PowerShell: zpetny apostrof je escape' 'git commit -m "text `& $cmd` konec"' 'allow' 'PowerShell')
+    # 🔴 kontrolni skupina: NEescapovana substituce v Bashi se rozebira dal (i v dvojitych uvozovkach)
+    (Case 'NH6 kontrola substituce v dvojitych'    'echo "`git reset --hard`"' 'deny')
+    (Case 'NH6 kontrola hola substituce'           'echo `git reset --hard`' 'deny')
+)
+
+Test-Cases 'v0.2.0 - TASK-106 D1 (bod 15, bod 6, N-H6)' $d1Cases
+
+# --- bod 1 (nalez Hestia, kolo 4): seznam interpretu je na DVOU mistech - `gate.codeInterpreters`
+#     cte vetev heredocu, vetev `-c`/`-e` v Get-CommandLeaf ma tyz seznam natvrdo. Zadani §4.2:
+#     brana, NE refaktor - test tvrdi ROVNOST mnozin (N15: rovnost, ne podmnozina; nadmnozina
+#     v kodu by obesla smysl) a NEPRAZDNOST obou stran (N15: prazdna == prazdna je neviditelny
+#     fail-open - kdyz se extrakce rozbije, "rovnost" by platila naporad).
+#     Mutanti: (1) pridat `lua` jen do konfigurace -> cervena; (2) rozbit extrakci ze zdroje
+#     (kotva jinde) -> cervena z neprazdnosti. Kontrolni skupina: shodne neprazdne seznamy -> zelena.
+Start-Case 'bod 1 (TASK-106): seznam interpretu v kodu == gate.codeInterpreters, oba neprazdne (N15)'
+$gateSource = [System.IO.File]::ReadAllText(
+    (Join-Path $script:RepoRoot 'hooks/scripts/gate.ps1'), ([System.Text.UTF8Encoding]::new($false)))
+$cfgBod1 = [System.IO.File]::ReadAllText(
+    (Join-Path $script:RepoRoot 'hooks/config/defaults.json'), ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+# Kotva = misto, kde vetev vyrabi pricinu `interpreter`; hlavicka vetve `switch -Regex` je
+# posledni tvar '^(a|b|c)$' { PRED ni. Hleda se ze zdroje, ne z pameti - list v kodu se cte
+# tak, jak tam doopravdy stoji.
+$anchorBod1 = $gateSource.IndexOf("New-OpaqueLeaf `$raw 'interpreter'")
+Assert-True ($anchorBod1 -gt 0) '[bod1] kotva vetve interpretu (New-OpaqueLeaf $raw ''interpreter'') ve zdroji je'
+$codeInterpreters = @()
+if ($anchorBod1 -gt 0) {
+    $heads = [regex]::Matches($gateSource.Substring(0, $anchorBod1), '''\^\(([a-z0-9|]+)\)\$''\s*\{')
+    if ($heads.Count -gt 0) { $codeInterpreters = @($heads[$heads.Count - 1].Groups[1].Value -split '\|' | Where-Object { $_ -ne '' }) }
+}
+$cfgInterpreters = @($cfgBod1.gate.codeInterpreters | ForEach-Object { [string]$_ })
+Assert-True ($codeInterpreters.Count -ge 1) ("[bod1/N15] seznam v kodu neni prazdny: {0}" -f ($codeInterpreters -join ','))
+Assert-True ($cfgInterpreters.Count -ge 1) ("[bod1/N15] gate.codeInterpreters neni prazdny: {0}" -f ($cfgInterpreters -join ','))
+$onlyInCode = @($codeInterpreters | Where-Object { $cfgInterpreters -cnotcontains $_ })
+$onlyInCfg  = @($cfgInterpreters  | Where-Object { $codeInterpreters -cnotcontains $_ })
+Assert-Equal 0 $onlyInCode.Count ("[bod1] interpret jen v kodu (chybi v konfiguraci): " + ($onlyInCode -join ','))
+Assert-Equal 0 $onlyInCfg.Count  ("[bod1] interpret jen v konfiguraci (chybi v kodu): " + ($onlyInCfg -join ','))
+
+# --- bod 4 (nalez Amber I6): `rm -rf /srv` konci ask, ale duvod mluvil o "mazani se vstupem
+#     z roury" - hlaska lhala o pricine. Skutecna pricina: `/xxx` do tri znaku je od prepinace
+#     `cmd` (`/s`, `/q`) k nerozeznani, takze cil NENI videt. Rozhodnuti `ask` se nemeni, meni
+#     se veta. Mutant: vratit stary text (tvar `deleteFromPipeline`) -> cervena.
+#     Kontrolni skupina: JINY tvar se STEJNYM `ask` a JINYM textem (mazani z roury, Metis 8).
+Start-Case 'bod 4 (TASK-106): hlaska u `rm -rf /srv` jmenuje skutecnou pricinu (kratka absolutni cesta)'
+function Get-AskReason($Result) {
+    if ([string]::IsNullOrWhiteSpace($Result.Stdout)) { return '' }
+    return [string]($Result.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason
+}
+$shapesBod4 = $cfgBod1.gate.shapes
+Assert-True ($null -ne $shapesBod4.PSObject.Properties['shortAbsolutePath']) '[bod4] konfigurace ma tvar shortAbsolutePath'
+$textShort = ''
+if ($null -ne $shapesBod4.PSObject.Properties['shortAbsolutePath']) { $textShort = [string]$shapesBod4.shortAbsolutePath -replace '\{target\}', '/srv' }
+$textPipe = [string]$shapesBod4.deleteFromPipeline
+$r4 = Invoke-Hook -Script 'gate.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'rm -rf /srv' })
+$reason4 = Get-AskReason $r4
+Assert-Equal 'ask' (Get-Decision $r4) '[bod4] rm -rf /srv je porad ask'
+Assert-True ($textShort -ne '' -and $reason4.Contains($textShort)) ("[bod4] duvod jmenuje kratkou absolutni cestu: {0}" -f $reason4)
+Assert-True (-not $reason4.Contains($textPipe)) '[bod4] duvod NEMLUVI o mazani z roury'
+$r4c = Invoke-Hook -Script 'gate.ps1' -InputJson (New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = 'Get-ChildItem src -Recurse -File | Remove-Item -Force' })
+$reason4c = Get-AskReason $r4c
+Assert-Equal 'ask' (Get-Decision $r4c) '[bod4/kontrola] mazani z roury je porad ask'
+Assert-True ($reason4c.Contains($textPipe)) ("[bod4/kontrola] duvod jmenuje mazani z roury: {0}" -f $reason4c)
+Assert-True ($textShort -eq '' -or -not $reason4c.Contains($textShort)) '[bod4/kontrola] duvod NEMLUVI o kratke absolutni ceste'
+
 # ------------------------ K-2: tvary v auditu u "SQL neni videt" (review Amber) ---
 #
 # 🔴 README ted nese TABULKU tvaru, ne vetu - a tabulka je tvrzeni, ktere musi jit
