@@ -118,7 +118,12 @@ nebo když jmenuje adresář kanonické cesty ze `secrets.protectedPaths` (`cat 
 který na secret **míří vzorem** (`cat *.env`, `cat .env*`, `cat *secrets.json`) — regrese
 proti 0.1.11 (`ask`). Opraveno v témž vydání: jméno globu proti `envFile.denyNames` a glob
 bez zástupných znaků rovný chráněnému jménu → `ask`. Mez, která zůstává pojmenovaná
-(README 9): `cat *` a `.en?`.
+(README 9): `cat *` a `.en?` — 🔴 **bez druhé vrstvy** (`N32`, revize Ady): `permissions.deny`
+kryje jen nástroj `Read`, na shellový tvar nedosáhne; auto-mode klasifikátor není pravidlo
+(12 zásahů za měsíc, 0 za poslední tři sessions). Bash `*` tečkové soubory nerozvíjí,
+PowerShell ano (`N40`). Spouštěč má dvě cesty: fixture adresář, nebo textové kritérium
+„vzor vypisuje jméno, ne jen příponu" (Ada). `N38`: rozdíl `openssl -in server.key` (deny)
+× `openssl -in private.pem` (projde) je seznam jmen, ne nástroj (README 22).
 `Write-GateAudit` se přesunul do `_common.ps1` (sdílený). 🔴 **Dosah — 3 řádky
 invariantu mění očekávání `ask` → `allow`** (`cat *`, `cat *.env`, `Get-Content .en?`),
 přijato `-Prijmout` s citací výroků; `cat ~/AppData/…/UserSecrets/*/secrets.json`

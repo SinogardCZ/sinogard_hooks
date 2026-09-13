@@ -1206,6 +1206,12 @@ $d1Cases = @(
     (Case 'B6 kontrola K1 {src,lib}'               'rm -rf {src,lib}' 'deny')
     (Case 'B6 kontrola K1 stash@{0}'               'git stash drop stash@{0}' 'deny')
     (Case 'B6 kontrola K1 hashtable'               "@{ Path = 'src' }" 'allow' 'PowerShell')
+    # --- N39 (revize Ady, uzavera 0.2.0): cena bodu 6 v CASE. Statement s desitkami bloku musi
+    #     projit pod tvrdym stropem Invoke-Hook (5000 ms) - u PreToolUse je timeout PROPUSTENI,
+    #     ne pomalejsi brana. Destruktivni prikaz v POSLEDNIM z 42 bloku se najde; 42 neskodnych
+    #     bloku se neptaji. Cas meri Test-Cases (Assert doba < strop) a souhrn "doba hooku".
+    (Case 'N39 42 bloku, destruktivni posledni'      ('if ($a) { git status }' + (' elseif ($b) { git log }' * 40) + ' else { git branch -D x }') 'deny' 'PowerShell')
+    (Case 'N39 kontrola 42 neskodnych bloku'         ('if ($a) { git status }' + (' elseif ($b) { git log }' * 40) + ' else { git fetch }') 'allow' 'PowerShell')
 
     # --- N-H6 (gate): zpetny apostrof v -m / heredocu. Ve vzorku: `git merge -m "... \`& \$cmd\` ..."`
     #     skoncil `invoked` - obsah mezi zpetnymi apostrofy se bral REGEXEM bez ohledu na

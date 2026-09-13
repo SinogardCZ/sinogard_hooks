@@ -78,7 +78,7 @@ z fáze 1 téhož úkolu (`docs/logs/session/2026-09-12-task-106-…-hlaseni-01`
 | glob, který na chráněné **JMÉNO** narazí **náhodou** (`head .github/workflows/*.yml` ~ `secrets.yml`, `ls docs/technical/*.json`) | ask | **audit** (`secrets:wildcardName`, hook mlčí) | 2 ze 3 dotazů `wildcardPath`; výroky 7 + 8 |
 | glob, který na secret **míří vzorem** (`cat *.env`, `cat .env*`, `cat *secrets.json`) | ask | ask | 🔴 `C1` delta review Amber 2026-09-13: první tvar 0.2.0 ho poslal do auditu — regrese, `permissions.deny` kryje jen tool `Read`. Jméno globu sedne na `envFile.denyNames`, nebo glob bez zástupných znaků **vypisuje** chráněné jméno |
 | glob, který **míří na chráněnou CESTU** (`cat ~/.aws/*`, `ls ~/.ssh/*`, `.docker/*.json`, `*.pem`) | ask | ask | `denyPathPatterns` sedne doslova na text globu nebo glob jmenuje adresář z `protectedPaths` |
-| glob **bez přípony nebo se zástupným znakem uvnitř jména** (`cat *`, `Get-Content .en?`) | ask | **audit** | 🔴 **pojmenovaná mez:** deterministicky nerozlišit od `*.yml`; spouštěč = fixture adresář u invariantu (omezení 9) |
+| glob **bez přípony nebo se zástupným znakem uvnitř jména** (`cat *`, `Get-Content .en?`) | ask | **audit** | 🔴 **pojmenovaná mez:** dnešní kód nerozliší od `*.yml`; **druhá vrstva pro shellový tvar neexistuje** (`permissions.deny` kryje jen `Read`); Bash `*` tečkové soubory nerozvíjí, PowerShell ano; spouštěč = fixture adresář **nebo** textové kritérium „vzor vypisuje jméno, ne jen příponu" (omezení 9) |
 | chráněné jméno **v textu**, ne v pozici cesty (`$_.Key`, `SelectOption.Key`, `console.log(obj.key)`, próza v `cat >> x <<EOF`) | **deny** (`secretFile`) | mlčí | N-H1: 3 ze 7 `deny` ve vzorku byly identifikátory s příponou `.Key`, 1 próza |
 | čtení souboru brány s `2>/dev/null` / `2>&1` (`cat ~/.claude/settings.json 2>/dev/null`) | ask (`selfProtect`, „zápis") | mlčí | N-H3: `isWrite` byl jeden příznak na celý příkaz; od 0.2.0 je vlastnost kandidáta |
 | `…KeyId` (`$env:Gsd__Cursor__ActiveKeyId`) | ask (`envVarRead`) | mlčí | N-H4: identifikátor klíče, ne secret — 4 z 5 dotazů `envVarRead` |
@@ -324,10 +324,21 @@ aby si je nikdo nemusel objevit sám.
    (`*.env`, `*.env.local`), **(d)** glob bez zástupných znaků se rovná chráněnému jménu
    (`.env*` → `.env`, `*secrets.json` → `secrets.json`). Obojí → `ask` jako `*.pem`.
    ⚠️ **Pojmenovaná mez, která zůstává:** `cat *` (glob bez přípony) a `Get-Content .en?`
-   (zástupný znak **uvnitř** jména) deterministicky od `*.yml` nerozlišit — končí auditem,
-   ne dotazem. V repu s secrety v `.env` to má konkrétní cenu: `cat *` v kořeni repa `.env`
-   přečte. Spouštěč přehodnocení je týž jako výše (fixture adresář u invariantu); do té doby
-   je druhou vrstvou `permissions.deny` (jen `Read`) a auto-mode klasifikátor.
+   (zástupný znak **uvnitř** jména) dnešní kód od `*.yml` nerozliší — končí auditem, ne
+   dotazem. Cena je **různá podle interpretu** (`N40`): Bash `*` **nerozvíjí** soubory
+   začínající tečkou, takže `cat *` v kořeni repa `.env` **nepřečte**; PowerShell
+   (`Get-Content *`, `.en?`) ano — tam má mez v repu se secrety v `.env` konkrétní cenu.
+   🔴 **Pro shellové tvary druhá vrstva neexistuje** (`N32`, revize Ady): `permissions.deny`
+   kryje jen nástroj `Read` — na `cat *` z definice nedosáhne, a to byl přesně důvod, proč
+   byla `C1` skutečná regrese; auto-mode klasifikátor není pravidlo, na které se dá spoléhat
+   (12 zásahů za měsíc, 0 za poslední tři sessions; z klasifikátoru nejde vyčíst, co
+   zastaví). **Právě proto je u téhle meze spouštěč** — a má dvě cesty ven, ne jednu:
+   ① fixture adresář u invariantu (varianta ① bodu 11, rozhodnutí závislé na disku),
+   ② kritérium **měřitelné v textu** (Ada, revize §K): *vzor doslova vypisuje jméno chráněného
+   souboru, ne jen jeho příponu* — `.en?` vypisuje tři ze čtyř znaků jména `.env`, `*.yml`
+   ze `secrets.yml` nevypisuje ani jeden znak jména, jen příponu. Je to táž rodina jako
+   podmínky (c) a (d) u `C1`, bez čtení disku. Neprovedeno v 0.2.0 — zapsáno, aby fixture
+   adresář nebyl jedinou cestou.
 10. **SQL, které v příkazu není vidět, se ZAPÍŠE DO AUDITU a pustí dál.**
     `psql -f migrace.sql`, `sqlcmd -i migrace.sql`, `psql -h prod < drop.sql`,
     `psql -h prod <<< $SQL` i `cat migrace.sql | psql` — obsah souboru ani roury hook
@@ -469,7 +480,11 @@ aby si je nikdo nemusel objevit sám.
     do souboru, kterým se brána vypíná".
     ⚠️ **Mez zúžení:** soubor se secrets předaný **nelistovanému** čtecímu programu pod
     jménem, které v `protectedBaseNames` není (`openssl -in private.pem`, `some-tool
-    config.pem`), od 0.2.0 projde. Rozšíření je konfigurace (`secrets.pathCommands`), ne kód.
+    config.pem`), od 0.2.0 projde. 🔴 **Rozdíl mezi `openssl -in server.key` (`deny`) a
+    `openssl -in private.pem` (projde) není v nástroji `openssl`, ale v seznamu jmen** (`N38`):
+    `server.key` v `protectedBaseNames` je, `private.pem` ne — „openssl je krytý" z toho
+    odvodit nelze. Rozšíření je konfigurace (`secrets.pathCommands` pro program,
+    `secrets.protectedBaseNames` pro jméno), ne kód.
     N14 drží: `< ~/.ssh/id_rsa`, `--file=~/.ssh/id_rsa`, cesta v rouře i přes `xargs`
     a heredoc pro `bash`/`python` s příkazem čtoucím secret jsou `deny` dál.
 
