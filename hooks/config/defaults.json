@@ -17,6 +17,8 @@
     "canaryOk": "✔",
     "canaryOff": "—",
     "canaryDryRun": " · notify: DRY-RUN (upozornění se neposílají)",
+    "_canaryAuditComment": "TASK-106, výrok 6 (2026-09-12): audit brány měl 1 197 řádků a nula čtenářů. Kanárek proto hlásí přírůstek řádků gate-audit.jsonl od minulého SessionStart; celý rozpad dá tests/_audit-report.ps1 (krok uzávěry). Bez audit souboru se nic nepřipojí.",
+    "canaryAudit": " · audit +{delta} řádků od minulého startu ({total} celkem)",
     "resumeMessage": "Resume po {h} h {m} min · {tokens} tokenů v kontextu · cache expirovala: {expired} · odhad zápisu do cache ${usd}",
     "resumeYes": "ano",
     "resumeNo": "ne",

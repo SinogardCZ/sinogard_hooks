@@ -171,6 +171,45 @@ $msgNormal = Get-SystemMessage $rNormal
 Assert-True ($msgNormal -notmatch 'DRY-RUN') '[bez dry-run] kanarek o nem mlci'
 Assert-True ($msgNormal -ne '') '[bez dry-run] kanarek porad neco hlasi'
 
+# ------------------------- TASK-106 vyrok 6 (0.2.0): kanarek hlasi prirustek auditu ---
+#
+# Audit brany mel 2026-09-12 1 197 radku a NULA ctenaru (hlaseni 01 §3). Vyrok 6 Amber
+# (mandat Toma): kanarek na SessionStart vypise PRIRUSTEK radku od minuleho startu.
+# Tvrdi se CISLO, ne pritomnost vety: prvni start nad 3 radky hlasi +3, po pripsani dvou
+# radku druhy start hlasi +2 (ne +5) - znacka posledniho stavu se tedy zapsala a cetla.
+# Mutant: zapomenout zapsat znacku -> druhy start hlasi +5 -> cervena.
+# Kontrolni skupina: bez audit souboru se k kanarku NIC nepripoji (jinak by "+0" tvrdilo
+# "audit se pise", i kdyz ho nikdo nepise).
+Start-Case 'vyrok 6: kanarek hlasi prirustek radku auditu od minuleho startu'
+$auditDataDir = Join-Path $script:TempDir 'plugin-data-audit'
+[void][System.IO.Directory]::CreateDirectory($auditDataDir)
+$auditFile = Join-Path $auditDataDir $cfg.gate.auditFile
+$auditRow = '{"ts":"2026-09-12T20:00:00.0000000+02:00","tool":"Bash","shape":"opaque:variable","decision":"allow"}'
+[System.IO.File]::WriteAllText($auditFile, ($auditRow + "`n") * 3, ([System.Text.UTF8Encoding]::new($false)))
+$jsonStart = New-HookInput 'sessionstart-startup' @{}
+
+$expectedA1 = $expectedCanary + (($cfg.texts.canaryAudit -replace '\{delta\}', '3') -replace '\{total\}', '3')
+$rA1 = Invoke-Hook -Script 'resume-cost.ps1' -InputJson $jsonStart -Environment @{ CLAUDE_PLUGIN_DATA = $auditDataDir }
+Assert-Equal 0 $rA1.Exit '[audit-kanarek] prvni start exit 0'
+Assert-Equal $expectedA1 (Get-SystemMessage $rA1) '[audit-kanarek] prvni start: +3 (3 celkem)'
+Assert-True (Test-Path -LiteralPath (Join-Path $auditDataDir 'audit-canary.json')) '[audit-kanarek] znacka posledniho stavu vznikla'
+
+[System.IO.File]::AppendAllText($auditFile, ($auditRow + "`n") * 2, ([System.Text.UTF8Encoding]::new($false)))
+$expectedA2 = $expectedCanary + (($cfg.texts.canaryAudit -replace '\{delta\}', '2') -replace '\{total\}', '5')
+$rA2 = Invoke-Hook -Script 'resume-cost.ps1' -InputJson $jsonStart -Environment @{ CLAUDE_PLUGIN_DATA = $auditDataDir }
+Assert-Equal $expectedA2 (Get-SystemMessage $rA2) '[audit-kanarek] druhy start: +2 (5 celkem), ne +5'
+
+# resume s cenou nese prirustek taky - session obnovena pres --resume by jinak o auditu neslysela
+$rA3 = Invoke-Hook -Script 'resume-cost.ps1' -InputJson (New-HookInput 'sessionstart-resume' @{}) -Environment @{ CLAUDE_PLUGIN_DATA = $auditDataDir }
+$msgA3 = Get-SystemMessage $rA3
+Assert-True ($msgA3.EndsWith((($cfg.texts.canaryAudit -replace '\{delta\}', '0') -replace '\{total\}', '5'))) ("[audit-kanarek] resume nese +0 (5 celkem): {0}" -f $msgA3)
+
+# 🔴 kontrolni skupina: bez audit souboru zadna veta o auditu
+$noAuditDir = Join-Path $script:TempDir 'plugin-data-noaudit'
+[void][System.IO.Directory]::CreateDirectory($noAuditDir)
+$rA4 = Invoke-Hook -Script 'resume-cost.ps1' -InputJson $jsonStart -Environment @{ CLAUDE_PLUGIN_DATA = $noAuditDir }
+Assert-Equal $expectedCanary (Get-SystemMessage $rA4) '[audit-kanarek/kontrola] bez audit souboru je kanarek beze zmeny'
+
 Write-TestSummary
 if ($script:Fail -gt 0) { exit 1 }
 exit 0

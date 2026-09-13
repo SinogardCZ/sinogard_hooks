@@ -56,6 +56,44 @@ function Get-CanaryMessage($Config, [string]$Root) {
     return $text
 }
 
+# TASK-106, vyrok 6 Amber 2026-09-12 (mandat Toma): audit brany mel 1 197 radku a NULA
+# ctenaru. Kanarek proto na kazdem SessionStart hlasi PRIRUSTEK radku auditu od minuleho
+# startu - cislo, ktere se meni, kdyz brana neco zapsala, a stoji, kdyz ne. Znacka
+# posledniho stavu zije vedle auditu (`audit-canary.json`), takze prirustek nepotrebuje
+# transkript ani hodiny. Bez CLAUDE_PLUGIN_DATA nebo bez audit souboru se nic nehlasi
+# (nula radku neni prirustek nula - je to "audit nikdo nepise", a to rika README).
+# Kdyz je znacka VETSI nez soubor (rotace, smazani), prirustek je cely soubor - hlasi se,
+# ze se pocitalo od nuly, neni to zaporne cislo.
+function Get-AuditCanary($Config) {
+    $dir = $env:CLAUDE_PLUGIN_DATA
+    if ([string]::IsNullOrWhiteSpace($dir)) { return '' }
+    $auditFile = [string](Get-Field (Get-Field $Config 'gate') 'auditFile' 'gate-audit.jsonl')
+    $auditPath = Join-SafePath $dir $auditFile
+    if ($null -eq $auditPath -or -not (Test-SafePath $auditPath)) { return '' }
+
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $total = @([System.IO.File]::ReadAllLines($auditPath, $utf8) | Where-Object { $_.Trim() -ne '' }).Count
+
+    $markerPath = Join-SafePath $dir 'audit-canary.json'
+    $last = 0
+    if ($null -ne $markerPath -and (Test-SafePath $markerPath)) {
+        try {
+            $marker = ConvertFrom-Json ([System.IO.File]::ReadAllText($markerPath, $utf8))
+            $last = [int](Get-Field $marker 'lines' 0)
+        } catch { $last = 0 }
+    }
+    $delta = $total - $last
+    if ($delta -lt 0) { $delta = $total }
+
+    if ($null -ne $markerPath) {
+        $line = [ordered]@{ ts = (Get-Date).ToString('o'); lines = $total } | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($markerPath, $line, $utf8)
+    }
+
+    $text = Get-Text $Config 'canaryAudit' ' | audit +{delta} ({total})'
+    return $text.Replace('{delta}', [string]$delta).Replace('{total}', [string]$total)
+}
+
 function Write-ResumeLog($Payload, [double]$Seconds, [double]$Tokens, [bool]$Expired, [double]$Usd, [string]$FileName) {
     $dir = $env:CLAUDE_PLUGIN_DATA
     if ([string]::IsNullOrWhiteSpace($dir)) { return }   # bez datoveho adresare se nic nezapisuje
@@ -102,8 +140,12 @@ $usd     = Get-Field $payload 'estimated_cache_write_usd' $null
 $hasCost = ($source -eq 'resume' -or $source -eq 'fork') -and
            ($null -ne $seconds) -and ($null -ne $tokens)
 
+# TASK-106 vyrok 6: prirustek auditu se hlasi na KAZDEM SessionStart - u kanarku i u ceny
+# resume - jinak by session obnovena pres --resume o auditu neslysela nikdy.
+$auditCanary = Get-AuditCanary $config
+
 if (-not $hasCost) {
-    $message = Get-CanaryMessage $config $PluginRoot
+    $message = (Get-CanaryMessage $config $PluginRoot) + $auditCanary
     Write-HookStdout (@{ systemMessage = $message } | ConvertTo-Json -Depth 3 -Compress)
     exit 0
 }
@@ -126,5 +168,5 @@ $message = $message -replace '\{usd\}', ($usdValue.ToString('0.0000', [System.Gl
 $logFile = [string](Get-Field (Get-Field $config 'resumeCost') 'logFile' 'resume-log.jsonl')
 Write-ResumeLog $payload ([double]$seconds) ([double]$tokens) ([bool]$expired) $usdValue $logFile
 
-Write-HookStdout (@{ systemMessage = $message } | ConvertTo-Json -Depth 3 -Compress)
+Write-HookStdout (@{ systemMessage = ($message + $auditCanary) } | ConvertTo-Json -Depth 3 -Compress)
 exit 0
