@@ -1172,6 +1172,22 @@ $d1Cases = @(
     (Case 'B15 kontrola deny v pwsh -Command'      'pwsh -Command "git reset --hard; Write-Host $x"' 'deny' 'PowerShell')
     (Case 'B15 kontrola deny v bash -c'            'bash -c "echo $x; git reset --hard"' 'deny')
 
+    # --- gamma upresneni po PREMERENI vzorku (2026-09-13): prvni tvar zuzeni nechal 42 ze 44
+    #     dotazu dotazem. Tri pricin: (a) vnejsi shell escapovany dolar rozbali (`pwsh -Command
+    #     "... `$env:X = 1"` z PowerShellu prijde vnitrnimu pwsh jako prirazeni); (b) hlava je
+    #     retezec nebo .NET volani s promennou UVNITR, ne promenna sama; (c) promenna, kterou
+    #     vnitrni text sam prirazuje (`$e = ...; $e | Select-Object`), je lokalni, ne rozbaleny
+    #     obsah. Po upresneni: 41 ticho, 2 ask (skutecne `& $cmd`), 1 ask s pravdivou hlaskou.
+    (Case 'B15b escapovany dolar = prirazeni'      'pwsh -NoProfile -Command ". ''W:\dev\x\dev-common.ps1''; `$env:GSD_TEST_PG = ''x''; dotnet test"' 'allow' 'PowerShell')
+    (Case 'B15b escapovany dolar z Bashe'          'bash -c "echo \$HOME; git status"' 'allow')
+    (Case 'B15b retezec se subexpresi v hlave'     'pwsh -NoProfile -Command ''$e = $null; "chyb: $($e.Count)"''' 'allow')
+    (Case 'B15b .NET volani s promennou uvnitr'    'pwsh -NoProfile -Command "[IO.File]::ReadAllBytes(''$f'')"' 'allow')
+    (Case 'B15b prirazena promenna v hlave roury'  'pwsh -NoProfile -Command ''$e = $null; [x]::Parse($p, [ref]$null, [ref]$e); $e | Select-Object -First 3''' 'allow')
+    # 🔴 kontrolni skupina: NEprirazena promenna v hlave a `& $x` uvnitr obalu zustavaji ask
+    (Case 'B15b kontrola neprirazena v hlave'      'pwsh -NoProfile -Command ''$e = $null; $other -Force''' 'ask')
+    (Case 'B15b kontrola & prirazene'              'pwsh -NoProfile -Command ''$c = "git status"; & $c''' 'ask')
+    (Case 'B15b kontrola escapovany dolar v hlave' 'bash -c "\$cmd arg"' 'ask')
+
     # --- bod 6 (nalez Amber K2, vyrok 2 Amber = DO ROZSAHU): rozebiraji se VSECHNY bloky
     #     ve statementu, ne jen ten, kterym statement konci. Mutant: vratit
     #     Get-ScriptBlockBody (jen koncovy blok) -> cervena.
@@ -1467,6 +1483,96 @@ if (-not (Test-SafePath $vypisPath)) {
 
 # Prehrani radku zije v _harness.ps1 - od kola 4 ho vola i sada secrets (nalez H2).
 Invoke-InvariantRows 'gate'
+
+# ================================================================================
+#  TASK-106 bod 14 (0.2.0): `-Prijmout` je BAJTOVE neutralni.
+#
+#  Prijeti zmeneneho ocekavani smi v souboru zmenit presne dve veci: radek `expect` u tvaru
+#  ve sporu a hlavicku `_zmeneno`, do ktere se veta PRIPISE. Do 0.1.11 se hlavicka
+#  deserializovala a serializovala ConvertTo-Json, ktery v PS 5.1 escapuje `&` a `'`
+#  a pwsh 7 ne - stara cast hlavicky tak menila bajty podle interpretu, ne podle rozhodnuti.
+#  Test bezi nad KOPII invariantu s hlavickou, ktera nese escapovany apostrof (pwsh 7 by
+#  ho rozbalil) i literalni `&` (PS 5.1 by ho escapoval): mutant "ConvertTo-Json bez
+#  unescape" zcervena v OBOU interpretech. Kontrolni skupina: spor existuje, takze diff
+#  NENULOVY byt musi - presne radek `expect` a hlavicka; nula zmen by znamenala, ze se
+#  neprijalo nic.
+# ================================================================================
+Start-Case 'bod 14 (TASK-106): -Prijmout meni jen radek expect a pripisuje hlavicku, ostatni bajty drzi'
+if (Test-CollectOnly) {
+    $script:Skip++
+} else {
+    $utf8b14 = [System.Text.UTF8Encoding]::new($false)
+    $invSrc14 = Join-Path $script:RepoRoot 'tests/fixtures/invariants.json'
+    $copy14 = Join-Path $script:TempDir 'invariants-bod14.json'
+    # (0) kopie se nejdriv SESYNCHRONIZUJE se sadami (prijmou se pripadne spory z prave
+    #     probihajiciho kola a pripoji nove radky), aby jediny spor v mereni byl ten vyrobeny
+    #     nize - jinak by test meril stav invariantu, ne generator.
+    [System.IO.File]::Copy($invSrc14, $copy14, $true)
+    function Invoke-Generator14([string]$Path, [string]$Citace) {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'pwsh'
+        $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $script:RepoRoot 'tests/_generate-invariants.ps1') + '" -InvariantsPath "' + $Path + '" -Prijmout "' + $Citace + '"'
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.WorkingDirectory = $script:RepoRoot
+        $psi.EnvironmentVariables['SINOGARD_HOOKS_COLLECT'] = ''
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $o = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
+        $p.WaitForExit()
+        return [pscustomobject]@{ Exit = $p.ExitCode; Out = $o }
+    }
+    $sync14 = Invoke-Generator14 $copy14 'bod14 priprava'
+    Assert-Equal 0 $sync14.Exit '[bod14/priprava] synchronizace kopie se sadami skoncila nulou'
+    $orig14 = [System.IO.File]::ReadAllText($copy14, $utf8b14)
+    # (1) hlavicka s escapovanym apostrofem (sekvence u0027 se zpetnym lomitkem) a literalnim ampersandem
+    $hdrBody14 = ('2026-01-01, bod14: ' + [char]92 + 'u0027x' + [char]92 + 'u0027 a & a ' + [char]92 + 'u003c<')
+    $reHdr14 = New-Object System.Text.RegularExpressions.Regex ('^(\s*"_zmeneno": ")(.*)(",\s*)$', 'Multiline')
+    $mHdr14 = $reHdr14.Match($orig14)
+    Assert-True $mHdr14.Success '[bod14] invariant ma hlavicku _zmeneno'
+    $crafted14 = $orig14.Substring(0, $mHdr14.Groups[2].Index) + $hdrBody14 + $orig14.Substring($mHdr14.Groups[2].Index + $mHdr14.Groups[2].Length)
+    # (2) spor: prvni radek `git status --porcelain` (gate) dostane opacne ocekavani
+    $reRow14 = New-Object System.Text.RegularExpressions.Regex ('("cmd": "git status --porcelain",\r?\n\s*"expect": ")allow(")')
+    $mRow14 = $reRow14.Match($crafted14)
+    Assert-True $mRow14.Success '[bod14] invariant ma radek git status --porcelain / allow'
+    $crafted14 = $crafted14.Substring(0, $mRow14.Index) + $mRow14.Groups[1].Value + 'deny' + $mRow14.Groups[2].Value + $crafted14.Substring($mRow14.Index + $mRow14.Length)
+    [System.IO.File]::WriteAllText($copy14, $crafted14, $utf8b14)
+
+    $run14 = Invoke-Generator14 $copy14 'bod14 test'
+    $out14short = ($run14.Out -replace '\s+', ' ')
+    if ($out14short.Length -gt 200) { $out14short = $out14short.Substring(0, 200) }
+    Assert-Equal 0 $run14.Exit ("[bod14] generator skoncil nulou: " + $out14short)
+    $after14 = [System.IO.File]::ReadAllText($copy14, $utf8b14)
+    $a14 = $crafted14 -split "`n"
+    $b14 = $after14 -split "`n"
+    Assert-True ($b14.Count -ge $a14.Count) ("[bod14] soubor se nezkratil ({0} -> {1} radku)" -f $a14.Count, $b14.Count)
+    # Vsechny puvodni radky krome zaveru pole (`  ]`, `}`) se porovnaji 1:1. Povolene rozdily:
+    #   - radek _zmeneno: puvodni bajty jsou PREFIX noveho radku (veta se pripsala, nic se neprepsalo)
+    #   - radek expect sporu: deny -> allow
+    #   - posledni `    }` pred `  ]`: smi dostat carku, kdyz generator pripojil nove radky
+    $hdrLine14 = -1; $expectLine14 = -1; $jine14 = New-Object System.Collections.ArrayList
+    $lastBraceIdx14 = -1
+    for ($k = $a14.Count - 1; $k -ge 0; $k--) { if ($a14[$k] -match '^\s{4}\}\s*\r?$') { $lastBraceIdx14 = $k; break } }
+    Assert-Equal $a14.Count $b14.Count '[bod14] pocet radku souboru se nezmenil (zadne pripojene radky - kopie byla sesynchronizovana)'
+    for ($k = 0; $k -lt [Math]::Min($a14.Count, $b14.Count); $k++) {
+        if ($a14[$k] -eq $b14[$k]) { continue }
+        if ($a14[$k] -match '^\s*"_zmeneno": "') {
+            $hdrLine14 = $k
+            $origBody14 = $a14[$k] -replace '",\s*\r?$', ''
+            Assert-True ($b14[$k].StartsWith($origBody14)) '[bod14] stare bajty hlavicky jsou prefixem nove (nic se neprepsalo)'
+            Assert-True ($b14[$k].Contains(' || 2') -and $b14[$k].Contains('bod14 test')) '[bod14] nova veta je pripsana za ||'
+            continue
+        }
+        if ($a14[$k] -match '^\s*"expect": "deny"' -and $b14[$k] -match '^\s*"expect": "allow"') { $expectLine14 = $k; continue }
+        if ($k -eq $lastBraceIdx14 -and $b14[$k] -match '^\s{4}\},\s*\r?$') { continue }
+        [void]$jine14.Add(("{0}: <{1}> -> <{2}>" -f ($k + 1), $a14[$k].TrimEnd(), $b14[$k].TrimEnd()))
+    }
+    Assert-True ($hdrLine14 -ge 0) '[bod14] hlavicka _zmeneno se zmenila (veta pripsana)'
+    Assert-True ($expectLine14 -ge 0) '[bod14/kontrola] radek expect sporu se zmenil deny -> allow (diff NENI nulovy)'
+    Assert-Equal 0 $jine14.Count ("[bod14] zadny jiny radek se nezmenil: " + ($jine14 -join ' | '))
+    $doc14 = $after14 | ConvertFrom-Json
+    Assert-True (@($doc14.rows).Count -ge @(($orig14 | ConvertFrom-Json).rows).Count) '[bod14] pocet radku neklesl'
+}
 
 # Nestaci, ze rozhodnuti sedi - musi souhlasit i BAJTY duvodu. Cesky text prochazi
 # stdin -> skript -> stdout/stderr; kterykoli clanek v OEM strance by ho rozsypal

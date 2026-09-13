@@ -165,9 +165,19 @@
       "compress-archive", "tar", "zip", "scp", "rsync", "findstr", "select-string"
     ],
 
+    "_writeCommandsComment": "TASK-106 bod 9 + N-H3 (0.2.0): zápis je vlastnost KANDIDÁTA, ne příkazu. Do 0.1.11 jeden příznak nad celým textem udělal z `cat ~/.claude/settings.json 2>/dev/null` „zápis do souboru, kterým se brána vypíná“. Zápis = cíl přesměrování `>`/`>>` (i `2> soubor`) a poziční argument těchto příkazů; vše ostatní je čtení.",
+    "writeCommands": ["tee", "set-content", "sc", "out-file", "add-content", "ac"],
+
+    "_dataHeredocHostsComment": "TASK-106 bod 12 / N-H6 (0.2.0): tělo heredocu, jehož host je datový příkaz, jsou DATA — próza hlášení nebo commit message (`cat >> notes.md <<EOF`, `git commit -F - <<EOF`) se do rozboru cest nebere. Tělo pro shell, interpret nebo NEZNÁMÝ host je kód a rozebírá se dál (`bash <<EOF` s příkazem čtoucím soubor prostředí).",
+    "dataHeredocHosts": ["cat", "tee", "git", "type", "set-content", "out-file", "add-content", "printf", "echo", "sort", "uniq", "wc", "head", "tail", "less", "more", "diff", "patch", "jq", "yq", "sed", "awk", "tr", "cut", "base64"],
+
+    "_protectedPathsComment": "TASK-106 bod 11 (0.2.0, N16 = výrok 8, N26 = výrok 7): glob se posuzuje podle CELÉ cesty. Glob MÍŘÍ na chráněnou cestu, když `denyPathPatterns` sedne doslova na jeho text (`~/.ssh/*`, `*.pem`) nebo když jeho poslední segmenty padnou na kanonickou cestu odsud (`~/.aws/*` → `.aws/credentials`) — pak zůstává `ask`. Glob, který adresář chráněné cesty nejmenuje a sedne jen na chráněné JMÉNO (`.github/workflows/*.yml` ~ `secrets.yml`, `cat *`), mlčí a zapíše řádek `secrets:wildcardName` do auditu. `*` a `?` nepřekračují `/`, `**` ano. Spouštěč přehodnocení: fixture adresář u invariantu.",
+    "protectedPaths": [".ssh/id_rsa", ".aws/credentials", ".azure/azureProfile.json", ".kube/config", ".docker/config.json", "UserSecrets/x/secrets.json", ".claude/settings.local.json"],
+
     "_envVarNamePatternComment": "DVA vzory se DVĚMA režimy velikosti písmen — jeden vzor to neumí. `envVarNamePattern` (podtržítkový zápis) se matchuje IGNORE-CASE, aby chytil i `db_password` a `github_token` (nález Amber E5); množné číslo je povolené jen ZA podtržítkem, takže `API_KEYS` se ptá a holé `tokens` ne. `envVarNameCamelPattern` se matchuje CASE-SENSITIVNĚ, protože jen tak zůstane `monkey` a `keyFile` běžnou prací, zatímco `secretKey` a `apiKey` se ptají. Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
     "envVarNamePattern": "(?:^(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)|_(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?)(_|$)|_PWD(_|$)|^PWD_",
-    "envVarNameCamelPattern": "[a-z](Key|Token|Secret|Password|Passwd|Credential)s?($|[A-Z_])",
+    "_envVarNameCamelPattern0200Comment": "TASK-106 N-H4 (0.2.0): `…KeyId` je identifikátor klíče, ne secret — `Gsd__Cursor__ActiveKeyId` dávalo 4 z 5 dotazů `envVarRead` ve vzorku fáze 1. Přípona `Id`/`Ids` za slovem vzor vylučuje; `apiKey`, `ActiveKey` i `apiKeyIndex` se ptají dál.",
+    "envVarNameCamelPattern": "[a-z](Key|Token|Secret|Password|Passwd|Credential)s?(?!Ids?($|[^a-z]))($|[A-Z_])",
 
     "shapes": {
       "secretFile": "čtení/zápis souboru se secrets ({path})",

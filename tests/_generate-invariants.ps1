@@ -36,15 +36,41 @@ param(
     # je ta cesta: prepise jen radky, na kterych generator hlasi SPOR, a do hlavicky
     # `_zmeneno` doplni datum, citaci, smer a vycet tvaru. Bez citace se nezapise nic -
     # radek invariantu meni ocekavani vzdy s tim, kdo o tom rozhodl.
-    [string]$Prijmout = ''
+    [string]$Prijmout = '',
+    # TASK-106 bod 14 (0.2.0): cesta k souboru invariantu je parametr, aby sel generator
+    # otestovat nad KOPII - test bajtove neutrality `-Prijmout` nesmi sahat na ostry soubor.
+    [string]$InvariantsPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$invPath = Join-Path $PSScriptRoot 'fixtures/invariants.json'
+$invPath = if ($InvariantsPath -ne '') { $InvariantsPath } else { Join-Path $PSScriptRoot 'fixtures/invariants.json' }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+
+# TASK-106 bod 14: telo JSON retezce z textu - escapuje se JEN `\`, `"` a ridici znaky, nic
+# jineho. ConvertTo-Json to nesmi delat: PowerShell 5.1 escapuje navic `<`, `>`, `&`, `'`
+# (do escape sekvenci u0026 a u0027), pwsh 7 jen `<` a `>` - tyz text da v kazdem interpretu jine bajty a
+# hlavicka, kterou nikdo nezmenil, by se v diffu "zmenila". Hlavicka `_zmeneno` se proto
+# neprepisuje deserializaci a serializaci, ale nova veta se PRIPISUJE do stavajiciho
+# literalu textove - stare bajty zustavaji, jak byly.
+function ConvertTo-JsonStringBody([string]$Text) {
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Text.ToCharArray()) {
+        switch ($ch) {
+            '\' { [void]$sb.Append('\\') }
+            '"' { [void]$sb.Append('\"') }
+            "`n" { [void]$sb.Append('\n') }
+            "`r" { [void]$sb.Append('\r') }
+            "`t" { [void]$sb.Append('\t') }
+            default {
+                if ([int]$ch -lt 32) { [void]$sb.Append(('\u{0:x4}' -f [int]$ch)) } else { [void]$sb.Append($ch) }
+            }
+        }
+    }
+    return $sb.ToString()
+}
 
 function Get-SuiteCases([string]$Suite) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -202,18 +228,27 @@ if ($Prijmout -ne '') {
         # `String.Replace`, ktery nic nenajde, vrati puvodni retezec BEZ CHYBY, takze
         # zapis probehl a hlavicka se nezmenila. Hleda se proto RADEK podle klice
         # a nova hodnota se serializuje az jako nahrada.
-        $stara = ''
-        if ($doc2.PSObject.Properties['_zmeneno']) { $stara = [string]$doc2._zmeneno }
+        #
+        # !! TASK-106 bod 14 (0.2.0): ani ta nahrada se NESERIALIZUJE. Do 0.1.11 se cela
+        # hlavicka (stara + nova veta) prohnala pres ConvertTo-Json, ktery v PS 5.1 escapuje
+        # `&` a `'` a pwsh 7 ne - takze prijeti zmenilo BAJTY stare casti hlavicky podle toho,
+        # kdo ho spustil, a diff ukazoval zmenu, kterou nikdo nerozhodl. Nova veta se proto
+        # PRIPISUJE do stavajiciho literalu textove (jen `\`, `"` a ridici znaky escapovane);
+        # stare bajty zustavaji. Kontrolni skupina: prijeti se ZMENENYM ocekavanim diff mit
+        # musi - presne jeden radek `expect` a tuhle hlavicku.
         $smery = @($zmeneno | ForEach-Object { $_.Z + ' -> ' + $_.Na } | Sort-Object -Unique) -join ', '
         $novaVeta = ("{0}, {1}: {2} radkum se zmenilo ocekavani ({3}). Seznam: {4}." -f `
                      (Get-Date -Format 'yyyy-MM-dd'), $Prijmout, $zmeneno.Count, $smery,
                      (($zmeneno | ForEach-Object { $_.Cmd -replace '\r?\n', ' / ' }) -join ' - '))
-        $celaHlavicka = if ([string]::IsNullOrWhiteSpace($stara)) { $novaVeta } else { $stara + ' || ' + $novaVeta }
         $radky2 = $text -split "`n"
         $hlavickaTrefa = $false
         for ($h = 0; $h -lt $radky2.Count; $h++) {
-            if ($radky2[$h] -match '^(\s*"_zmeneno": ).*?(,?)\s*\r?$') {
-                $radky2[$h] = $Matches[1] + (ConvertTo-Json $celaHlavicka -Compress) + $Matches[2]
+            if ($radky2[$h] -match '^(\s*"_zmeneno": ")(.*)("(,?)\s*\r?)$') {
+                $prefix = $Matches[1]
+                $staraTelo = $Matches[2]
+                $suffix = $Matches[3]
+                $pripis = if ($staraTelo -eq '') { ConvertTo-JsonStringBody $novaVeta } else { ConvertTo-JsonStringBody (' || ' + $novaVeta) }
+                $radky2[$h] = $prefix + $staraTelo + $pripis + $suffix
                 $hlavickaTrefa = $true
                 break
             }

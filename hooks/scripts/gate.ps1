@@ -48,6 +48,7 @@ $script:PermissionMode = 'default'
 # script-scope, protoze Get-CommandLeaf konfiguraci ani kontext parametrem nedostava
 # (refaktor podpisu je mimo rozsah, zadani par. 6 bod 5).
 $script:InvokedContext = $false
+$script:InvokedAssigned = $null
 
 # ------------------------------------------------------------- pomocne ---
 
@@ -201,29 +202,7 @@ function Test-EncodedCommandFlag([string]$Token) {
     return (Test-ParameterPrefix $Token 'encodedcommand')
 }
 
-# Zacina na tomhle radku heredoc MIMO uvozovky? Nalez Amber E2: regex nad radkem
-# nasel `<<` i uvnitr retezce (`echo "<<x>>"`) a zbytek prikazu se spolkl jako telo.
-function Test-HeredocOutsideQuotes([string]$Line) {
-    if ([string]::IsNullOrEmpty($Line)) { return $false }
-    $esc = Get-ScannerEscape
-    $inSingle = $false
-    $inDouble = $false
-    for ($i = 0; $i -lt $Line.Length - 1; $i++) {
-        $c = $Line[$i]
-        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; continue }
-        # Escape pred uvozovkou uvozovku neotevira (nalez Amber G1).
-        if ($c -eq $esc) { $i++; continue }
-        if ($c -eq "'" -and -not $inDouble) { $inSingle = $true; continue }
-        if ($c -eq '"') { $inDouble = -not $inDouble; continue }
-        if ($inDouble) { continue }
-        if ($c -eq '<' -and $Line[$i + 1] -eq '<') {
-            # `<<<` je here-string, ne heredoc.
-            if (($i + 2) -lt $Line.Length -and $Line[$i + 2] -eq '<') { return $false }
-            return $true
-        }
-    }
-    return $false
-}
+# Test-HeredocOutsideQuotes a $script:HeredocPattern ziji od 0.2.0 v _common.ps1 (sdili je secrets.ps1).
 
 # Roura, jejimz POSLEDNIM clankem je SQL klient.
 #
@@ -297,7 +276,6 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
 # by skoncilo jako lokalni operace (ask) misto vzdalene (deny). Nalez Amber A4.
 #
 # Vraci @{ Rest = prikaz bez tel heredocu; Bodies = @(@{ Outer; OuterExe; Body }) }.
-$script:HeredocPattern = '<<-?\s*(?:''([A-Za-z_][A-Za-z0-9_]*)''|"([A-Za-z_][A-Za-z0-9_]*)"|\\?([A-Za-z_][A-Za-z0-9_]*))'
 
 function Split-Heredoc([string]$Command) {
     $heredocPattern = $script:HeredocPattern
@@ -444,6 +422,26 @@ function Get-NestedShellLeaf([string]$Inner, [string]$ShellTool, [int]$Depth) {
 # `$ShellTool` prazdny = tyz shell jako hostitel (cmd /c, eval, iex, Start-Process).
 function Get-InvokedLeaves([string]$Inner, [string]$ShellTool, [int]$Depth) {
     $out = New-Object System.Collections.ArrayList
+    # Vnejsi shell escapovany dolar ROZBALI, nez text preda dal: `pwsh -Command "... `$env:X = 1 ..."`
+    # psane z PowerShellu prijde vnitrnimu pwsh jako `$env:X = 1` (prirazeni), z Bashe
+    # `bash -c "echo \$HOME"` jako `echo $HOME`. Split-Arguments escapovanou dvojici schvalne
+    # nechava celou (kvuli `C:\src`), takze by tu `$` zustal za escapem a prirazeni by se
+    # cetlo jako promenna v hlave -> `invoked`. Zmereno nad vzorkem faze 1: bez tohoto kroku
+    # zustalo 42 ze 44 dotazu `invoked` dotazem i po zuzeni. Rozbaluje se JEN dolar.
+    $Inner = $Inner.Replace((Get-ScannerEscape) + '$', '$')
+    # Promenna, kterou vnitrni text SAM PRIRAZUJE (`$e = $null; ...; $e | Select-Object`), neni
+    # obsah rozbaleny vnejsim shellem - je to lokalni promenna vnitrniho skriptu, a ta se
+    # v hlave statementu nespousti (PowerShell hodnotu vypise, nespusti). Jmena se sesbiraji
+    # predem a Get-CommandLeaf je necha jako `variable` (audit). Promenna bez prirazeni
+    # v hlave (`bash -c "$cmd arg"`, `pwsh -c "$x"`) zustava `invoked`. Zmereno nad vzorkem:
+    # 13 ze 44 dotazu `invoked` melo presne tenhle tvar (`$e | ...` po `[ref]$e`).
+    $prevAssigned = $script:InvokedAssigned
+    $assigned = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($m in [regex]::Matches($Inner, '(?:^|[;\n{(|])\s*\$(?:env:|script:|global:|local:)?([A-Za-z_][A-Za-z0-9_]*)\s*[+\-*/]?=(?!=)')) {
+        [void]$assigned.Add($m.Groups[1].Value)
+    }
+    foreach ($m in [regex]::Matches($Inner, '\[ref\]\s*\$([A-Za-z_][A-Za-z0-9_]*)')) { [void]$assigned.Add($m.Groups[1].Value) }
+    $script:InvokedAssigned = $assigned
     $prev = $script:InvokedContext
     $script:InvokedContext = $true
     try {
@@ -454,6 +452,7 @@ function Get-InvokedLeaves([string]$Inner, [string]$ShellTool, [int]$Depth) {
         }
     } finally {
         $script:InvokedContext = $prev
+        $script:InvokedAssigned = $prevAssigned
     }
     return $out
 }
@@ -622,8 +621,16 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         # `& $cmd` obsah promenne SPUSTI, `$out` nebo `"EXIT=$code"` ne. Priznak `$invoked`
         # se proto musi DONEST az sem - jinak by obe veci mely tutez politiku.
         # TASK-106 bod 15: uvnitr obalu, ktery text spousti (Get-InvokedLeaves), je promenna
-        # v hlave statementu tez spusteni obsahu - `bash -c "$cmd arg"`, `pwsh -c "$x"`.
-        $why = if ($invoked -or $script:InvokedContext) { 'invoked' } else { 'variable' }
+        # v hlave statementu tez spusteni obsahu - `bash -c "$cmd arg"`, `pwsh -c "$x"`. Jen
+        # kdyz je promenna nebo substituce SAMA hlavou (token zacina `$` nebo `%`): retezec
+        # `"chyb: $($e.Count)"` ani volani `[IO.File]::ReadAllBytes('$f')` nic nespousti a
+        # zustavaji `variable` (zmereno nad vzorkem: 19 ze 44 dotazu bylo presne tohle).
+        $head = [string]$argv[0]
+        $headIsVariable = $head -match '^[$%]'
+        if ($headIsVariable -and $null -ne $script:InvokedAssigned -and $head -match '^\$\{?([A-Za-z_][A-Za-z0-9_]*)') {
+            if ($script:InvokedAssigned.Contains($Matches[1])) { $headIsVariable = $false }
+        }
+        $why = if ($invoked -or ($script:InvokedContext -and $headIsVariable)) { 'invoked' } else { 'variable' }
         [void]$out.Add((New-OpaqueLeaf $raw $why)); return $out
     }
 
@@ -1451,42 +1458,8 @@ function Get-RemoteShellPositional($Argv) {
     return $out
 }
 
-# Rozhodnuti Toma T-10 A: tvary, kde SQL v prikazu NENI videt, uz nezastavuji - ale
-# ZAZNAMENAVAJI se. Audit misto brany.
-#
-# !! Loguje se UDALOST, ne obsah: cas, nastroj, id tvaru a rozhodnuti. Text prikazu do
-# souboru NEJDE (zadani par. 4 bod 8 - riziko uniku). Bez CLAUDE_PLUGIN_DATA se nezapisuje
-# nic a hook mlci; evidence nesmi byt duvod, proc brana spadne.
-function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision, $Config) {
-    try {
-        # T36-Q7 = A (Tom, 8. 9.): v `bypassPermissions` nad pluginem uz zadna vrstva
-        # neni - audit tam znamena "proslo bez druhe kontroly", ne "rozhodne to
-        # opravneni Claude Code". Radek to proto rekne sam; nic se neblokuje.
-        # Mapuje se TADY, ne na volajicich mistech, aby na to neslo u jednoho zapomenout.
-        if ($Decision -eq 'allow' -and $script:PermissionMode -eq 'bypassPermissions') {
-            $Decision = 'allow-bypass'
-        }
-        $dir = $env:CLAUDE_PLUGIN_DATA
-        if ([string]::IsNullOrWhiteSpace($dir)) { return }
-        $file = [string](Get-Field (Get-Field $Config 'gate') 'auditFile' 'gate-audit.jsonl')
-        $path = Join-SafePath $dir $file
-        if ($null -eq $path) { return }
-        [void][System.IO.Directory]::CreateDirectory($dir)
-        $line = [ordered]@{
-            ts       = (Get-Date).ToString('o')
-            tool     = $ToolName
-            shape    = $ShapeId
-            decision = $Decision
-        } | ConvertTo-Json -Depth 3 -Compress
-        $bytes = ([System.Text.UTF8Encoding]::new($false)).GetBytes($line + "`n")
-        $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Append,
-                                         [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Dispose()
-    } catch {
-        # Evidence je fail-OPEN: kdyz se zapsat nepodari, brana se tim nesmi zastavit.
-    }
-}
+# Write-GateAudit zije od 0.2.0 v _common.ps1 - secrets.ps1 audituje taky (TASK-106 bod 11,
+# vyrok 7: trida chranena jmenem u globu). Volani tady zustavaji beze zmeny.
 
 # Politika pro nerozebratelny list (rozhodnuti Toma 2026-09-07/T36-O5 = A).
 #
