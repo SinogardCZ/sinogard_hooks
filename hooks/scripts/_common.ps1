@@ -250,8 +250,9 @@ function Test-BlockOpenPosition([string]$Text, [int]$Index) {
     return $true
 }
 
-# Blok skriptu `{ ... }` - kvotove a escape korektne. Vraci hashtable s HLAVOU
-# (text pred zavorkou) a TELEM, nebo $null, kdyz statement blokem nekonci.
+# Bloky skriptu `{ ... }` ve statementu - kvotove a escape korektne. Vraci hashtable
+# `Blocks` (seznam @{ Head; Body } pro KAZDY blok na nejvyssi urovni) a `Whole`
+# (statement je PRESNE jeden blok bez hlavy a bez ocasu, napr. `{ rm -rf src }`).
 #
 # Nalez Amber I1: rozbaleni bloku delal regex ukotveny na ZACATEK statementu, takze
 # `& { rm -rf src }` se rozebralo, ale `if ($x) { git reset --hard }` uz ne - a po
@@ -261,15 +262,26 @@ function Test-BlockOpenPosition([string]$Text, [int]$Index) {
 # Nalez Amber K1: oprava I1 pak brala PRVNI `{` kdekoli a hlavu zahazovala, takze
 # `git stash drop stash@{0}` vyslo jako telo `0` -> allow. Hlava se proto vraci
 # volajicimu a ten ji rozebira taky.
-function Get-ScriptBlockBody([string]$Text) {
+#
+# Nalez Amber K2 (TASK-106 bod 6, 0.2.0): do 0.1.11 se telo hledalo jen tehdy, kdyz
+# statement zavorkou KONCIL - `if ($x) { rm -rf src } else { git status }`,
+# `try { ... } catch { ... }` i `{ ... } # poznamka` prosly NEROZEBRANE, protoze prvni
+# blok nebyl posledni znak textu. Stara dira, ne regrese (zmereno na klonu 0.1.4).
+# Rozebiraji se proto VSECHNY bloky statementu, ne prvni; hlava kazdeho z nich je
+# text mezi koncem predchoziho bloku a jeho zavorkou. Kontrolni skupina (vyrok 2
+# Amber 2026-09-12): `if ($x) { git status } else { git log }` NESMI skoncit dotazem.
+function Get-ScriptBlockBodies([string]$Text) {
+    $blocks = New-Object System.Collections.ArrayList
     $t = ([string]$Text).Trim()
-    if ($t.Length -lt 2 -or -not $t.EndsWith('}')) { return $null }
+    if ($t.Length -lt 2) { return @{ Blocks = $blocks; Whole = $false } }
 
     $esc = $script:ScannerEscape
     $inSingle = $false
     $inDouble = $false
     $open = -1
     $depth = 0
+    $prevEnd = 0     # index ZA koncem predchoziho bloku = zacatek hlavy dalsiho
+    $lastClose = -1  # index `}` posledniho zaznamenaneho bloku
     $i = 0
     $n = $t.Length
     while ($i -lt $n) {
@@ -283,19 +295,24 @@ function Get-ScriptBlockBody([string]$Text) {
             if ($open -lt 0 -and (Test-BlockOpenPosition $t $i)) { $open = $i }
             $depth++
         } elseif ($c -eq '}') {
-            $depth--
-            # Uzavreni PRVNI otevrene zavorky. Kdyz za nim jeste neco stoji, neni to
-            # obal, ale text s zavorkou uprostred - a ten se sem uz nevejde.
+            if ($depth -gt 0) { $depth-- }
+            # Uzavreni otevrene zavorky na nejvyssi urovni = jeden blok. Text ZA nim
+            # muze nest dalsi blok (`else { ... }`, `catch { ... }`), tak se cte dal.
             if ($depth -eq 0 -and $open -ge 0) {
-                if ($i -ne ($n - 1)) { return $null }
                 $len = $i - $open - 1
-                if ($len -le 0) { return $null }
-                return @{ Head = $t.Substring(0, $open).Trim(); Body = $t.Substring($open + 1, $len) }
+                if ($len -gt 0) {
+                    [void]$blocks.Add(@{ Head = $t.Substring($prevEnd, $open - $prevEnd).Trim()
+                                         Body = $t.Substring($open + 1, $len) })
+                    $lastClose = $i
+                    $prevEnd = $i + 1
+                }
+                $open = -1
             }
         }
         $i++
     }
-    return $null
+    $whole = ($blocks.Count -eq 1 -and $blocks[0].Head -eq '' -and $lastClose -eq ($n - 1))
+    return @{ Blocks = $blocks; Whole = $whole }
 }
 
 # `KeepSeparators`: separatory, ktere maji z deleni PREZIT a pripojit se
@@ -543,13 +560,49 @@ function Split-CommandLine([string]$Command, [string[]]$KeepSeparators = @()) {
         foreach ($sub in (Split-CommandLine $e $KeepSeparators)) { [void]$result.Add($sub) }
     }
 
-    # Pary zpetnych apostrofu = substituce v Bashi. V PowerShellu je zpetny apostrof
-    # escape, takze prevzeti obsahu je nanejvys falesne pozitivni, nikdy negativni.
-    foreach ($m in [regex]::Matches($Command, '`([^`]+)`')) {
-        foreach ($sub in (Split-CommandLine $m.Groups[1].Value $KeepSeparators)) { [void]$result.Add($sub) }
+    # Pary zpetnych apostrofu = substituce v Bashi. Do 0.1.11 se braly REGEXEM bez
+    # ohledu na escape a uvozovky (N-H6, TASK-106): `git merge -m "... \`& \$cmd\` ..."`
+    # z transkriptu skoncil `invoked`, ac `\`` je v Bashi literal. Skener nize cte
+    # escape a jednoduche uvozovky; v PowerShellu je zpetny apostrof ESCAPE a zadna
+    # substituce, takze se tam obsah neprebira vubec (drive "nanejvys falesne
+    # pozitivni" - a presne to falesne pozitivni se ve vzorku naslo).
+    foreach ($e in (Get-BacktickSubstitution $Command)) {
+        foreach ($sub in (Split-CommandLine $e $KeepSeparators)) { [void]$result.Add($sub) }
     }
 
     return ,@($result | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+}
+
+# Obsah paru zpetnych apostrofu v Bashi - jen NEescapovanych a mimo jednoduche uvozovky.
+# V dvojitych uvozovkach se substituce PROVADI (`echo "\`git reset --hard\`"`), takze se
+# jejich stav nesleduje. Pod PowerShellovym escapem (zpetny apostrof) vraci prazdno:
+# tam zadna substituce zpetnymi apostrofy neexistuje.
+function Get-BacktickSubstitution([string]$Text) {
+    $out = New-Object System.Collections.ArrayList
+    if ([string]::IsNullOrEmpty($Text)) { return ,@() }
+    $esc = $script:ScannerEscape
+    if ($esc -eq '`') { return ,@() }
+
+    $i = 0
+    $n = $Text.Length
+    $inSingle = $false
+    $start = -1
+    while ($i -lt $n) {
+        $c = $Text[$i]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
+        if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
+        if ($c -eq "'" -and $start -lt 0) { $inSingle = $true; $i++; continue }
+        if ($c -eq '`') {
+            if ($start -lt 0) { $start = $i + 1 }
+            else {
+                $len = $i - $start
+                if ($len -gt 0) { [void]$out.Add($Text.Substring($start, $len)) }
+                $start = -1
+            }
+        }
+        $i++
+    }
+    return ,@($out)
 }
 
 function Split-Arguments([string]$Command) {
@@ -667,5 +720,75 @@ function Test-ExpressionStatement([string]$Text) {
     # nebo index, za nim uz jen konec, operator nebo dalsi clen vyrazu. Bare slovo
     # za retezcem clenu ZUSTAVA prikazem (`$x.Cmd arg`).
     if ($t -match ('^\$(?:_|[A-Za-z_][\w:]*)(?:\.[A-Za-z_]\w*|\[[^\]]*\])+\s*(?:$|-' + $script:PsOperators + '\b|[|,;+*/])')) { return $true }
+    return $false
+}
+
+# ------------------------------------------------------------- audit (T-10 A) ---
+#
+# Do 0.1.11 zila funkce v gate.ps1; od 0.2.0 je sdilena - secrets.ps1 zapisuje audit u tridy
+# chranene jmenem (TASK-106 bod 11, vyrok 7 Amber 2026-09-12). Cte $script:PermissionMode a
+# $script:ToolName ze scope volajiciho skriptu - oba je nastavuji PRED prvnim rozhodnutim.
+# Rozhodnuti Toma T-10 A: tvary, kde SQL v prikazu NENI videt, uz nezastavuji - ale
+# ZAZNAMENAVAJI se. Audit misto brany.
+#
+# !! Loguje se UDALOST, ne obsah: cas, nastroj, id tvaru a rozhodnuti. Text prikazu do
+# souboru NEJDE (zadani par. 4 bod 8 - riziko uniku). Bez CLAUDE_PLUGIN_DATA se nezapisuje
+# nic a hook mlci; evidence nesmi byt duvod, proc brana spadne.
+function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision, $Config) {
+    try {
+        # T36-Q7 = A (Tom, 8. 9.): v `bypassPermissions` nad pluginem uz zadna vrstva
+        # neni - audit tam znamena "proslo bez druhe kontroly", ne "rozhodne to
+        # opravneni Claude Code". Radek to proto rekne sam; nic se neblokuje.
+        # Mapuje se TADY, ne na volajicich mistech, aby na to neslo u jednoho zapomenout.
+        if ($Decision -eq 'allow' -and $script:PermissionMode -eq 'bypassPermissions') {
+            $Decision = 'allow-bypass'
+        }
+        $dir = $env:CLAUDE_PLUGIN_DATA
+        if ([string]::IsNullOrWhiteSpace($dir)) { return }
+        $file = [string](Get-Field (Get-Field $Config 'gate') 'auditFile' 'gate-audit.jsonl')
+        $path = Join-SafePath $dir $file
+        if ($null -eq $path) { return }
+        [void][System.IO.Directory]::CreateDirectory($dir)
+        $line = [ordered]@{
+            ts       = (Get-Date).ToString('o')
+            tool     = $ToolName
+            shape    = $ShapeId
+            decision = $Decision
+        } | ConvertTo-Json -Depth 3 -Compress
+        $bytes = ([System.Text.UTF8Encoding]::new($false)).GetBytes($line + "`n")
+        $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Append,
+                                         [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Dispose()
+    } catch {
+        # Evidence je fail-OPEN: kdyz se zapsat nepodari, brana se tim nesmi zastavit.
+    }
+}
+
+# ------------------------------------------------------ uvod heredocu (sdileny) ---
+
+$script:HeredocPattern = '<<-?\s*(?:''([A-Za-z_][A-Za-z0-9_]*)''|"([A-Za-z_][A-Za-z0-9_]*)"|\\?([A-Za-z_][A-Za-z0-9_]*))'
+
+# Zacina na tomhle radku heredoc MIMO uvozovky? Nalez Amber E2: regex nad radkem
+# nasel `<<` i uvnitr retezce (`echo "<<x>>"`) a zbytek prikazu se spolkl jako telo.
+function Test-HeredocOutsideQuotes([string]$Line) {
+    if ([string]::IsNullOrEmpty($Line)) { return $false }
+    $esc = Get-ScannerEscape
+    $inSingle = $false
+    $inDouble = $false
+    for ($i = 0; $i -lt $Line.Length - 1; $i++) {
+        $c = $Line[$i]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; continue }
+        # Escape pred uvozovkou uvozovku neotevira (nalez Amber G1).
+        if ($c -eq $esc) { $i++; continue }
+        if ($c -eq "'" -and -not $inDouble) { $inSingle = $true; continue }
+        if ($c -eq '"') { $inDouble = -not $inDouble; continue }
+        if ($inDouble) { continue }
+        if ($c -eq '<' -and $Line[$i + 1] -eq '<') {
+            # `<<<` je here-string, ne heredoc.
+            if (($i + 2) -lt $Line.Length -and $Line[$i + 2] -eq '<') { return $false }
+            return $true
+        }
+    }
     return $false
 }

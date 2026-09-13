@@ -170,9 +170,9 @@ $askCommands = @(
     (CmdCase 'PASSWORD promenna'     'echo $DB_PASSWORD' 'ask')
     (CmdCase 'CREDENTIAL promenna'   'echo $env:AZURE_CREDENTIAL' 'ask' 'PowerShell')
     (CmdCase 'cteni settings.local'  'cat .claude/settings.local.json' 'ask')
-    # M21: glob, ktery MUZE padnout na chranene jmeno
-    (CmdCase 'M21 glob .en?'         'Get-Content .en?' 'ask' 'PowerShell')
-    (CmdCase 'M21 glob hvezdicka'    'cat *' 'ask')
+    # M21 (glob, ktery MUZE padnout na chranene jmeno): do 0.1.11 `ask`. Od 0.2.0 (TASK-106
+    # bod 11, vyroky 7 + 8 Amber 2026-09-12 v mandatu Toma) je jmenna trida u globu `audit`
+    # (zapise se, mlci) - pripady stoji v $allowCommands; glob na chranenou CESTU se pta dal.
 )
 
 $allowCommands = @(
@@ -187,6 +187,10 @@ $allowCommands = @(
     (CmdCase 'M21 glob md'           'ls *.md' 'allow')
     (CmdCase 'M21 glob ts'           'grep neco src/*.ts' 'allow')
     (CmdCase 'M2 bezne jmeno'        'cat Program.cs' 'allow')
+    # M21: glob na chranene JMENO od 0.2.0 mlci a zapise audit (TASK-106 bod 11, vyroky 7 + 8);
+    # doklad auditu je v sekci "TASK-106 D2". Radek invariantu prosel `-Prijmout` s citaci.
+    (CmdCase 'M21 glob .en?'         'Get-Content .en?' 'allow' 'PowerShell')
+    (CmdCase 'M21 glob hvezdicka'    'cat *' 'allow')
 )
 
 # ------------------------------------------------------------- vyhodnoceni ---
@@ -325,16 +329,183 @@ $n26SecretCases = @(
     (CmdCase 'N26 echo hvezdicka'       'echo "a*b"' 'allow')
     (CmdCase 'N26 Write-Host'           'Write-Host "**2**"' 'allow' 'PowerShell')
     (CmdCase 'N26 grep vzor'            'grep "x*" src/a.cs' 'allow')
-    # 🔴 kontrolni skupina: glob v pozici CESTY u cteciho prikazu se pta dal
+    # 🔴 kontrolni skupina: glob v pozici CESTY u cteciho prikazu se vyhodnocuje dal.
+    #    Do 0.1.11 tu stalo `ask` - glob se srovnaval jen se JMENEM (`protectedBaseNames`).
+    #    Od 0.2.0 (TASK-106 bod 11, vyroky 7 + 8 Amber 2026-09-12 v mandatu Toma) je trida
+    #    chranena JMENEM u globu `audit` (zapise se, mlci), trida chranena CESTOU zustava
+    #    `ask` - viz sekce "TASK-106 D2" nize, kde je i doklad auditu. Radek invariantu
+    #    prosel `-Prijmout` s touto citaci.
+    # 🔴 C1 (delta review Amber 2026-09-13): `*.env` MIRI na secret vzorem (jmeno globu sedne na
+    #    `envFile.denyNames`) - zustava ask jako `*.pem`. Prvni tvar 0.2.0 ho poslal do auditu = regrese.
     (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'ask')
-    (CmdCase 'N26 kontrola Get-Content' 'Get-Content .en?' 'ask' 'PowerShell')
+    #    `.en?` (zastupny znak UVNITR jmena) deterministicky rozlisit nejde - pojmenovana mez (README 9), audit.
+    (CmdCase 'N26 kontrola Get-Content' 'Get-Content .en?' 'allow' 'PowerShell')
+    # `*.pem` sedne DOSLOVA na vzor `denyPathPatterns` (pripona) -> trida chranena VZOREM cesty, ask dal
     (CmdCase 'N26 kontrola cp glob'     'cp *.pem /tmp/x' 'ask')
+    (CmdCase 'N26 kontrola glob na chranenou CESTU' 'cat ~/.aws/*' 'ask')
     # 🔴 a presne jmeno se pta dal bez ohledu na uvozovky
     (CmdCase 'N26 kontrola presne jmeno' 'cat .env' 'deny')
     (CmdCase 'N26 kontrola literal'      '[IO.File]::ReadAllText(''.env'')' 'deny' 'PowerShell')
 )
 
 Test-Cases 'nalez N26 - glob jen v pozici cesty' $n26SecretCases
+
+# ================================================================================
+#  v0.2.0 - TASK-106 faze 2, davka D2 (secrets.ps1): bod 9 + N-H3, bod 11, bod 12
+#  + N-H1 + N-H2 + N-H4, N-H6 (druhy nositel). Vyroky Amber 2026-09-12 (mandat Toma).
+#
+#  🔴 Kazdy pripad jmenuje mutanta a ma kontrolni skupinu v JINEM stavu (zadani §7).
+# ================================================================================
+
+# --- bod 9 + N-H3: `isWrite` byl JEDEN priznak na cely prikaz (`secrets.ps1` ř. 273 v 0.1.11):
+#     `cat ~/.claude/settings.json 2>/dev/null` melo `>` v `2>/dev/null`, takze CTENI skoncilo
+#     jako "zapis do souboru, kterym se brana vypina" (2x ve vzorku faze 1). Od 0.2.0 je zapis
+#     vlastnost KANDIDATA: cil presmerovani `>`/`>>` (vcetne `2> soubor`), argument zapisoveho
+#     prikazu (`tee`, `Set-Content`, `Out-File`, `Add-Content`); vse ostatni je cteni.
+#     Mutant (N-H3): vratit jeden priznak na prikaz -> `cat ... 2>/dev/null` zcervena.
+#     Mutant (bod 9): zamenit texty cteni<->zapis -> parova kontrola nize zcervena.
+$bod9Cases = @(
+    (CmdCase 'NH3 cteni settings.json s 2>/dev/null'  'cat ~/.claude/settings.json 2>/dev/null | head -80' 'allow')
+    (CmdCase 'NH3 cteni settings.json s 2>&1'         'cat .claude/settings.json 2>&1' 'allow')
+    (CmdCase 'NH3 git checkout -- s 2>&1'             'git checkout -- .claude/settings.json 2>&1; git status --porcelain' 'allow')
+    (CmdCase 'NH3 cteni defaults.json s 2>/dev/null'  'cat hooks/config/defaults.json 2>/dev/null' 'allow')
+    # 🔴 kontrolni skupina: SKUTECNY zapis do souboru brany se pta dal
+    (CmdCase 'NH3 kontrola presmerovani do settings'  'git show HEAD:.claude/settings.json > .claude/settings.json' 'ask')
+    (CmdCase 'NH3 kontrola append do settings'        'echo x >> .claude/settings.json' 'ask')
+    (CmdCase 'NH3 kontrola tee do settings'           'cat x | tee .claude/settings.json' 'ask')
+    (CmdCase 'NH3 kontrola Set-Content'               'Set-Content -Path .claude/sinogard-hooks.json -Value x' 'ask' 'PowerShell')
+    (CmdCase 'NH3 kontrola Out-File'                  '$j | Out-File hooks/hooks.json' 'ask' 'PowerShell')
+    (CmdCase 'NH3 kontrola 2> do souboru brany'       'dotnet build 2> .claude/settings.json' 'ask')
+    # 🔴 a `deny` trida se s presmerovanim nemeni (cteni i zapis .env je deny)
+    (CmdCase 'NH3 kontrola cteni .env s 2>/dev/null'  'grep -i port .env 2>/dev/null | head' 'deny')
+)
+
+Test-Cases 'TASK-106 D2 - bod 9 / N-H3: zapis je vlastnost kandidata' $bod9Cases
+
+function Get-SecretsReason($Result) {
+    if ([string]::IsNullOrWhiteSpace($Result.Stdout)) { return '' }
+    return [string]($Result.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason
+}
+$cfgD2 = [System.IO.File]::ReadAllText(
+    (Join-Path $script:RepoRoot 'hooks/config/defaults.json'), ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+$textRead  = [string]$cfgD2.secrets.shapes.settingsLocal
+$textWrite = [string]$cfgD2.secrets.shapes.selfProtect -replace '\{path\}', '.claude/settings.local.json'
+
+Start-Case 'bod 9 (TASK-106): TYZ soubor, jednou cteni a jednou zapis - obe ask, texty ruzne'
+$r9r = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'cat .claude/settings.local.json 2>/dev/null' })
+$r9w = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'echo x > .claude/settings.local.json' })
+Assert-Equal 'ask' (Get-Decision $r9r) '[bod9/cteni] cat settings.local.json 2>/dev/null je ask'
+Assert-Equal 'ask' (Get-Decision $r9w) '[bod9/zapis] echo x > settings.local.json je ask'
+$reason9r = Get-SecretsReason $r9r
+$reason9w = Get-SecretsReason $r9w
+Assert-True ($reason9r.Contains($textRead))  ("[bod9/cteni] duvod jmenuje CTENI: {0}" -f $reason9r)
+Assert-True (-not $reason9r.Contains($textWrite)) '[bod9/cteni] duvod NEMLUVI o zapisu'
+Assert-True ($reason9w.Contains($textWrite)) ("[bod9/zapis] duvod jmenuje ZAPIS: {0}" -f $reason9w)
+Assert-True (-not $reason9w.Contains($textRead)) '[bod9/zapis] duvod NEMLUVI o cteni'
+Assert-True ($reason9r -ne $reason9w) '[bod9] texty se lisi (jinak by par nic nemeril)'
+
+# --- bod 11 (N16, vyrok 8 Amber = navrh Hestie prijat): glob se posuzuje podle CELE
+#     normalizovane cesty, ne jen podle jmena. `*` a `?` neprekracuji `/`, `**` ano, kotvi se na
+#     hranici adresare. Trida chranena JMENEM (`protectedBaseNames`) u globu -> `audit`
+#     (vyrok 7: zapise se, mlci); trida chranena CESTOU (`denyPathPatterns`, kanonicke
+#     `protectedPaths`) -> `ask` dal. Ve vzorku faze 1: `head -25 .github/workflows/*.yml`
+#     a `ls docs/technical/*.json` = 2 falesne dotazy (`*.yml` sedlo na `secrets.yml`).
+#     Mutant: vratit `Get-BaseName` (glob jen nad jmenem) -> `allow` radky zcervenaji.
+$bod11Cases = @(
+    (CmdCase 'B11 glob yml v adresari (vzorek)'       'head -25 .github/workflows/*.yml' 'allow')
+    (CmdCase 'B11 glob json v adresari (vzorek)'      'ls docs/technical/*.json' 'allow')
+    (CmdCase 'B11 kontrola ①: *.txt v tomtez adresari' 'cat .github/workflows/*.txt' 'allow')
+    (CmdCase 'B11 Get-Content glob yml'               'Get-Content config/*.yml' 'allow' 'PowerShell')
+    (CmdCase 'B11 glob bez adresare (jmenna trida)'   'cat *' 'allow')
+    # 🔴 kontrolni skupina ②: glob MIRICI na cestu z `denyPathPatterns` zustava ask
+    (CmdCase 'B11 kontrola ② ~/.aws/*'                'cat ~/.aws/*' 'ask')
+    (CmdCase 'B11 kontrola ② .docker/*.json'          'cat .docker/*.json' 'ask')
+    (CmdCase 'B11 kontrola ② ~/.ssh/*'                'ls ~/.ssh/*' 'ask')
+    (CmdCase 'B11 kontrola ② ~/.kube/*'               'Get-Content ~/.kube/*' 'ask' 'PowerShell')
+    (CmdCase 'B11 kontrola ② .claude/*'               'cat .claude/*' 'ask')
+    (CmdCase 'B11 kontrola ② **/credentials'          'cat **/credentials' 'ask')
+    (CmdCase 'B11 kontrola ② UserSecrets/*/secrets.json' 'cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json' 'ask')
+    # 🔴 presne jmeno v tomtez adresari je deny dal - mez je jen u globu
+    (CmdCase 'B11 kontrola presne jmeno v adresari'   'cat .github/workflows/secrets.yml' 'deny')
+    # 🔴 C1 (delta review Amber 2026-09-13): glob, ktery na secret MIRI VZOREM, je ask - jmeno globu
+    #    sedne na `envFile.denyNames` nebo glob bez zastupnych znaku vypisuje chranene jmeno. Mutant:
+    #    vratit Test-GlobAimsAtProtectedPath bez (c)+(d) -> `cat *.env` allow -> cervena.
+    (CmdCase 'C1 cat *.env'                           'cat *.env' 'ask')
+    (CmdCase 'C1 cat .env*'                           'cat .env*' 'ask')
+    (CmdCase 'C1 cat *.env.local'                     'cat *.env.local' 'ask')
+    (CmdCase 'C1 cat *secrets.json'                   'cat *secrets.json' 'ask')
+    (CmdCase 'C1 Get-Content src/*.env'               'Get-Content src/*.env' 'ask' 'PowerShell')
+    #    kontrolni skupina C1: glob, ktery na jmeno narazi NAHODOU, mlci dal (pripad vyroku 7)
+    (CmdCase 'C1 kontrola *.yml v adresari'           'head .github/workflows/*.yml' 'allow')
+    (CmdCase 'C1 kontrola *.json'                     'ls docs/technical/*.json' 'allow')
+    (CmdCase 'C1 kontrola *.md'                       'ls *.md' 'allow')
+    # ③ N26 kontrolni skupina (git commit -m "**2**", echo **2**, Write-Host "**2**") je v sekci N26 vyse.
+)
+
+Test-Cases 'TASK-106 D2 - bod 11: glob nad celou cestou' $bod11Cases
+
+# 🔴 Vyrok 7 (N26): trida chranena jmenem u globu MLCI a ZAPISE se do auditu - ne ticho bez
+#    stopy. Doklad = radek `secrets:wildcardName` v gate-audit.jsonl. Kontrolni skupina:
+#    glob, na ktery zadne chranene jmeno nesedne, radek NEZAPISE; glob na chranenou CESTU
+#    se pta a radek taky nezapise (dotaz je stopa sam o sobe).
+function Test-SecretsAudit([string]$Name, [string]$Cmd, [string]$Expect, [bool]$RowExpected) {
+    $dir = Join-Path $script:TempDir ('audit-sec-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    $path = Join-Path $dir 'gate-audit.jsonl'
+    $json = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = $Cmd }
+    $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json -Environment @{ 'CLAUDE_PLUGIN_DATA' = $dir }
+    Assert-Equal $Expect (Get-Decision $r) ("[audit/{0}] {1}" -f $Name, $Cmd)
+    if ($RowExpected) {
+        Assert-True ([System.IO.File]::Exists($path)) ("[audit/{0}] radek auditu vznikl" -f $Name)
+        if ([System.IO.File]::Exists($path)) {
+            $line = [System.IO.File]::ReadAllText($path, ([System.Text.UTF8Encoding]::new($false)))
+            Assert-True ($line -match '"shape":"secrets:wildcardName"') ("[audit/{0}] tvar je secrets:wildcardName" -f $Name)
+            Assert-True ($line -match '"decision":"allow"') ("[audit/{0}] rozhodnuti allow (= mlci)" -f $Name)
+        }
+    } else {
+        Assert-True (-not [System.IO.File]::Exists($path)) ("[audit/{0}] radek auditu NEVZNIKL" -f $Name)
+    }
+}
+
+Start-Case 'vyrok 7 (N26): jmenna trida u globu zapise audit a mlci; ostatni radek nezapisou'
+Test-SecretsAudit 'jmenna trida yml'   'head -25 .github/workflows/*.yml' 'allow' $true
+Test-SecretsAudit 'jmenna trida *'     'cat *' 'allow' $true
+Test-SecretsAudit 'kontrola txt'       'cat .github/workflows/*.txt' 'allow' $false
+Test-SecretsAudit 'kontrola cesta'     'cat ~/.aws/*' 'ask' $false
+Test-SecretsAudit 'kontrola C1 *.env'  'cat *.env' 'ask' $false
+Test-SecretsAudit 'kontrola bezny glob' 'ls *.md' 'allow' $false
+
+# --- bod 12 + N-H1 + N-H2 + N-H4 + N-H6 (druhy nositel): chranene JMENO v TEXTU prikazu
+#     (mimo pozici cesty) nekonci deny. Pripady ziji v tests/fixtures/task106-bod12.json -
+#     🔴 zadani §7: test se pise tak, aby jeho vlastni zapis nebyl tim, co branu spusti
+#     (token `.Key` nebo `id_rsa` v prikazove radce testu by spustil secrets hook nad
+#     samotnym testem; N-H1 ve vzorku: 3 z 7 deny, vcetne mericiho prikazu faze 1).
+#     Pozice cesty = cil presmerovani, hodnota `--opt=`, pozicni argument prikazu z
+#     `pathCommands`, a u ostatnich prikazu jen token, ktery VYPADA jako cesta (lomitko,
+#     `~`, `%`, tecka na zacatku, `id_*`, nebo presne chranene jmeno). Telo heredocu, jehoz
+#     host neni shell ani interpret, jsou DATA (`cat >> x <<EOF`, `git commit -F - <<EOF`).
+#     N14 je podminka, ne bonus: cesta, ktera neprijde jako prosty pozicni argument
+#     (`< ~/.ssh/id_rsa`, `--file=...`, roura, xargs, heredoc pro shell) MUSI zustat deny.
+Start-Case 'TASK-106 D2 - bod 12 / N-H1 / N-H2 / N-H4: jmeno v textu neni cesta (fixtures/task106-bod12.json)'
+$bod12Path = Join-Path $script:RepoRoot 'tests/fixtures/task106-bod12.json'
+$bod12 = [System.IO.File]::ReadAllText($bod12Path, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+$bod12Rows = @($bod12.rows)
+Assert-True ($bod12Rows.Count -ge 20) ("[bod12] fixture nese pripady: {0}" -f $bod12Rows.Count)
+foreach ($row in $bod12Rows) {
+    Add-CollectedCase 'secrets' 'cmd' ([string]$row.tool) ([string]$row.cmd) ([string]$row.expect) ([string]$row.name)
+    if (Test-CollectOnly) { continue }
+    $template = if ([string]$row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+    $json = New-HookInput $template @{ 'tool_input.command' = [string]$row.cmd }
+    $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json
+    Assert-Equal ([string]$row.expect) (Get-Decision $r) ("[bod12/{0}] {1}" -f $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
+    if ($row.PSObject.Properties['reasonContains']) {
+        $reason = Get-SecretsReason $r
+        Assert-True ($reason.Contains([string]$row.reasonContains)) ("[bod12/{0}] duvod nese doslova <{1}>: {2}" -f $row.name, $row.reasonContains, $reason)
+    }
+    if ($row.PSObject.Properties['reasonNotContains']) {
+        $reason = Get-SecretsReason $r
+        Assert-True (-not $reason.Contains([string]$row.reasonNotContains)) ("[bod12/{0}] duvod NEnese <{1}>" -f $row.name, $row.reasonNotContains)
+    }
+}
 
 # ---------------------------------- trackovany .env.<x> je MERENI, ne fixture ---
 

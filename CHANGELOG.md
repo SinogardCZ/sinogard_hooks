@@ -3,6 +3,173 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.2.0] — 2026-09-13
+
+**TASK-106 (GSD): deset bodů nad měřením, ne nad dojmem.** Fáze 1 (2026-09-12) změřila
+**157 událostí brány nad 156 tool calls** ze **73 transkriptů** (2026-09-06 → 09-12,
+146 `ask` + 11 `deny`) a každý dotaz překlasifikovala funkcemi 0.1.11 — příčinu totiž
+z textu hlášky poznat nejde (jeden text `opaque` sdílí devět příčin). Výroky Amber
+2026-09-12 v mandátu Toma (§1 = A: deset bodů, dvě dávky podle skriptu — D1 `gate.ps1`,
+D2 `secrets.ps1`). TDD: 29 (D1) + 27 (D2) červených tvrzení před opravou, mutanti
+a kontrolní skupiny u každého bodu (zadání §7). Politika `gate.opaque` se **nemění**.
+
+### D1 — `gate.ps1`
+
+#### Zúženo — obal s literální hlavou už není spuštění proměnné (bod 15, N-H5)
+
+`bash -c`, `pwsh -Command`, `cmd /c`, `eval`, `iex` a `Start-Process` dělaly
+`Test-Unexpandable` nad **celým** vnitřkem, takže proměnná kdekoli v těle
+(`pwsh -Command "git status; Write-Host $x"`) udělala z obalu `invoked` → `ask`.
+Ve vzorku: **44 dotazů `invoked`, 41 tohoto tvaru, pravých 0** (`3/n` = 6,8 %).
+Od 0.2.0 se vnitřek **rozebere** týmž řetězem jako hlavní běh (`Get-InvokedLeaves`,
+`$script:InvokedContext`) a `invoked` je jen statement s proměnnou nebo substitucí
+**v hlavě**. Přesná simulace nad vzorkem: 40 ticho · 3 `ask` beze změny · 1 `ask`
+s pravdivou hláškou.
+
+| tvar | do 0.1.11 | od 0.2.0 |
+|---|---|---|
+| `pwsh -NoProfile -Command "git status; Write-Host $x"` | ask | **allow** |
+| `bash -c "echo $HOME; git status"`, `cmd /c "echo %PATH% && dir"`, `eval "echo $x"` | ask | **allow** |
+| `bash -c "$x"`, `bash -c "$cmd arg"`, `pwsh -c "$x"`, `cmd /c %X%`, `eval $cmd`, `iex $cmd` | ask | ask |
+| `bash -c "echo hi; $cmd"` (proměnná v druhém statementu), `bash -c "$(cat cmd.txt)"` | ask | ask |
+| `pwsh -Command "git reset --hard; Write-Host $x"` | ask | **deny** (literál je vidět) |
+
+#### Opraveno — 🔴 blok, kterým statement nekončí, se nerozebíral (bod 6, nález Amber K2)
+
+`Get-ScriptBlockBody` hledal tělo jen tehdy, když statement závorkou **končil**;
+`if ($x) { rm -rf src } else { git status }`, `try { git reset --hard } catch { … }`,
+`{ rm -rf src } # pozn.` i `ForEach-Object -Begin { $i = 0 } -Process { $_.Delete() }`
+procházely **nerozebrané → allow**. Stará díra (0.1.4), ne regrese. Nová
+`Get-ScriptBlockBodies` vrací **všechny** bloky statementu; hlava před blokem se
+rozebírá dál (K1 drží: `rm -rf {src,lib}` deny, `git stash drop stash@{0}` deny,
+`@{ Path = 'src' }` allow). Výrok 2 Amber: práh „bez vzorku se brána nemění" chrání před
+**zúžením**, ne před zavřením díry; cena je **neznámá** (`n = 0` říkalo, že brána tvar
+nezachytila), kontrolní skupina je podmínka: `if ($x) { git status } else { git log }`,
+`try { dotnet build } catch { … }` se ptát nesmějí.
+
+#### Opraveno — hláška u `rm -rf /srv` lhala o příčině (bod 4, nález Amber I6)
+
+`/xxx` do tří znaků je od přepínače `cmd` (`/s`, `/q`) k nerozeznání, cíl se nebere —
+a prázdný seznam cílů padal do větve „mazání z roury". Nový tvar `shortAbsolutePath`
+říká skutečnou příčinu; rozhodnutí `ask` beze změny. Kontrolní skupina: skutečné
+mazání z roury (`Get-ChildItem src -Recurse -File | Remove-Item -Force`, Metis 8) nese
+`deleteFromPipeline` dál.
+
+#### Brána — seznam interpretů na dvou místech (bod 1, N15)
+
+`gate.codeInterpreters` a hardcoded list v `Get-CommandLeaf` hlídá test: **rovnost**
+množin a **neprázdnost** obou stran (prázdná = prázdná by byla neviditelný fail-open).
+Mutanti: `lua` jen v konfiguraci → červená; prázdná extrakce → červená. Refaktor
+podpisů zůstává v backlogu — brána kryje tutéž škodu za jedno kolo.
+
+#### Opraveno — zpětné apostrofy se braly regexem bez escapu a uvozovek (N-H6)
+
+`git merge -m "… \`& \$cmd\` …"` skončil `invoked`: `Split-CommandLine` hledal páry
+zpětných apostrofů regexem, `\`` (literál v Bashi) i jednoduché uvozovky ignoroval.
+Nový `Get-BacktickSubstitution` čte escape a jednoduché uvozovky; v PowerShellu je
+zpětný apostrof escape a substituce se nepřebírá vůbec. `echo "\`git reset --hard\`"`
+zůstává `deny`.
+
+#### Opraveno — dosazení do hlášek přes `-replace` rozvíjelo `$_`, `$1`, `${x}` (N-H2)
+
+Všech 16 míst v `gate.ps1` (a 8 v `secrets.ps1`) dosazuje `{placeholder}` přes
+`.Replace()`. Do 0.1.11 hláška `secretFile` s cestou `$_.Key` zněla
+„…(čtení/zápis souboru se secrets ({path}).Key)" — `$_` je v regex náhradě celý vstup.
+
+### D2 — `secrets.ps1`
+
+#### Zúženo — chráněné jméno se posuzuje jen v pozici cesty (bod 12, N-H1, N-H6)
+
+Kandidátem byl každý token s tečkou a každý řetězec v uvozovkách: identifikátory
+`$_.Key`, `SelectOption.Key` končily **`deny secretFile`** (3 ze 7 `deny` ve vzorku,
+včetně měřicího příkazu fáze 1 a prvního pokusu o commit), próza v těle heredocu se
+jmény `id_rsa`, `secrets.json` taky (1 ze 7). Pozice cesty od 0.2.0: cíl přesměrování,
+hodnota `--opt=`, poziční argument `secrets.pathCommands`, argument
+`secrets.writeCommands`, u ostatních příkazů jen token vypadající jako cesta (lomítko,
+`~`, `%`, tečka na začátku, `id_*`, přesné chráněné jméno). Tělo heredocu s datovým
+hostem (`secrets.dataHeredocHosts`: `cat`, `tee`, `git`, …) jsou data. **N14 drží**
+(podmínka, ne bonus): `< ~/.ssh/id_rsa`, `--file=~/.ssh/id_rsa`, cesta v rouře,
+`xargs cat`, `bash <<EOF` / `python - <<PY` s příkazem čtoucím secret → `deny`.
+Případy žijí v `tests/fixtures/task106-bod12.json` (26 řádků), ne v příkazové řádce
+sady. ⚠️ Mez: `openssl -in private.pem` (nelistovaný program, jméno mimo
+`protectedBaseNames`) projde — rozšíření je `secrets.pathCommands`, ne kód.
+
+#### Opraveno — `isWrite` byl jeden příznak na celý příkaz (bod 9, N-H3)
+
+`cat ~/.claude/settings.json 2>/dev/null` mělo `>` v `2>/dev/null`, takže **čtení**
+skončilo „zápis do souboru, kterým se brána vypíná" (2× ve vzorku; u
+`settings.local.json` jen špatná věta, u `settings.json` falešný dotaz). Zápis je od
+0.2.0 vlastnost **kandidáta**: cíl `>`/`>>` (i `2> soubor`; `2>&1` je deskriptor), argument
+`tee`/`Set-Content`/`Out-File`/`Add-Content`. Pár nad týmž souborem: `cat
+.claude/settings.local.json 2>/dev/null` → `ask` „čtení…", `echo x >
+.claude/settings.local.json` → `ask` „zápis…" — obojí ask, texty různé.
+
+#### Změněno — glob podle celé cesty; jmenná třída u globu → audit (bod 11, N16, N26)
+
+Glob se srovnával jen se **jménem**: `head -25 .github/workflows/*.yml` a
+`ls docs/technical/*.json` končily `ask` (`*.yml` ~ `secrets.yml`; 2 ze 3 dotazů
+`wildcardPath`). Od 0.2.0 (výroky 7 + 8): glob → regex nad **celou** normalizovanou
+cestou (`*`/`?` nepřekračují `/`, `**` ano). Glob **míří na chráněnou cestu** → `ask`
+dál, když `denyPathPatterns` sedne doslova na jeho text (`ls ~/.ssh/*`, `cp *.pem x`)
+nebo když jmenuje adresář kanonické cesty ze `secrets.protectedPaths` (`cat ~/.aws/*`,
+`cat .claude/*`, `cat **/credentials`). Glob jen na chráněné **jméno** (`cat *`,
+`.github/workflows/*.yml`) → **audit** `secrets:wildcardName` a ticho.
+🔴 **`C1` (delta review Amber 2026-09-13, vada výroku 7):** první tvar poslal do auditu i glob,
+který na secret **míří vzorem** (`cat *.env`, `cat .env*`, `cat *secrets.json`) — regrese
+proti 0.1.11 (`ask`). Opraveno v témž vydání: jméno globu proti `envFile.denyNames` a glob
+bez zástupných znaků rovný chráněnému jménu → `ask`. Mez, která zůstává pojmenovaná
+(README 9): `cat *` a `.en?` — 🔴 **bez druhé vrstvy** (`N32`, revize Ady): `permissions.deny`
+kryje jen nástroj `Read`, na shellový tvar nedosáhne; auto-mode klasifikátor není pravidlo
+(12 zásahů za měsíc, 0 za poslední tři sessions). Bash `*` tečkové soubory nerozvíjí,
+PowerShell ano (`N40`). Spouštěč má dvě cesty: fixture adresář, nebo textové kritérium
+„vzor vypisuje jméno, ne jen příponu" (Ada). `N38`: rozdíl `openssl -in server.key` (deny)
+× `openssl -in private.pem` (projde) je seznam jmen, ne nástroj (README 22).
+`Write-GateAudit` se přesunul do `_common.ps1` (sdílený). 🔴 **Dosah — 3 řádky
+invariantu mění očekávání `ask` → `allow`** (`cat *`, `cat *.env`, `Get-Content .en?`),
+přijato `-Prijmout` s citací výroků; `cat ~/AppData/…/UserSecrets/*/secrets.json`
+z `deny` (vedlejší efekt jmenné logiky) na `ask` (glob = neznámý cíl).
+
+#### Opraveno — `…KeyId` není secret (N-H4)
+
+`envVarNameCamelPattern` vylučuje příponu `Id`/`Ids`: `$env:Gsd__Cursor__ActiveKeyId`
+(4 z 5 dotazů `envVarRead` ve vzorku) mlčí; `apiKey`, `ActiveKey`, `apiKeyIndex` se
+ptají dál.
+
+### Audit má čtenáře (výrok 6 Amber)
+
+Soubor `gate-audit.jsonl` měl 2026-09-12 **1 197 řádků a nula čtenářů**. Od 0.2.0:
+① kanárek na `SessionStart` hlásí **přírůstek řádků od minulého startu** (značka
+`audit-canary.json`; bez audit souboru se nic nepřipojí) — i u zprávy o ceně resume;
+② `tests/_audit-report.ps1` (rozpad per tvar × rozhodnutí, `-Since`, `-Json`) volá krok
+uzávěry v GSD. Teprve tím platí výrok 7 (`audit` místo ticha u jmenné třídy).
+
+### Invariant — `-Prijmout` je bajtově neutrální (bod 14)
+
+Hlavička `_zmeneno` se už neserializuje `ConvertTo-Json` (PS 5.1 escapuje `&`, `'`;
+pwsh 7 ne — stará část hlavičky měnila bajty podle interpretu); nová věta se
+**připisuje** do literálu. Generátor má `-InvariantsPath` (test nad kopií). Čtyři řádky
+s rozsypaným českým textem (bod 7, výrok 4) po D1 + D2 **přeměřeny — drží**; poznámka
+o původu v hlavičce `_ponechano`.
+
+### Rozhodnutí bez kódu (README „Známá omezení")
+
+- **bod 2** `cmd /c` escape — **prozatímně neopraveno** (výrok 9): 2 výskyty z 11 861
+  příkazů, obojí 2026-08-23 (před pluginem), od 09-05 N = 0. Spouštěč: *první session,
+  ve které se `cmd /c` vyskytne (N > 0).*
+- **bod 3** kontejner — **přiznáno jako omezení** (výrok 3) se spouštěčem: *první
+  session, která uvnitř kontejneru sahá na adresář namountovaný z hostitele.*
+- **bod 5** council — text doslova; spustit, jak kvóta naběhne.
+- **bod 13** `permissions.defaultMode` — **není úkol pluginu**; zápis do globálu se
+  neprovádí (výrok 5). GSD zavádí `--debug-file` do postupu spouštění, aby cena
+  klasifikátoru šla změřit.
+
+### Dosah nasazení
+
+Plugin běží v user scope: opravy dorazí i do **HRMS a Útrat**, které si je neobjednaly.
+Nejsilnější změna chování tam: bod 6 (bloky s ocasem — nové `deny`/`ask` tam, kde bylo
+ticho) a bod 12 (identifikátory `.Key` už neblokují). Kanárek v těch dvou projektech je
+položka Toma.
+
 ## [0.1.11] — 2026-09-08
 
 Kolo nálezů **Ady** (N28, N30, N33–N43, N45, N46, N48–N51) nad `93a50eb`, rozhodnutí

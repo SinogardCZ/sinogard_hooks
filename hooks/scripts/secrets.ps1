@@ -35,6 +35,11 @@ $script:ReadTools  = @('Read')
 $script:WriteTools = @('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
 $script:CmdTools   = @('Bash', 'PowerShell')
 
+# Write-GateAudit (od 0.2.0 v _common.ps1) cte rezim a nastroj ze scope skriptu - vychozi
+# hodnoty MUSI stat driv, nez je nekdo precte (StrictMode; v tele auditu by vyjimku spolkl catch).
+$script:PermissionMode = 'default'
+$script:ToolName = ''
+
 # ------------------------------------------------------------- pomocnici ---
 
 function Test-AnyPattern([string]$Text, $Patterns) {
@@ -68,6 +73,72 @@ function Get-RelativeToCwd([string]$NormalPath, [string]$CwdNormal) {
     return $NormalPath
 }
 
+# ------------------------------------------------------- glob nad cestou (bod 11) ---
+
+# Glob -> regex nad normalizovanou cestou (`/`, lowercase). `*` a `?` neprekracuji `/`,
+# `**` ano. Bez kotev - ty doplnuje volajici.
+function ConvertTo-GlobRegex([string]$Glob) {
+    # Zastupny znak pro `**` je [char]1 - `u{...}` Windows PowerShell 5.1 nezna.
+    $mark = [string][char]1
+    $r = [regex]::Escape($Glob)
+    $r = $r.Replace('\*\*', $mark)
+    $r = $r.Replace('\*', '[^/]*').Replace('\?', '[^/]')
+    return $r.Replace($mark, '.*')
+}
+
+# Miri glob na chranenou CESTU? Dve cesty k `ask`:
+#   (a) `denyPathPatterns` sedne DOSLOVA na text globu - `~/.ssh/*` nese `/.ssh/`;
+#   (b) glob dokaze padnout na kanonickou chranenou cestu z `protectedPaths`: posledni
+#       segmenty globu se zarovnaji na segmenty kanonicke cesty (`~/.aws/*` -> `.aws/credentials`),
+#       u `**` se kanonicka cesta zkousi za libovolnym prefixem.
+# Glob, ktery adresar chranene cesty NEJMENUJE (`cat *`, `*.json`), na cestu nemiri - to je
+# trida chranena jmenem a resi ji volajici auditem (vyrok 7).
+#
+# !! C1 (delta review Amber 2026-09-13, vada vyroku 7): glob, ktery na secret MIRI VZOREM
+# (`*.env`, `.env*`, `*secrets.json`), je jina trida nez glob, ktery na chranene jmeno NARAZI
+# NAHODOU (`*.yml` ~ `secrets.yml`). Prvni tvar 0.2.0 slil obe do auditu a `cat *.env` zacal
+# mlcet - regrese proti 0.1.11 (`ask`), pricemz `permissions.deny` v GSD kryje jen tool Read.
+# Rozliseni je DOSLOVNE nad textem globu, zadne cteni disku:
+#   (c) `envFile.denyNames` sedne na JMENO globu (`*.env` -> `\.env$`), stejne jako `.pem`
+#       sedi na `denyPathPatterns`;
+#   (d) glob bez zastupnych znaku se ROVNA chranenemu jmenu (`*.env` -> `.env`, `.env*` -> `.env`,
+#       `*secrets.json` -> `secrets.json`) - glob to jmeno vypisuje, ne trefuje.
+# Co tim zustava mez (README 9): `cat *` a `.en?` - glob bez pripony nebo se zastupnym znakem
+# uvnitr jmena deterministicky nerozlisit; audit + pojmenovana mez se spoustecem.
+function Test-GlobAimsAtProtectedPath([string]$GlobNorm, $Sec) {
+    if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'denyPathPatterns' @())) { return $true }
+    if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'askPathPatterns' @())) { return $true }
+    $globBase = Get-BaseName $GlobNorm
+    if (Test-AnyPattern $globBase @(Get-Field (Get-Field $Sec 'envFile') 'denyNames' @())) { return $true }
+    $literal = ($globBase -replace '[\*\?]', '')
+    if ($literal -ne '') {
+        foreach ($known in @(Get-Field $Sec 'protectedBaseNames' @())) {
+            if ($literal -eq ([string]$known).ToLowerInvariant()) { return $true }
+        }
+    }
+    $globRegex = '^' + (ConvertTo-GlobRegex $GlobNorm) + '$'
+    $gsegs = @($GlobNorm.Split('/'))
+    foreach ($p in @(Get-Field $Sec 'protectedPaths' @())) {
+        $canonical = ([string]$p).ToLowerInvariant().Replace('\', '/')
+        if ($canonical -eq '') { continue }
+        $csegs = @($canonical.Split('/'))
+        $sample = ''
+        if ($GlobNorm.Contains('**')) {
+            $starAt = -1
+            for ($i = 0; $i -lt $gsegs.Count; $i++) { if ($gsegs[$i].Contains('**')) { $starAt = $i; break } }
+            $prefix = if ($starAt -gt 0) { (@($gsegs[0..($starAt - 1)]) -join '/') + '/' } else { '' }
+            $sample = $prefix + 'q/' + $canonical
+        } else {
+            if ($gsegs.Count -lt $csegs.Count) { continue }
+            $head = @()
+            if ($gsegs.Count -gt $csegs.Count) { $head = @($gsegs[0..($gsegs.Count - $csegs.Count - 1)]) }
+            $sample = (@($head) + @($csegs)) -join '/'
+        }
+        if ([regex]::IsMatch($sample, $globRegex, 'IgnoreCase')) { return $true }
+    }
+    return $false
+}
+
 # --------------------------------------------------------- pravidlo cesty ---
 
 function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true) {
@@ -87,12 +158,31 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # proto jen tam, kde glob DOOPRAVDY rozvine shell: nad NEUVOZENYM tokenem
     # v pozici cesty u prikazu, ktery soubory cte nebo kopiruje. Detail u
     # Get-PathCandidate; sem prichazi uz jen vysledek.
-    if ($AllowGlob -and $base -match '[\*\?]') {
-        $globRegex = '^' + ([regex]::Escape($base) -replace '\\\*', '.*' -replace '\\\?', '.') + '$'
+    #
+    # TASK-106 bod 11 (0.2.0; N16 = navrh Hestie prijaty vyrokem 8 Amber 2026-09-12 v mandatu
+    # Toma, N26 = vyrok 7): glob se posuzuje podle CELE normalizovane cesty, ne jen podle
+    # jmena. Do 0.1.11 se `*.yml` srovnavalo se `secrets.yml` bez ohledu na adresar, takze
+    # `head .github/workflows/*.yml` a `ls docs/technical/*.json` koncily dotazem (2 ze 3
+    # dotazu `wildcardPath` ve vzorku faze 1; treti byl `echo **2` z doby pred N26).
+    #   - trida chranena CESTOU (`denyPathPatterns` doslova nad textem globu, nebo glob, ktery
+    #     MIRI na kanonickou chranenou cestu z `protectedPaths`) -> `ask` jako dosud;
+    #   - trida chranena JMENEM (`protectedBaseNames` sedne na posledni segment) -> AUDIT:
+    #     hook mlci a zapise radek `secrets:wildcardName` (ne ticho bez stopy - bez zaznamu
+    #     by se nikdy nezjistilo, jak casto k tomu doslo; ctenar auditu je od 0.2.0 kanarek
+    #     a tests/_audit-report.ps1).
+    # Semantika (N16): `*` a `?` neprekracuji `/`, `**` ano, kotvi se na hranici adresare -
+    # tvar gitignore/pathspec, tedy tyz, jaky uz maji `denyPathPatterns`. Mez a spoustec
+    # prehodnoceni (fixture adresar u invariantu) nese README.
+    if ($AllowGlob -and $norm -match '[\*\?]') {
+        if (Test-GlobAimsAtProtectedPath $norm $sec) {
+            return @{ Decision = 'ask'
+                      Shape = (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)) }
+        }
+        $globRegex = '^' + (ConvertTo-GlobRegex $base) + '$'
         foreach ($known in @(Get-Field $sec 'protectedBaseNames' @())) {
             if ([regex]::IsMatch([string]$known, $globRegex, 'IgnoreCase')) {
-                return @{ Decision = 'ask'
-                          Shape = ((Get-Field $shapes 'wildcardPath' '{path}') -replace '\{path\}', $Path) }
+                Write-GateAudit $script:ToolName 'secrets:wildcardName' 'allow' $Config
+                return $null
             }
         }
         return $null
@@ -106,30 +196,30 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
         if (Test-AnyPattern $base @(Get-Field $envCfg 'allowNames' @())) { return $null }
         if (Test-AnyPattern $base @(Get-Field $envCfg 'denyNames' @())) {
             return @{ Decision = 'deny'
-                      Shape = ((Get-Field $shapes 'secretFile' '{path}') -replace '\{path\}', $Path) }
+                      Shape = (([string](Get-Field $shapes 'secretFile' '{path}')).Replace('{path}', [string]($Path))) }
         }
         $rel = Get-RelativeToCwd $norm (ConvertTo-NormalPath $script:Cwd)
         if (Test-GitTracked $script:Cwd $rel) { return $null }
         return @{ Decision = 'ask'
-                  Shape = ((Get-Field $shapes 'envFileUntracked' '{path}') -replace '\{path\}', $Path) }
+                  Shape = (([string](Get-Field $shapes 'envFileUntracked' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
     # (2) tvrde zakazane tvary
     if (Test-AnyPattern $norm @(Get-Field $sec 'denyPathPatterns' @())) {
         return @{ Decision = 'deny'
-                  Shape = ((Get-Field $shapes 'secretFile' '{path}') -replace '\{path\}', $Path) }
+                  Shape = (([string](Get-Field $shapes 'secretFile' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
     # (3) sebeochrana - soubory, kterymi se brana vypina (jen zapis)
     if ($IsWrite -and (Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @()))) {
         return @{ Decision = 'ask'
-                  Shape = ((Get-Field $shapes 'selfProtect' '{path}') -replace '\{path\}', $Path) }
+                  Shape = (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
     # (4) seda zona
     if (Test-AnyPattern $norm @(Get-Field $sec 'askPathPatterns' @())) {
         return @{ Decision = 'ask'
-                  Shape = ((Get-Field $shapes 'settingsLocal' '{path}') -replace '\{path\}', $Path) }
+                  Shape = (([string](Get-Field $shapes 'settingsLocal' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
     return $null
@@ -137,24 +227,111 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
 
 # ------------------------------------------------------- pravidlo prikazu ---
 
-# Vytahne z prikazu tokeny, ktere vypadaji jako cesta. Slovo bez lomitka a bez
-# tecky na zacatku cestou neni - jinak by kazdy prepinac spustil falesny nalez.
-# Prikazy, u kterych je pozicionalni argument CESTA - jen u nich ma smysl ptat se
-# na zastupny znak. `echo`, `git commit -m`, `Write-Host` ani vzor u `grep` cesta
-# nejsou (nalez N26).
+# Vytahne z prikazu tokeny v POZICI CESTY (TASK-106 bod 12, 0.2.0). Do 0.1.11 byl kandidatem
+# kazdy token s teckou nebo lomitkem a kazdy retezec v uvozovkach - takze `$_.Key`,
+# `SelectOption.Key` (identifikatory, N-H1: 3 ze 7 deny ve vzorku faze 1 vcetne mericiho
+# prikazu) i proza v tele heredocu (`cat >> notes.md <<EOF` se jmeny `id_rsa`, `secrets.json`)
+# koncily `deny secretFile`. Pozice cesty je:
+#   (P1) cil presmerovani `<`, `>`, `>>` (cil `>`-tvaru je ZAPIS - i `2> soubor`; `2>&1` je
+#        duplikace deskriptoru, ne soubor),
+#   (P2) hodnota prepinace `--opt=hodnota`,
+#   (P3) pozicni argument prikazu z `secrets.pathCommands` (cte/kopiruje soubory) - siroky
+#        test (lomitko, tecka, `~`, `%`, `id_`, glob) a JEN TADY se vyhodnocuje glob (N26),
+#   (P4) pozicni argument prikazu ze `secrets.writeCommands` (`tee`, `Set-Content`, ...) = ZAPIS,
+#   (P5) pozicni argument JINEHO prikazu jen tehdy, kdyz token VYPADA jako cesta: lomitko, `~`,
+#        `%`, tecka NA ZACATKU, prefix `id_` nebo presne chranene jmeno (`server.key`); bez mezer,
+#   (a)  retezec v uvozovkach (literal ve vyrazu, Metis 23/24) tymz testem jako P5.
+# N14 je podminka, ne bonus: `< ~/.ssh/id_rsa` (P1), `--file=~/.ssh/id_rsa` (P2), cesta v roure
+# nebo pres xargs (P5 - lomitko) i heredoc pro shell/interpret zustavaji deny.
+# Zapis (bod 9 + N-H3) je od 0.2.0 vlastnost KANDIDATA, ne prikazu: do 0.1.11 jeden priznak
+# `$isWrite` nad celym textem udelal z `cat ~/.claude/settings.json 2>/dev/null` "zapis do
+# souboru, kterym se brana vypina" (2x ve vzorku faze 1).
 $script:PathReadCommandsFallback = @(
     'cat', 'type', 'get-content', 'gc', 'more', 'less', 'head', 'tail',
     'cp', 'copy', 'copy-item', 'mv', 'move', 'move-item',
     'ls', 'dir', 'get-childitem', 'gci', 'get-item', 'gi',
     'compress-archive', 'tar', 'zip', 'scp', 'rsync', 'findstr', 'select-string'
 )
+$script:WriteCommandsFallback = @('tee', 'set-content', 'sc', 'out-file', 'add-content', 'ac')
+
+# Siroky test cesty - pro prikazy, ktere soubory ctou (P3), cile presmerovani (P1) a hodnoty
+# prepinacu (P2): tam je kazdy token s teckou nebo lomitkem pravdepodobne soubor.
+function Test-PathLikeBroad([string]$Token) {
+    return ($Token.Contains('/') -or $Token.Contains('\') -or
+            $Token.StartsWith('.') -or $Token.StartsWith('~') -or $Token.StartsWith('%') -or
+            $Token.Contains('.') -or $Token -match '^id_' -or
+            $Token.Contains('*') -or $Token.Contains('?'))
+}
+
+# Uzky test cesty - pro pozicni argumenty OSTATNICH prikazu a pro literaly v uvozovkach (P5, a).
+# `entityType.Key` ani `console.log(obj.key)` cestou nejsou; `.env`, `~/.aws/x`, `id_rsa`
+# a presne chranene jmeno (`server.key` u `openssl -in`) ano. Token s mezerou je proza.
+function Test-PathLikeStrict([string]$Token, $ProtectedNamesLower) {
+    if ($Token -eq '' -or $Token -match '\s') { return $false }
+    if ($Token.Contains('/') -or $Token.Contains('\')) { return $true }
+    if ($Token.StartsWith('.') -or $Token.StartsWith('~') -or $Token.StartsWith('%')) { return $true }
+    if ($Token -match '^id_') { return $true }
+    if ($ProtectedNamesLower -contains $Token.ToLowerInvariant()) { return $true }
+    return $false
+}
+
+# Telo heredocu, jehoz host je DATOVY prikaz (`cat >> x <<EOF`, `git commit -F - <<EOF`, `tee`),
+# jsou data, ne cesty - proza v hlaseni nebo commit message se do rozboru nebere (bod 12, N-H6
+# druhy nositel). Telo pro shell, interpret nebo NEZNAMY host je kod a rozebira se dal
+# (`bash <<EOF / cat .env`, `python - <<PY / open('.env')`). Uvozujici radek se rozebira vzdy.
+# Host je prvni token statementu, ve kterem `<<` stoji, po preskoceni obalu (`sudo`, `env`, ...);
+# neznamy host = kod, tedy smerem k prisnosti.
+function Remove-DataHeredocBody([string]$Command, $Config) {
+    if ([string]::IsNullOrWhiteSpace($Command) -or $Command -notmatch '<<') { return $Command }
+    $sec = Get-Field $Config 'secrets'
+    $dataHosts = @(Get-Field $sec 'dataHeredocHosts' @('cat', 'tee', 'git'))
+    $wrappers = @('sudo', 'doas', 'env', 'nice', 'nohup', 'time', 'timeout', 'command', 'builtin', 'exec', 'stdbuf')
+
+    $joined = [regex]::Replace($Command, [regex]::Escape((Get-ScannerEscape)) + '\r?\n', ' ')
+    $lines = [regex]::Split($joined, '\r?\n')
+    $keep = New-Object System.Collections.ArrayList
+    $i = 0
+    while ($i -lt $lines.Count) {
+        $line = $lines[$i]
+        if (-not (Test-HeredocOutsideQuotes $line)) { [void]$keep.Add($line); $i++; continue }
+        $ms = [regex]::Matches($line, $script:HeredocPattern)
+        if ($ms.Count -eq 0) { [void]$keep.Add($line); $i++; continue }
+        [void]$keep.Add($line)
+
+        $delims = New-Object System.Collections.ArrayList
+        foreach ($mm in $ms) {
+            foreach ($g in 1, 2, 3) { if ($mm.Groups[$g].Success) { [void]$delims.Add($mm.Groups[$g].Value) } }
+        }
+        $outer = [regex]::Replace($line, $script:HeredocPattern, ' ')
+        $stages = @(Split-Statement $outer)
+        $j = $i + 1
+        for ($d = 0; $d -lt $delims.Count; $d++) {
+            $delim = [string]$delims[$d]
+            $body = New-Object System.Collections.ArrayList
+            while ($j -lt $lines.Count -and $lines[$j].Trim() -ne $delim) { [void]$body.Add($lines[$j]); $j++ }
+            $stage = if ($d -lt $stages.Count) { [string]$stages[$d] } else { $outer }
+            $hostExe = ''
+            foreach ($tok in (Split-Arguments $stage)) {
+                if ($tok.StartsWith('-')) { continue }
+                $name = Get-ExecutableName $tok
+                if ($wrappers -contains $name) { continue }
+                $hostExe = $name; break
+            }
+            if ($dataHosts -notcontains $hostExe) { foreach ($b in $body) { [void]$keep.Add($b) } }
+            $j++   # radek s ukoncovacim delimiterem
+        }
+        $i = $j
+    }
+    return ($keep -join "`n")
+}
 
 function Get-PathCandidate([string]$Command, $Config = $null) {
     $out = New-Object System.Collections.ArrayList
-    $pathCommands = @($script:PathReadCommandsFallback)
-    if ($null -ne $Config) {
-        $pathCommands = @(Get-Field (Get-Field $Config 'secrets') 'pathCommands' $script:PathReadCommandsFallback)
-    }
+    $sec = $null
+    if ($null -ne $Config) { $sec = Get-Field $Config 'secrets' }
+    $pathCommands  = @(Get-Field $sec 'pathCommands' $script:PathReadCommandsFallback)
+    $writeCommands = @(Get-Field $sec 'writeCommands' $script:WriteCommandsFallback)
+    $protectedLower = @(@(Get-Field $sec 'protectedBaseNames' @()) | ForEach-Object { ([string]$_).ToLowerInvariant() })
 
     # Hodnoty, ktere v prikazu stoji V UVOZOVKACH. Shell v nich glob nerozvine
     # (a PowerShell retezec negloboval nikdy), takze u nich zastupny znak neznamena
@@ -162,18 +339,18 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
     $quoted = New-Object System.Collections.Generic.HashSet[string]
 
     # (a) Nalez Metis 23/24: cesta muze byt LITERAL uvnitr vyrazu
-    # (`[IO.File]::ReadAllText('.env')`, `python -c "open('.env')"`). Kazdy retezec
-    # v uvozovkach je proto kandidat. Vetsina jich nic nematchne - vyhodnoceni navic
-    # nic nestoji, kdezto vynechany literal je dira.
+    # (`[IO.File]::ReadAllText('.env')`, `python -c "open('.env')"`). Retezec v uvozovkach
+    # je kandidat, kdyz vypada jako cesta (uzky test) - `"SelectOption.Key"` uz ne.
     # Dva NEZAVISLE prubehy, ne jedna alternace: `python -c "open('.env')"` ma jednoduche
     # uvozovky UVNITR dvojitych, a jedna alternace by vnejsi retezec spotrebovala
     # a vnitrni uz nenasla.
     foreach ($pattern in @('"([^"]{1,260})"', '''([^'']{1,260})''')) {
         foreach ($m in [regex]::Matches($Command, $pattern)) {
             $value = $m.Groups[1].Value
-            if ($value -ne '') {
-                [void]$quoted.Add($value)
-                [void]$out.Add(@{ Value = $value; AllowGlob = $false })
+            if ($value -eq '') { continue }
+            [void]$quoted.Add($value)
+            if (Test-PathLikeStrict $value $protectedLower) {
+                [void]$out.Add(@{ Value = $value; AllowGlob = $false; IsWrite = $false })
             }
         }
     }
@@ -181,40 +358,84 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
     # Prikaz se rozebira po PODPRIKAZECH, aby se u tokenu vedelo, ktery program ho
     # dostane - glob u `cat` je cesta, glob u `echo` je text.
     foreach ($sub in (Split-CommandLine $Command)) {
-    $argv = Split-Arguments $sub
-    if ($argv.Count -eq 0) { continue }
-    $subExe = (Get-ExecutableName $argv[0]).ToLowerInvariant()
-    $isPathCommand = ($pathCommands -contains $subExe)
-    foreach ($token in (Expand-ColonParameter $argv)) {
-        # (b) Nalez Metis 22: `cat<.env` - presmerovani nemusi mit kolem sebe mezery,
-        # takze token muze nest prikaz i cestu naraz.
-        foreach ($piece in ($token -split '[<>]')) {
-            $t = $piece
+        $argv = Split-Arguments $sub
+        if ($argv.Count -eq 0) { continue }
+        $subExe = (Get-ExecutableName $argv[0]).ToLowerInvariant()
+        $isPathCommand  = ($pathCommands -contains $subExe)
+        $isWriteCommand = ($writeCommands -contains $subExe)
+        $pending = ''   # 'r' | 'w' za samostatnym operatorem presmerovani
+        # Bez `@()`: Expand-ColonParameter vraci `,@(...)` a dalsi obal by pole zabalil JESTE JEDNOU
+        # (viz poznamka u Split-UnquotedCore) - Count by byl 1 a token cely argv.
+        $tokens = Expand-ColonParameter $argv
+        for ($ti = 0; $ti -lt $tokens.Count; $ti++) {
+            $token = [string]$tokens[$ti]
+
+            # (P1) samostatny operator: `>`, `>>`, `<`, `2>`, `&>`, `*>`, `>|`
+            if ($token -match '^[\d*&]*(>>|>|<)\|?$') {
+                $pending = if ($token.Contains('>')) { 'w' } else { 'r' }
+                continue
+            }
+            if ($pending -ne '') {
+                $direction = $pending
+                $pending = ''
+                if ($token.StartsWith('&')) { continue }   # `2>&1`, `>&2` - deskriptor, ne soubor
+                if (Test-PathLikeBroad $token) {
+                    [void]$out.Add(@{ Value = $token; AllowGlob = $false; IsWrite = ($direction -eq 'w') })
+                }
+                continue
+            }
+            # (P1) slepene presmerovani (Nalez Metis 22: `cat<.env`; N-H3: `2>/dev/null`)
+            $glued = [regex]::Match($token, '^(.*?)([\d*&]*)(>>|>|<)\|?(.*)$')
+            $t = $token
+            if ($glued.Success) {
+                $t = $glued.Groups[1].Value
+                $target = $glued.Groups[4].Value
+                $direction = if ($glued.Groups[3].Value.Contains('>')) { 'w' } else { 'r' }
+                if ($target -eq '') { $pending = $direction }
+                elseif (-not $target.StartsWith('&') -and (Test-PathLikeBroad $target)) {
+                    [void]$out.Add(@{ Value = $target; AllowGlob = $false; IsWrite = ($direction -eq 'w') })
+                }
+                if ($t -eq '') { continue }
+            }
+            if ($ti -eq 0 -and $t -eq $token) { continue }   # jmeno prikazu neni cesta
+
+            # (P2) hodnota prepinace `--opt=hodnota`
             if ($t.StartsWith('-')) {
                 $eq = $t.IndexOf('=')
                 if ($eq -lt 0) { continue }
                 $t = $t.Substring($eq + 1)
+                if ($t -ne '' -and (Test-PathLikeBroad $t)) {
+                    [void]$out.Add(@{ Value = $t; AllowGlob = $false; IsWrite = $false })
+                }
+                continue
             }
             # git show <ref>:<cesta>  (ale ne disk C:\...)
             if ($t -notmatch '^[A-Za-z]:[\\/]' -and $t -match '^[^/\\]+:[^\\/:]') {
                 $t = $t.Substring($t.LastIndexOf(':') + 1)
             }
             if ($t -eq '') { continue }
-            # (c) Nalez Metis 2: `Get-Content id_rsa` - hole jmeno souboru bez lomitka
-            # a bez tecky na zacatku se drive kandidatem nestalo, takze se vzor na
-            # privatni klic vubec nevyhodnotil. Kandidatem je proto i jmeno s TECKOU
-            # nebo s prefixem `id_`.
-            if ($t.Contains('/') -or $t.Contains('\') -or
-                $t.StartsWith('.') -or $t.StartsWith('~') -or $t.StartsWith('%') -or
-                $t.Contains('.') -or $t -match '^id_' -or
-                $t.Contains('*') -or $t.Contains('?')) {
-                # Glob se vyhodnoti jen u NEUVOZENEHO tokenu v pozici cesty
-                # u prikazu, ktery soubory cte nebo kopiruje (nalez N26).
-                $allowGlob = $isPathCommand -and (-not $quoted.Contains($t))
-                [void]$out.Add(@{ Value = $t; AllowGlob = $allowGlob })
+
+            if ($isPathCommand) {
+                # (P3) Nalez Metis 2: `Get-Content id_rsa` - hole jmeno bez lomitka a bez tecky
+                # na zacatku se drive kandidatem nestalo. Glob se vyhodnoti jen u NEUVOZENEHO
+                # tokenu (nalez N26).
+                if (Test-PathLikeBroad $t) {
+                    [void]$out.Add(@{ Value = $t; AllowGlob = (-not $quoted.Contains($t)); IsWrite = $false })
+                }
+                continue
+            }
+            if ($isWriteCommand) {
+                # (P4) `tee x`, `Set-Content x`, `Out-File x` - cil je zapis
+                if (Test-PathLikeBroad $t) {
+                    [void]$out.Add(@{ Value = $t; AllowGlob = $false; IsWrite = $true })
+                }
+                continue
+            }
+            # (P5) jiny prikaz: jen token, ktery vypada jako cesta
+            if (Test-PathLikeStrict $t $protectedLower) {
+                [void]$out.Add(@{ Value = $t; AllowGlob = $false; IsWrite = $false })
             }
         }
-    }
     }
     return ,@($out)
 }
@@ -269,11 +490,12 @@ function Test-SecretCommand([string]$Command, $Config) {
     $shapes = Get-Field $sec 'shapes'
     $worst = $null
 
-    # zapisove tvary v prikazu (presmerovani, Set-Content, ...) zapinaji sebeochranu
-    $isWrite = ($Command -match '(>>?|\btee\b|\bset-content\b|\bout-file\b|\badd-content\b|\bsc\b)')
-
-    foreach ($candidate in (Get-PathCandidate $Command $Config)) {
-        $r = Test-SecretPath $candidate.Value $isWrite $Config ([bool]$candidate.AllowGlob)
+    # Zapis je vlastnost KANDIDATA (bod 9 + N-H3, 0.2.0) - viz Get-PathCandidate. Telo
+    # heredocu s datovym hostem se do rozboru cest nebere (bod 12); promenne prostredi se
+    # hledaji nad CELYM textem - `echo $DB_PASSWORD` v tele `cat <<EOF` shell rozvine.
+    $scan = Remove-DataHeredocBody $Command $Config
+    foreach ($candidate in (Get-PathCandidate $scan $Config)) {
+        $r = Test-SecretPath $candidate.Value ([bool]$candidate.IsWrite) $Config ([bool]$candidate.AllowGlob)
         if ($null -eq $r) { continue }
         if ($r.Decision -eq 'deny') { return $r }
         if ($null -eq $worst) { $worst = $r }
@@ -291,7 +513,7 @@ function Test-SecretCommand([string]$Command, $Config) {
     if ($name -ne '') {
         if ($null -eq $worst) {
             $worst = @{ Decision = 'ask'
-                        Shape = ((Get-Field $shapes 'envVarRead' '{name}') -replace '\{name\}', $name) }
+                        Shape = (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name))) }
         }
     }
 
@@ -311,6 +533,8 @@ $toolName = [string](Get-Field $payload 'tool_name' '')
 $toolInput = Get-Field $payload 'tool_input'
 $script:Cwd = [string](Get-Field $payload 'cwd' (Get-Location).Path)
 $mode = [string](Get-Field $payload 'permission_mode' 'default')
+$script:PermissionMode = $mode
+$script:ToolName = $toolName
 
 $projectDir = $env:CLAUDE_PROJECT_DIR
 if ([string]::IsNullOrWhiteSpace($projectDir)) { $projectDir = $script:Cwd }
@@ -343,7 +567,7 @@ if ($script:CmdTools -contains $toolName) {
 
 if ($null -eq $decision) { exit 0 }
 
-$reason = (Get-Text $config 'gateReason' 'Brana par. 6: {shape}') -replace '\{shape\}', $decision.Shape
+$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
 
 if ($decision.Decision -eq 'ask' -and $mode -eq 'bypassPermissions') {
     $reason = $reason + (Get-Text $config 'bypassSuffix' ' bypass')

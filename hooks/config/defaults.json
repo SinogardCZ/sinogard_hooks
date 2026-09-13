@@ -17,6 +17,8 @@
     "canaryOk": "✔",
     "canaryOff": "—",
     "canaryDryRun": " · notify: DRY-RUN (upozornění se neposílají)",
+    "_canaryAuditComment": "TASK-106, výrok 6 (2026-09-12): audit brány měl 1 197 řádků a nula čtenářů. Kanárek proto hlásí přírůstek řádků gate-audit.jsonl od minulého SessionStart; celý rozpad dá tests/_audit-report.ps1 (krok uzávěry). Bez audit souboru se nic nepřipojí.",
+    "canaryAudit": " · audit +{delta} řádků od minulého startu ({total} celkem)",
     "resumeMessage": "Resume po {h} h {m} min · {tokens} tokenů v kontextu · cache expirovala: {expired} · odhad zápisu do cache ${usd}",
     "resumeYes": "ano",
     "resumeNo": "ne",
@@ -103,6 +105,8 @@
       "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
       "pushDeleteRefspec": "smazání vzdálené větve prázdným refspecem",
       "deleteFromPipeline": "mazání se vstupem z roury (cíl není v příkazu vidět)",
+      "_shortAbsolutePathComment": "TASK-106 bod 4 (nález Amber I6, 0.2.0): `rm -rf /srv` končilo ask s hláškou o rouře. Skutečná příčina: `/xxx` do tří znaků je od přepínače cmd (`/s`, `/q`) k nerozeznání, cíl není vidět. Rozhodnutí se nemění, věta ano.",
+      "shortAbsolutePath": "rekurzivní mazání s krátkou absolutní cestou ({target}) — do tří znaků je od přepínače cmd (/s, /q) k nerozeznání, cíl není vidět",
       "opaque": "příkaz, který nejde rozebrat ({text})",
       "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})",
       "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})"
@@ -163,9 +167,19 @@
       "compress-archive", "tar", "zip", "scp", "rsync", "findstr", "select-string"
     ],
 
+    "_writeCommandsComment": "TASK-106 bod 9 + N-H3 (0.2.0): zápis je vlastnost KANDIDÁTA, ne příkazu. Do 0.1.11 jeden příznak nad celým textem udělal z `cat ~/.claude/settings.json 2>/dev/null` „zápis do souboru, kterým se brána vypíná“. Zápis = cíl přesměrování `>`/`>>` (i `2> soubor`) a poziční argument těchto příkazů; vše ostatní je čtení.",
+    "writeCommands": ["tee", "set-content", "sc", "out-file", "add-content", "ac"],
+
+    "_dataHeredocHostsComment": "TASK-106 bod 12 / N-H6 (0.2.0): tělo heredocu, jehož host je datový příkaz, jsou DATA — próza hlášení nebo commit message (`cat >> notes.md <<EOF`, `git commit -F - <<EOF`) se do rozboru cest nebere. Tělo pro shell, interpret nebo NEZNÁMÝ host je kód a rozebírá se dál (`bash <<EOF` s příkazem čtoucím soubor prostředí).",
+    "dataHeredocHosts": ["cat", "tee", "git", "type", "set-content", "out-file", "add-content", "printf", "echo", "sort", "uniq", "wc", "head", "tail", "less", "more", "diff", "patch", "jq", "yq", "sed", "awk", "tr", "cut", "base64"],
+
+    "_protectedPathsComment": "TASK-106 bod 11 (0.2.0, N16 = výrok 8, N26 = výrok 7): glob se posuzuje podle CELÉ cesty. Glob MÍŘÍ na chráněnou cestu, když `denyPathPatterns` sedne doslova na jeho text (`~/.ssh/*`, `*.pem`) nebo když jeho poslední segmenty padnou na kanonickou cestu odsud (`~/.aws/*` → `.aws/credentials`) — pak zůstává `ask`. Glob, který adresář chráněné cesty nejmenuje a na chráněné JMÉNO jen NARAZÍ (`.github/workflows/*.yml` ~ `secrets.yml`, `cat *`), mlčí a zapíše řádek `secrets:wildcardName` do auditu. C1 (delta review Amber 2026-09-13): glob, který na secret MÍŘÍ vzorem — jméno globu sedne na `envFile.denyNames` (`*.env`) nebo glob bez zástupných znaků vypisuje chráněné jméno (`.env*`, `*secrets.json`) — zůstává `ask`. Mez: `cat *` a `.en?`. `*` a `?` nepřekračují `/`, `**` ano. Spouštěč přehodnocení: fixture adresář u invariantu.",
+    "protectedPaths": [".ssh/id_rsa", ".aws/credentials", ".azure/azureProfile.json", ".kube/config", ".docker/config.json", "UserSecrets/x/secrets.json", ".claude/settings.local.json"],
+
     "_envVarNamePatternComment": "DVA vzory se DVĚMA režimy velikosti písmen — jeden vzor to neumí. `envVarNamePattern` (podtržítkový zápis) se matchuje IGNORE-CASE, aby chytil i `db_password` a `github_token` (nález Amber E5); množné číslo je povolené jen ZA podtržítkem, takže `API_KEYS` se ptá a holé `tokens` ne. `envVarNameCamelPattern` se matchuje CASE-SENSITIVNĚ, protože jen tak zůstane `monkey` a `keyFile` běžnou prací, zatímco `secretKey` a `apiKey` se ptají. Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
     "envVarNamePattern": "(?:^(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)|_(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?)(_|$)|_PWD(_|$)|^PWD_",
-    "envVarNameCamelPattern": "[a-z](Key|Token|Secret|Password|Passwd|Credential)s?($|[A-Z_])",
+    "_envVarNameCamelPattern0200Comment": "TASK-106 N-H4 (0.2.0): `…KeyId` je identifikátor klíče, ne secret — `Gsd__Cursor__ActiveKeyId` dávalo 4 z 5 dotazů `envVarRead` ve vzorku fáze 1. Přípona `Id`/`Ids` za slovem vzor vylučuje; `apiKey`, `ActiveKey` i `apiKeyIndex` se ptají dál.",
+    "envVarNameCamelPattern": "[a-z](Key|Token|Secret|Password|Passwd|Credential)s?(?!Ids?($|[^a-z]))($|[A-Z_])",
 
     "shapes": {
       "secretFile": "čtení/zápis souboru se secrets ({path})",

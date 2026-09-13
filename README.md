@@ -21,7 +21,7 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 |---|---|---|
 | `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**. Šedá zóna → **ask**. Tvar, který nejde rozebrat, → **audit** (viz níže). |
 | `secrets.ps1` | `PreToolUse` nad `Read`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit`/`Bash`/`PowerShell` | Čtení, zápis i výpis souborů se secrets → **deny**. Výpis prostředí, čtení citlivé proměnné a zápis do souborů, kterými se brána vypíná → **ask**. |
-| `resume-cost.ps1` | `SessionStart` (`startup`/`resume`/`fork`) | Při startu **kanárek** („plugin běží, tyhle čtyři hooky jsou živé"). Při obnovení session hlásí cenu a zapisuje řádek do JSONL. Nic neblokuje. |
+| `resume-cost.ps1` | `SessionStart` (`startup`/`resume`/`fork`) | Při startu **kanárek** („plugin běží, tyhle čtyři hooky jsou živé"). Při obnovení session hlásí cenu a zapisuje řádek do JSONL. Od 0.2.0 na každém startu hlásí **přírůstek řádků auditu** od minulého startu (výrok 6, TASK-106). Nic neblokuje. |
 | `notify.ps1` | `Notification` | Upozorní, že se čeká na člověka. Nic neblokuje. |
 
 ### Tři rozhodnutí, ne dvě
@@ -66,6 +66,31 @@ V 0.1.11 pak nálezy Ady N28, N34 a N35 ukázaly, že tři z těch tříd byly p
 7. 9., dává po všech třech opravách pořád **2 `ask`** a **0 `deny`** — sada to drží
 jako fixturu (`tests/fixtures/ask-vypis-2026-09-07.json`), ne jako větu.
 
+➕ **0.2.0 (TASK-106, 2026-09-13) — deset bodů nad měřením 157 událostí brány z 73
+transkriptů (2026-09-06 → 09-12).** Výroky Amber 2026-09-12 v mandátu Toma; čísla jsou
+z fáze 1 téhož úkolu (`docs/logs/session/2026-09-12-task-106-…-hlaseni-01` v GSD):
+
+| třída | do 0.1.11 | od 0.2.0 | proč (změřeno) |
+|---|---|---|---|
+| **obal s LITERÁLNÍ hlavou a proměnnou v těle** (`pwsh -Command "git status; Write-Host $x"`, `bash -c "echo $HOME"`) | ask (`invoked`) | **rozebere se** — rozhodují listy uvnitř | 41 ze 44 dotazů `invoked` mělo tenhle tvar, pravých 0; `Test-Unexpandable` běžel nad celým vnitřkem obalu |
+| obal s proměnnou nebo substitucí **v hlavě** (`bash -c "$x"`, `bash -c "$cmd arg"`, `pwsh -c "$x"`, `cmd /c %X%`, `eval $cmd`, `bash -c "$(cat cmd.txt)"`) | ask | ask | obsah se spustí — kontrolní skupina zúžení |
+| **blok, kterým statement nekončí** (`if ($x) { rm -rf src } else { git status }`, `try { … } catch { … }`, `{ … } # pozn.`) | **allow** (nerozebráno) | podle těla: `deny`/`ask` | stará díra K2 (0.1.4); výrok 2: práh „bez vzorku se brána nemění" chrání před zúžením, ne před zavřením díry |
+| glob, který na chráněné **JMÉNO** narazí **náhodou** (`head .github/workflows/*.yml` ~ `secrets.yml`, `ls docs/technical/*.json`) | ask | **audit** (`secrets:wildcardName`, hook mlčí) | 2 ze 3 dotazů `wildcardPath`; výroky 7 + 8 |
+| glob, který na secret **míří vzorem** (`cat *.env`, `cat .env*`, `cat *secrets.json`) | ask | ask | 🔴 `C1` delta review Amber 2026-09-13: první tvar 0.2.0 ho poslal do auditu — regrese, `permissions.deny` kryje jen tool `Read`. Jméno globu sedne na `envFile.denyNames`, nebo glob bez zástupných znaků **vypisuje** chráněné jméno |
+| glob, který **míří na chráněnou CESTU** (`cat ~/.aws/*`, `ls ~/.ssh/*`, `.docker/*.json`, `*.pem`) | ask | ask | `denyPathPatterns` sedne doslova na text globu nebo glob jmenuje adresář z `protectedPaths` |
+| glob **bez přípony nebo se zástupným znakem uvnitř jména** (`cat *`, `Get-Content .en?`) | ask | **audit** | 🔴 **pojmenovaná mez:** dnešní kód nerozliší od `*.yml`; **druhá vrstva pro shellový tvar neexistuje** (`permissions.deny` kryje jen `Read`); Bash `*` tečkové soubory nerozvíjí, PowerShell ano; spouštěč = fixture adresář **nebo** textové kritérium „vzor vypisuje jméno, ne jen příponu" (omezení 9) |
+| chráněné jméno **v textu**, ne v pozici cesty (`$_.Key`, `SelectOption.Key`, `console.log(obj.key)`, próza v `cat >> x <<EOF`) | **deny** (`secretFile`) | mlčí | N-H1: 3 ze 7 `deny` ve vzorku byly identifikátory s příponou `.Key`, 1 próza |
+| čtení souboru brány s `2>/dev/null` / `2>&1` (`cat ~/.claude/settings.json 2>/dev/null`) | ask (`selfProtect`, „zápis") | mlčí | N-H3: `isWrite` byl jeden příznak na celý příkaz; od 0.2.0 je vlastnost kandidáta |
+| `…KeyId` (`$env:Gsd__Cursor__ActiveKeyId`) | ask (`envVarRead`) | mlčí | N-H4: identifikátor klíče, ne secret — 4 z 5 dotazů `envVarRead` |
+| krátká absolutní cesta `/xxx` (`rm -rf /srv`) | ask, hláška o rouře | ask, hláška o **krátké cestě** | bod 4: rozhodnutí se nemění, věta ano |
+
+🔴 **Co se tím NEotevřelo:** destruktivní literál uvnitř obalu je `deny` dál
+(`pwsh -Command "git reset --hard; Write-Host $x"`), přesné chráněné jméno v pozici cesty
+je `deny` dál (`cat .github/workflows/secrets.yml`, `openssl -in server.key`), přesměrování
+a `--file=` s chráněnou cestou jsou `deny` dál (N14), `cat *.env` / `cat .env*` / `cp *.pem x`
+jsou `ask` dál (`C1`). Politika `gate.opaque` se **nezměnila**
+(`invoked` = `ask`) — zúžení je v kódu, ne v konfiguraci.
+
 🔴 **„audit" není totéž co „allow".** Hook **mlčí** — zapíše řádek do
 `${CLAUDE_PLUGIN_DATA}/gate-audit.jsonl` (čas, nástroj, id tvaru, rozhodnutí —
 **nikdy obsah příkazu**) a **nevydá rozhodnutí**. Kdyby vydal
@@ -78,6 +103,14 @@ hostitele. `echo "DROP TABLE users" | psql -h prod` je pořád `deny`.
 
 Politika je konfigurace (`gate.opaque`), hodnoty `audit | ask`; **cokoli jiného se čte
 jako `ask`** — fail-closed.
+
+🔴 **Audit má od 0.2.0 čtenáře** (výrok 6, TASK-106): 2026-09-12 měl soubor 1 197 řádků
+a nikdo ho nikdy nečetl — log bez čtenáře je „allow s mezikrokem", ne doklad. Dva čtenáři:
+① kanárek na `SessionStart` hlásí **přírůstek řádků od minulého startu** (značka
+`audit-canary.json` vedle auditu); ② `tests/_audit-report.ps1` vypíše rozpad per tvar
+a rozhodnutí (`-Since <ISO čas>` = přírůstek za session, `-Json` pro stroje) — volá ho krok
+uzávěry v GSD. Nový tvar `secrets:wildcardName` zapisuje `secrets.ps1` (glob nad chráněným
+jménem, viz omezení 9).
 
 ---
 
@@ -207,6 +240,12 @@ aby si je nikdo nemusel objevit sám.
    v kódu byl „PowerShell operátor `&`" proti všemu ostatnímu, takže `bash -c "$x"`
    spouštěl obsah proměnné úplně stejně jako `& $cmd` — a končil auditem.
    `-EncodedCommand` zůstává `ask` beze změny.
+   ➕ **0.2.0 zužuje, co je „obal s proměnnou"** (TASK-106 bod 15): do 0.1.11 se
+   `Test-Unexpandable` ptal nad **celým** vnitřkem obalu, takže `pwsh -Command "git status;
+   Write-Host $x"` bylo spuštění proměnné — 41 ze 44 dotazů `invoked` ve vzorku fáze 1,
+   pravých 0. Od 0.2.0 se vnitřek rozebere a `invoked` je jen statement, jehož **hlava**
+   je proměnná nebo substituce (`bash -c "$cmd arg"`, `bash -c "echo hi; $cmd"`,
+   `bash -c "$(cat cmd.txt)"`). Destruktivní literál uvnitř obalu je `deny` dál.
 3. **Windows-first.** Handlery volají `powershell.exe`. Na Linuxu a macOS plugin
    nefunguje; portace by znamenala druhý běhový tvar, ne jen jinou cestu.
 4. **Rozklad příkazové řádky je tokenizér, ne shell.** Rozdělení na `&&`, `||`, `;`, `|`
@@ -256,13 +295,50 @@ aby si je nikdo nemusel objevit sám.
    měly tutéž politiku.
    ➕ **Druhá výjimka je destruktivní literál pod nerozebratelnou hlavou** —
    viz omezení 21.
-9. **`*.json` se ptá.** Zástupný znak, který může padnout na chráněné jméno (`secrets.json`,
-   `settings.local.json`), končí `ask`. `*.md`, `config*` ani `src/*.cs` se neptají.
-   Od 0.1.8 (nález N26) se glob vyhodnocuje **jen tam, kde ho shell rozvine**: nad
-   **neuvozeným** tokenem v **pozici cesty** u příkazu ze seznamu `secrets.pathCommands`
-   (čtení a kopírování souborů). `git commit -m "**2**"`, `echo **2**` ani
-   `Write-Host "**2**"` tedy nejsou cesty a neptají se — dřív ano, protože glob `**2**`
-   sedne na `server.p12`.
+9. **Glob se posuzuje podle celé cesty; třída chráněná jménem u globu mlčí a zapisuje
+   se do auditu** (0.2.0, TASK-106 bod 11; výroky 7 a 8 Amber 2026-09-12 v mandátu Toma).
+   Do 0.1.11 tu stálo *„`*.json` se ptá"*: glob se srovnával jen se **jménem**, takže
+   `head -25 .github/workflows/*.yml` a `ls docs/technical/*.json` končily dotazem
+   (2 ze 3 dotazů `wildcardPath` ve vzorku fáze 1). Zapsaná mez, doslova podle výroku 7:
+   > *U třídy chráněné **jménem** (`protectedBaseNames`) se glob nad adresářem **neptá**,
+   > ale **zapisuje se do auditu** (`opaque`-styl záznam s klíčem příčiny):
+   > `head .github/workflows/*.yml` nevyvolá dotaz, i když v tom adresáři `secrets.yml` leží.
+   > Chráněno zůstává pojmenování souboru přímo a třída chráněná **cestou**
+   > (`denyPathPatterns`).*
+   > 🔴 *Spouštěč přehodnocení: jakmile k invariantu přibude fixture adresář.*
+   Sémantika (N16, výrok 8): glob → regex nad **celou normalizovanou cestou**, `*` a `?`
+   nepřekračují `/`, `**` ano, kotví se na hranici adresáře — tvar gitignore/pathspec,
+   týž jako u `denyPathPatterns`. Glob **míří na chráněnou cestu** (a ptá se dál), když
+   `denyPathPatterns` sedne doslova na jeho text (`ls ~/.ssh/*`, `cp *.pem x` — přípona je
+   vzor cesty) nebo když jmenuje adresář kanonické cesty z `secrets.protectedPaths`
+   (`cat ~/.aws/*` → `.aws/credentials`, `cat .claude/*` → `settings.local.json`).
+   Záznam auditu má tvar `secrets:wildcardName`. Glob se pořád vyhodnocuje **jen tam, kde
+   ho shell rozvine** (nález N26, 0.1.8): nad neuvozeným tokenem v pozici cesty u příkazu
+   ze `secrets.pathCommands`; `git commit -m "**2**"`, `echo **2**` ani `Write-Host "**2**"`
+   nejsou cesty.
+   🔴 **`C1` (delta review Amber 2026-09-13, vada výroku 7):** glob, který na secret **míří
+   vzorem**, není totéž co glob, který na chráněné jméno **narazí náhodou** — a první tvar
+   0.2.0 obě třídy slil do auditu, takže `cat *.env` **mlčel** (regrese proti 0.1.11; v GSD
+   `.env` nese pět secretů a `permissions.deny` kryje jen tool `Read`). Rozlišení je doslovné
+   nad textem globu, bez čtení disku: **(c)** jméno globu sedne na `envFile.denyNames`
+   (`*.env`, `*.env.local`), **(d)** glob bez zástupných znaků se rovná chráněnému jménu
+   (`.env*` → `.env`, `*secrets.json` → `secrets.json`). Obojí → `ask` jako `*.pem`.
+   ⚠️ **Pojmenovaná mez, která zůstává:** `cat *` (glob bez přípony) a `Get-Content .en?`
+   (zástupný znak **uvnitř** jména) dnešní kód od `*.yml` nerozliší — končí auditem, ne
+   dotazem. Cena je **různá podle interpretu** (`N40`): Bash `*` **nerozvíjí** soubory
+   začínající tečkou, takže `cat *` v kořeni repa `.env` **nepřečte**; PowerShell
+   (`Get-Content *`, `.en?`) ano — tam má mez v repu se secrety v `.env` konkrétní cenu.
+   🔴 **Pro shellové tvary druhá vrstva neexistuje** (`N32`, revize Ady): `permissions.deny`
+   kryje jen nástroj `Read` — na `cat *` z definice nedosáhne, a to byl přesně důvod, proč
+   byla `C1` skutečná regrese; auto-mode klasifikátor není pravidlo, na které se dá spoléhat
+   (12 zásahů za měsíc, 0 za poslední tři sessions; z klasifikátoru nejde vyčíst, co
+   zastaví). **Právě proto je u téhle meze spouštěč** — a má dvě cesty ven, ne jednu:
+   ① fixture adresář u invariantu (varianta ① bodu 11, rozhodnutí závislé na disku),
+   ② kritérium **měřitelné v textu** (Ada, revize §K): *vzor doslova vypisuje jméno chráněného
+   souboru, ne jen jeho příponu* — `.en?` vypisuje tři ze čtyř znaků jména `.env`, `*.yml`
+   ze `secrets.yml` nevypisuje ani jeden znak jména, jen příponu. Je to táž rodina jako
+   podmínky (c) a (d) u `C1`, bez čtení disku. Neprovedeno v 0.2.0 — zapsáno, aby fixture
+   adresář nebyl jedinou cestou.
 10. **SQL, které v příkazu není vidět, se ZAPÍŠE DO AUDITU a pustí dál.**
     `psql -f migrace.sql`, `sqlcmd -i migrace.sql`, `psql -h prod < drop.sql`,
     `psql -h prod <<< $SQL` i `cat migrace.sql | psql` — obsah souboru ani roury hook
@@ -302,34 +378,54 @@ aby si je nikdo nemusel objevit sám.
     ⚠️ **Co ale kryté JE:** destrukce databáze se pozná podle `-h <host>` v příkazu,
     takže `docker exec -i db psql -h prod -c "DROP TABLE x"` končí `deny` jako každý
     jiný `psql`. Nekryté jsou **jen cesty uvnitř obrazu**.
+    ➕ **Rozhodnuto 2026-09-12 (TASK-106 bod 3, výrok 3 Amber v mandátu Toma): přiznat
+    jako omezení, neopravovat.** Doslova:
+    > 🔴 *Spouštěč přehodnocení: první session, která uvnitř kontejneru sahá na adresář
+    > namountovaný z hostitele. Do té chvíle je cesta v obrazu cizí strom a brána nad ním
+    > nemá co chránit.*
 12. **Krátká absolutní cesta `/xxx` končí `ask`.** `rm -rf /srv` je od `/s` `/q` `/f`
     (přepínače `cmd`) k nerozeznání, takže se rozsah nezná. `rm -rf /srv/data` je `deny`.
-    Důvod v hlášce mluví o rouře, ne o téhle nejednoznačnosti — vlastní tvar zprávy
-    je v backlogu **v0.2**. (Kosmetika hlášky, ne průchod: rozhodnutí `ask` je správné.)
+    ✔️ **Od 0.2.0 to hláška říká** (TASK-106 bod 4, tvar `shortAbsolutePath`) — do 0.1.11
+    mluvila o „mazání se vstupem z roury". Rozhodnutí `ask` se nezměnilo.
 13. **Seznam interpretů je na dvou místech.** `gate.codeInterpreters` v konfiguraci čte
     větev heredocu; větev pro `-c` / `-e` v `Get-CommandLeaf` má týž seznam natvrdo.
-    Dnes jsou shodné. Přidat do konfigurace `lua` znamená, že `lua <<EOF` se chytne
-    a `lua -c` ne. `Get-CommandLeaf` konfiguraci nedostává; protažení je refaktor
-    podpisů → **v0.2**.
+    ✔️ **Od 0.2.0 to hlídá brána, ne paměť** (TASK-106 bod 1): test tvrdí **rovnost**
+    obou množin a **neprázdnost** obou stran (N15 — „prázdná = prázdná" by byla
+    neviditelná zelená). Přidat `lua` jen do konfigurace sadu zčervená. Protažení
+    konfigurace do `Get-CommandLeaf` (refaktor podpisů) zůstává v backlogu TASK-106 —
+    brána kryje tutéž škodu.
 14. 🔴 **Escapování uvozovek a zkratky parametrů PowerShellu nebyly prověřeny councilem
-    — je to VERIFIKAČNÍ DLUH, ne odložená funkce.** Otázka na ně se z poskytovatelů
-    nevrátila (kvóta, chyby CLI). Opravy v těch dvou oblastech stojí jen na review
-    a na vlastních testech, ne na nezávislém protihráči. **Spustit hned, jak kvóta
-    naběhne** — ne až u v0.2.
+    — je to VERIFIKAČNÍ DLUH, ne odložená funkce.** Zapsáno 2026-09-12 (TASK-106 bod 5),
+    doslova: *council nad escapováním uvozovek a zkratkami parametrů PowerShellu
+    neproběhl — codex CLI chyboval šestkrát, gemini vyčerpal denní kvótu, nvidia vracela
+    HTTP 504; kontrolní otázka prošla, takže padala ta konkrétní otázka nebo limit. Opravy
+    v těch dvou oblastech stojí na review a vlastních testech, ne na nezávislém
+    protihráči.* **Spustit hned, jak kvóta naběhne.**
 15. 🔴 **`cmd /c` se rozebírá s escapem hostitelského shellu — je to OBCHÁZENÍ
     `deny` → `allow`, ne kosmetika.** Skutečný escape `cmd.exe` je `^` a ten skener
     nezná, takže příkaz escapovaný po způsobu `cmd` může projít. `bash -c` a `pwsh -c`
     se přepínají správně (nález I2) a od 0.1.6 i tělo heredocu (`bash <<'EOF'`,
-    nález K3), `cmd` ne → **v0.2**.
+    nález K3), `cmd` ne.
+    ➕ **Rozhodnutí 2026-09-12 (TASK-106 bod 2, výrok 9): prozatímně se NEOPRAVUJE.**
+    Změřeno nad 11 861 příkazy z 73 transkriptů GSD (2026-08-14 → 09-12): `cmd /c`
+    **2×, obojí 2026-08-23 — před vznikem pluginu** (2026-09-05); od vzniku pluginu
+    **N = 0**. Spouštěč přehodnocení, doslova: *první session, ve které se `cmd /c`
+    vyskytne (N > 0).* Historické výskyty ho sepnout nemohou — měří období, kdy brána
+    existuje.
 16. **Toast zatím nikdo neviděl.** Kanál `toast` je vybraný měřením prostředí, ale živá
     zkouška (skutečné okno na obrazovce) proběhne až při zapojení. Když se toast neukáže,
     správná odpověď je přepnout `notify.channel` na `none` s uvedeným důvodem, ne tvrdit,
     že upozornění fungují.
-17. 🔴 **Blok s ocasem se nerozebírá — OBCHÁZENÍ `deny` → `allow`.** Tělo `{ … }` se
-    hledá jen tehdy, když jím statement **končí**, takže
-    `if ($x) { rm -rf src } else { git status }`, `try { … } catch { … }`
-    i `{ … } # poznámka` projdou **nerozebrané, tedy `allow`**. Stará díra (nález K2),
-    ne regrese; zavřít ji znamená rozebírat **všechny** bloky ve statementu → **v0.2**.
+17. ✔️ **Blok s ocasem — OPRAVENO v 0.2.0** (TASK-106 bod 6, výrok 2 Amber v mandátu
+    Toma). Do 0.1.11 se tělo `{ … }` hledalo jen tehdy, když jím statement **končil**,
+    takže `if ($x) { rm -rf src } else { git status }`, `try { … } catch { … }`
+    i `{ … } # poznámka` prošly **nerozebrané, tedy `allow`** — stará díra (nález K2),
+    ne regrese. Od 0.2.0 se rozebírají **všechny** bloky statementu. ⚠️ Cena je
+    **neznámá** (bod nemá vzorek — `n = 0` říkalo, že brána tvar nezachytila, ne že se
+    nepoužívá); rozhodnutí stojí na asymetrii chyb: falešný blok se projeví hned a změří,
+    díra ne. Kontrolní skupina v sadě: `if ($x) { git status } else { git log }`,
+    `try { dotnet build } catch { … }`, `ForEach-Object -Begin { $i = 0 } -Process { $i++ }`
+    se ptát nesmějí.
 18. **Příkaz jako argument vzdáleného shellu končí `ask`, ne `deny`.** `ssh host "rm -rf /"`
     se spustí na cizím stroji, kde pravidla nad cestami neplatí — rozhoduje proto člověk
     (nález Ada N21, opraveno v 0.1.7). `ssh host` a `ssh -T git@github.com` zůstávají
@@ -368,6 +464,29 @@ aby si je nikdo nemusel objevit sám.
     dotazů ze 7. 9.: **0** — žádný z nich token nenese.
     ⚠️ **Co to nechytí:** literál složený až za běhu (`$a = 'git reset'; "$a --hard"`),
     protože platí omezení 6. Je to zúžení díry, ne její uzavření.
+22. **Chráněné jméno se posuzuje jen v pozici cesty; mimo ni hook mlčí** (0.2.0,
+    TASK-106 bod 12 + N-H1/N-H3/N-H4/N-H6). Do 0.1.11 byl kandidátem každý token
+    s tečkou a každý řetězec v uvozovkách — `$_.Key` i `SelectOption.Key` (identifikátory
+    s příponou `.Key`) končily `deny secretFile` (3 ze 7 `deny` ve vzorku fáze 1, včetně
+    měřicího příkazu), próza v těle heredocu se jmény souborů taky. Pozice cesty od 0.2.0:
+    cíl přesměrování (`< x`, `> x`, `2> x`), hodnota `--opt=x`, poziční argument příkazu ze
+    `secrets.pathCommands`, argument zapisového příkazu ze `secrets.writeCommands`, a u
+    **ostatních** příkazů jen token, který **vypadá jako cesta** (lomítko, `~`, `%`, tečka
+    na začátku, `id_*` nebo přesné chráněné jméno — `openssl -in server.key` je `deny` dál).
+    Tělo heredocu s datovým hostem (`cat >> x <<EOF`, `git commit -F - <<EOF`,
+    `secrets.dataHeredocHosts`) jsou data; tělo pro shell, interpret nebo neznámý host se
+    rozebírá dál. **Zápis** je od 0.2.0 vlastnost kandidáta (cíl `>`, argument `tee` /
+    `Set-Content`), ne příkazu — `cat ~/.claude/settings.json 2>/dev/null` už není „zápis
+    do souboru, kterým se brána vypíná".
+    ⚠️ **Mez zúžení:** soubor se secrets předaný **nelistovanému** čtecímu programu pod
+    jménem, které v `protectedBaseNames` není (`openssl -in private.pem`, `some-tool
+    config.pem`), od 0.2.0 projde. 🔴 **Rozdíl mezi `openssl -in server.key` (`deny`) a
+    `openssl -in private.pem` (projde) není v nástroji `openssl`, ale v seznamu jmen** (`N38`):
+    `server.key` v `protectedBaseNames` je, `private.pem` ne — „openssl je krytý" z toho
+    odvodit nelze. Rozšíření je konfigurace (`secrets.pathCommands` pro program,
+    `secrets.protectedBaseNames` pro jméno), ne kód.
+    N14 drží: `< ~/.ssh/id_rsa`, `--file=~/.ssh/id_rsa`, cesta v rouře i přes `xargs`
+    a heredoc pro `bash`/`python` s příkazem čtoucím secret jsou `deny` dál.
 
 ---
 
@@ -474,6 +593,24 @@ Bez citace nástroj nezapíše nic a skončí nenulově. Zapisuje **jen ty řád
 generátor hlásil spor** (týž tvar, jiné očekávání v sadě), a do hlavičky `_zmeneno`
 připojí datum, citaci, směr změny a výčet tvarů. Append-only pravidlo tím zůstává:
 řádek nikdy neodchází, jen mění očekávání — a vždy s tím, kdo o tom rozhodl.
+
+🔴 **`-Prijmout` je od 0.2.0 bajtově neutrální** (TASK-106 bod 14): mění přesně řádek
+`expect` sporného tvaru a **připisuje** větu do stávajícího literálu `_zmeneno`; nic
+jiného se neserializuje. Do 0.1.11 se celá hlavička prohnala přes `ConvertTo-Json`,
+který v PS 5.1 escapuje `&` a `'` a pwsh 7 ne — stará část hlavičky tak měnila bajty podle
+interpretu, ne podle rozhodnutí. Sada to drží testem nad **kopií** invariantu
+(`-InvariantsPath`), s kontrolní skupinou „spor existuje, diff nenulový být musí".
+
+ℹ️ **Čtyři řádky s rozsypaným českým textem** (`rm -rf docs/hl?sen?/z?r?` a spol.,
+TASK-106 bod 7, výrok 4 Amber v mandátu Toma) zůstávají — po dávkách D1 a D2 verze 0.2.0
+se **přeměřily** a rozhodnutí v nich drží. Datovaná poznámka o původu je v hlavičce
+`_ponechano` souboru: *artefakt běhu generátoru, který výstup nečetl jako UTF-8; správné
+řádky přibyly v kole 5b. Rozhodnutí v nich sedí — proto zůstávají.*
+
+**Případy bodu 12 žijí v datovém souboru** `tests/fixtures/task106-bod12.json`, ne
+v příkazové řádce sady: token `.Key` nebo `id_rsa` v textu testu by spustil secrets hook
+nad samotným testem (přesně to potkalo měřicí příkaz fáze 1). Sada řádky přehrává a bere
+je i do invariantu.
 
 ---
 

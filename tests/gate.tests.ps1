@@ -1130,6 +1130,160 @@ $v0111Cases = @(
 
 Test-Cases 'v0.1.11 - nalezy Ady N28, N33-N35, N49, N50' $v0111Cases
 
+# ================================================================================
+#  v0.2.0 - TASK-106 faze 2, davka D1 (gate.ps1): bod 15 (gamma), bod 1, bod 4,
+#  bod 6, N-H6. Vyroky Amber 2026-09-12 (mandat Toma: deset bodu ve dvou davkach).
+#
+#  🔴 Kazdy pripad jmenuje mutanta a ma kontrolni skupinu v JINEM stavu (zadani §7):
+#  zelena bez cervene, ktera by sla vyrobit, netvrdi nic.
+# ================================================================================
+
+$d1Cases = @(
+    # --- bod 15 / gamma (N-H5): obal s LITERALNI hlavou uz neni `invoked`.
+    #     Mereni faze 1 (157 udalosti / 156 tool calls): 44 dotazu `invoked`, z toho 41 melo
+    #     tvar `pwsh -Command "<literal>; ... $x ..."` - Test-Unexpandable bezel nad CELYM
+    #     vnitrkem obalu, takze promenna KDEKOLI v tele udelala z obalu spusteni promenne.
+    #     Pravych nalezu 0 ze 44. Oprava: vnitrek se ROZEBERE (tyz retez jako hlavni beh)
+    #     a `invoked` je jen statement, jehoz HLAVA je promenna nebo substituce.
+    #     Mutant: vratit `if (Test-Unexpandable $inner)` pred rozbor -> cervena.
+    (Case 'B15 pwsh -Command literal hlava, promenna v tele' 'pwsh -NoProfile -Command "git status; Write-Host $x"' 'allow' 'PowerShell')
+    (Case 'B15 pwsh -Command dot-source literalu'  'pwsh -NoProfile -Command ". ''W:\dev\x\scripts\dev-common.ps1''; Import-DevEnvironmentFile; $env:GSD_TEST_PG = ''x''; dotnet test"' 'allow' 'PowerShell')
+    (Case 'B15 pwsh -Command Where-Object'         'pwsh -Command "Get-ChildItem | Where-Object { $_.Name -like ''*.cs'' }"' 'allow' 'PowerShell')
+    (Case 'B15 bash -c literal hlava'              'bash -c "echo $HOME; git status"' 'allow')
+    (Case 'B15 bash -c retezec s promennou'        'bash -c ''echo "EXIT=$code"''' 'allow')
+    (Case 'B15 cmd /c literal hlava'               'cmd /c "echo %PATH% && dir"' 'allow')
+    (Case 'B15 eval literal hlava'                 'eval "echo $x"' 'allow')
+    (Case 'B15 iex literal hlava'                  'iex "git status $x"' 'allow' 'PowerShell')
+    # 🔴 kontrolni skupina: hlava PROMENNA nebo SUBSTITUCE = obsah se SPUSTI -> `invoked` -> ask.
+    #    Tvary `pwsh -c "$x"` a `bash -c "$cmd arg"` ve vzorku faze 1 NEBYLY (Amber, vyroky §4) -
+    #    doklada je az tenhle test, a je to podminka, ne bonus.
+    (Case 'B15 kontrola bash -c $x'                'bash -c "$x"' 'ask')
+    (Case 'B15 kontrola bash -c $cmd arg'          'bash -c "$cmd arg"' 'ask')
+    (Case 'B15 kontrola pwsh -c $x'                'pwsh -c "$x"' 'ask' 'PowerShell')
+    (Case 'B15 kontrola pwsh -Command $cmd -Force' 'pwsh -Command "$cmd -Force"' 'ask' 'PowerShell')
+    (Case 'B15 kontrola promenna v DRUHEM statementu' 'bash -c "echo hi; $cmd"' 'ask')
+    (Case 'B15 kontrola substituce v hlave'        'bash -c "$(cat cmd.txt)"' 'ask')
+    (Case 'B15 kontrola cmd /c %X%'                'cmd /c %X%' 'ask')
+    (Case 'B15 kontrola eval $cmd'                 'eval $cmd' 'ask')
+    (Case 'B15 kontrola iex $cmd'                  'iex $cmd' 'ask' 'PowerShell')
+    (Case 'B15 kontrola Start-Process $x'          'Start-Process $x' 'ask' 'PowerShell')
+    (Case 'B15 kontrola & $cmd (konstrukce A)'     '& $cmd' 'ask' 'PowerShell')
+    # 🔴 destruktivni LITERAL uvnitr obalu je deny dal - zuzeni nesmi nic propustit
+    (Case 'B15 kontrola deny v pwsh -Command'      'pwsh -Command "git reset --hard; Write-Host $x"' 'deny' 'PowerShell')
+    (Case 'B15 kontrola deny v bash -c'            'bash -c "echo $x; git reset --hard"' 'deny')
+
+    # --- gamma upresneni po PREMERENI vzorku (2026-09-13): prvni tvar zuzeni nechal 42 ze 44
+    #     dotazu dotazem. Tri pricin: (a) vnejsi shell escapovany dolar rozbali (`pwsh -Command
+    #     "... `$env:X = 1"` z PowerShellu prijde vnitrnimu pwsh jako prirazeni); (b) hlava je
+    #     retezec nebo .NET volani s promennou UVNITR, ne promenna sama; (c) promenna, kterou
+    #     vnitrni text sam prirazuje (`$e = ...; $e | Select-Object`), je lokalni, ne rozbaleny
+    #     obsah. Po upresneni: 41 ticho, 2 ask (skutecne `& $cmd`), 1 ask s pravdivou hlaskou.
+    (Case 'B15b escapovany dolar = prirazeni'      'pwsh -NoProfile -Command ". ''W:\dev\x\dev-common.ps1''; `$env:GSD_TEST_PG = ''x''; dotnet test"' 'allow' 'PowerShell')
+    (Case 'B15b escapovany dolar z Bashe'          'bash -c "echo \$HOME; git status"' 'allow')
+    (Case 'B15b retezec se subexpresi v hlave'     'pwsh -NoProfile -Command ''$e = $null; "chyb: $($e.Count)"''' 'allow')
+    (Case 'B15b .NET volani s promennou uvnitr'    'pwsh -NoProfile -Command "[IO.File]::ReadAllBytes(''$f'')"' 'allow')
+    (Case 'B15b prirazena promenna v hlave roury'  'pwsh -NoProfile -Command ''$e = $null; [x]::Parse($p, [ref]$null, [ref]$e); $e | Select-Object -First 3''' 'allow')
+    # 🔴 kontrolni skupina: NEprirazena promenna v hlave a `& $x` uvnitr obalu zustavaji ask
+    (Case 'B15b kontrola neprirazena v hlave'      'pwsh -NoProfile -Command ''$e = $null; $other -Force''' 'ask')
+    (Case 'B15b kontrola & prirazene'              'pwsh -NoProfile -Command ''$c = "git status"; & $c''' 'ask')
+    (Case 'B15b kontrola escapovany dolar v hlave' 'bash -c "\$cmd arg"' 'ask')
+
+    # --- bod 6 (nalez Amber K2, vyrok 2 Amber = DO ROZSAHU): rozebiraji se VSECHNY bloky
+    #     ve statementu, ne jen ten, kterym statement konci. Mutant: vratit
+    #     Get-ScriptBlockBody (jen koncovy blok) -> cervena.
+    (Case 'B6 if/else, destruktivni v PRVNIM bloku' 'if ($x) { rm -rf src } else { git status }' 'deny' 'PowerShell')
+    (Case 'B6 try/catch, destruktivni v try'       'try { git reset --hard } catch { Write-Host $_ }' 'deny' 'PowerShell')
+    (Case 'B6 blok s komentarem za nim'            '{ rm -rf src } # poznamka' 'deny' 'PowerShell')
+    (Case 'B6 if/elseif/else, destruktivni v POSLEDNIM' 'if ($a) { git status } elseif ($b) { git log } else { git branch -D x }' 'deny' 'PowerShell')
+    (Case 'B6 -Begin/-Process, mazani v druhem bloku' 'Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $_.Delete() }' 'ask' 'PowerShell')
+    (Case 'B6 Bash blok s presmerovanim za nim'    '{ rm -rf src; } 2>/dev/null' 'deny')
+    # 🔴 kontrolni skupina (podminka vyroku 2): neskodne bloky se ptat NESMEJI
+    (Case 'B6 kontrola if/else neskodne'           'if ($x) { git status } else { git log }' 'allow' 'PowerShell')
+    (Case 'B6 kontrola try/catch neskodne'         'try { dotnet build } catch { Write-Host ''chyba'' }' 'allow' 'PowerShell')
+    (Case 'B6 kontrola -Begin/-Process neskodne'   'Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $i++ }' 'allow' 'PowerShell')
+    (Case 'B6 kontrola Where + ForEach'            'Get-ChildItem | Where-Object { $_.Length -gt 0 } | ForEach-Object { $_.Name }' 'allow' 'PowerShell')
+    # 🔴 K1 drzi: hlava pred blokem se rozebira dal, `{` za `@` neni blok
+    (Case 'B6 kontrola K1 {src,lib}'               'rm -rf {src,lib}' 'deny')
+    (Case 'B6 kontrola K1 stash@{0}'               'git stash drop stash@{0}' 'deny')
+    (Case 'B6 kontrola K1 hashtable'               "@{ Path = 'src' }" 'allow' 'PowerShell')
+    # --- N39 (revize Ady, uzavera 0.2.0): cena bodu 6 v CASE. Statement s desitkami bloku musi
+    #     projit pod tvrdym stropem Invoke-Hook (5000 ms) - u PreToolUse je timeout PROPUSTENI,
+    #     ne pomalejsi brana. Destruktivni prikaz v POSLEDNIM z 42 bloku se najde; 42 neskodnych
+    #     bloku se neptaji. Cas meri Test-Cases (Assert doba < strop) a souhrn "doba hooku".
+    (Case 'N39 42 bloku, destruktivni posledni'      ('if ($a) { git status }' + (' elseif ($b) { git log }' * 40) + ' else { git branch -D x }') 'deny' 'PowerShell')
+    (Case 'N39 kontrola 42 neskodnych bloku'         ('if ($a) { git status }' + (' elseif ($b) { git log }' * 40) + ' else { git fetch }') 'allow' 'PowerShell')
+
+    # --- N-H6 (gate): zpetny apostrof v -m / heredocu. Ve vzorku: `git merge -m "... \`& \$cmd\` ..."`
+    #     skoncil `invoked` - obsah mezi zpetnymi apostrofy se bral REGEXEM bez ohledu na
+    #     escape a uvozovky. V Bashi je `\`` literal a v jednoduchych uvozovkach substituce
+    #     neexistuje; v PowerShellu je zpetny apostrof ESCAPE, ne substituce.
+    #     Mutant: vratit `[regex]::Matches($Command, '`([^`]+)`')` -> cervena.
+    (Case 'NH6 escapovane zpetne apostrofy v -m'   'git merge --no-ff x -m "text \`& \$cmd\` konec"' 'allow')
+    (Case 'NH6 jednoduche uvozovky v -m'           'git commit -m ''text `& $cmd` konec''' 'allow')
+    (Case 'NH6 PowerShell: zpetny apostrof je escape' 'git commit -m "text `& $cmd` konec"' 'allow' 'PowerShell')
+    # 🔴 kontrolni skupina: NEescapovana substituce v Bashi se rozebira dal (i v dvojitych uvozovkach)
+    (Case 'NH6 kontrola substituce v dvojitych'    'echo "`git reset --hard`"' 'deny')
+    (Case 'NH6 kontrola hola substituce'           'echo `git reset --hard`' 'deny')
+)
+
+Test-Cases 'v0.2.0 - TASK-106 D1 (bod 15, bod 6, N-H6)' $d1Cases
+
+# --- bod 1 (nalez Hestia, kolo 4): seznam interpretu je na DVOU mistech - `gate.codeInterpreters`
+#     cte vetev heredocu, vetev `-c`/`-e` v Get-CommandLeaf ma tyz seznam natvrdo. Zadani §4.2:
+#     brana, NE refaktor - test tvrdi ROVNOST mnozin (N15: rovnost, ne podmnozina; nadmnozina
+#     v kodu by obesla smysl) a NEPRAZDNOST obou stran (N15: prazdna == prazdna je neviditelny
+#     fail-open - kdyz se extrakce rozbije, "rovnost" by platila naporad).
+#     Mutanti: (1) pridat `lua` jen do konfigurace -> cervena; (2) rozbit extrakci ze zdroje
+#     (kotva jinde) -> cervena z neprazdnosti. Kontrolni skupina: shodne neprazdne seznamy -> zelena.
+Start-Case 'bod 1 (TASK-106): seznam interpretu v kodu == gate.codeInterpreters, oba neprazdne (N15)'
+$gateSource = [System.IO.File]::ReadAllText(
+    (Join-Path $script:RepoRoot 'hooks/scripts/gate.ps1'), ([System.Text.UTF8Encoding]::new($false)))
+$cfgBod1 = [System.IO.File]::ReadAllText(
+    (Join-Path $script:RepoRoot 'hooks/config/defaults.json'), ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+# Kotva = misto, kde vetev vyrabi pricinu `interpreter`; hlavicka vetve `switch -Regex` je
+# posledni tvar '^(a|b|c)$' { PRED ni. Hleda se ze zdroje, ne z pameti - list v kodu se cte
+# tak, jak tam doopravdy stoji.
+$anchorBod1 = $gateSource.IndexOf("New-OpaqueLeaf `$raw 'interpreter'")
+Assert-True ($anchorBod1 -gt 0) '[bod1] kotva vetve interpretu (New-OpaqueLeaf $raw ''interpreter'') ve zdroji je'
+$codeInterpreters = @()
+if ($anchorBod1 -gt 0) {
+    $heads = [regex]::Matches($gateSource.Substring(0, $anchorBod1), '''\^\(([a-z0-9|]+)\)\$''\s*\{')
+    if ($heads.Count -gt 0) { $codeInterpreters = @($heads[$heads.Count - 1].Groups[1].Value -split '\|' | Where-Object { $_ -ne '' }) }
+}
+$cfgInterpreters = @($cfgBod1.gate.codeInterpreters | ForEach-Object { [string]$_ })
+Assert-True ($codeInterpreters.Count -ge 1) ("[bod1/N15] seznam v kodu neni prazdny: {0}" -f ($codeInterpreters -join ','))
+Assert-True ($cfgInterpreters.Count -ge 1) ("[bod1/N15] gate.codeInterpreters neni prazdny: {0}" -f ($cfgInterpreters -join ','))
+$onlyInCode = @($codeInterpreters | Where-Object { $cfgInterpreters -cnotcontains $_ })
+$onlyInCfg  = @($cfgInterpreters  | Where-Object { $codeInterpreters -cnotcontains $_ })
+Assert-Equal 0 $onlyInCode.Count ("[bod1] interpret jen v kodu (chybi v konfiguraci): " + ($onlyInCode -join ','))
+Assert-Equal 0 $onlyInCfg.Count  ("[bod1] interpret jen v konfiguraci (chybi v kodu): " + ($onlyInCfg -join ','))
+
+# --- bod 4 (nalez Amber I6): `rm -rf /srv` konci ask, ale duvod mluvil o "mazani se vstupem
+#     z roury" - hlaska lhala o pricine. Skutecna pricina: `/xxx` do tri znaku je od prepinace
+#     `cmd` (`/s`, `/q`) k nerozeznani, takze cil NENI videt. Rozhodnuti `ask` se nemeni, meni
+#     se veta. Mutant: vratit stary text (tvar `deleteFromPipeline`) -> cervena.
+#     Kontrolni skupina: JINY tvar se STEJNYM `ask` a JINYM textem (mazani z roury, Metis 8).
+Start-Case 'bod 4 (TASK-106): hlaska u `rm -rf /srv` jmenuje skutecnou pricinu (kratka absolutni cesta)'
+function Get-AskReason($Result) {
+    if ([string]::IsNullOrWhiteSpace($Result.Stdout)) { return '' }
+    return [string]($Result.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason
+}
+$shapesBod4 = $cfgBod1.gate.shapes
+Assert-True ($null -ne $shapesBod4.PSObject.Properties['shortAbsolutePath']) '[bod4] konfigurace ma tvar shortAbsolutePath'
+$textShort = ''
+if ($null -ne $shapesBod4.PSObject.Properties['shortAbsolutePath']) { $textShort = [string]$shapesBod4.shortAbsolutePath -replace '\{target\}', '/srv' }
+$textPipe = [string]$shapesBod4.deleteFromPipeline
+$r4 = Invoke-Hook -Script 'gate.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'rm -rf /srv' })
+$reason4 = Get-AskReason $r4
+Assert-Equal 'ask' (Get-Decision $r4) '[bod4] rm -rf /srv je porad ask'
+Assert-True ($textShort -ne '' -and $reason4.Contains($textShort)) ("[bod4] duvod jmenuje kratkou absolutni cestu: {0}" -f $reason4)
+Assert-True (-not $reason4.Contains($textPipe)) '[bod4] duvod NEMLUVI o mazani z roury'
+$r4c = Invoke-Hook -Script 'gate.ps1' -InputJson (New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = 'Get-ChildItem src -Recurse -File | Remove-Item -Force' })
+$reason4c = Get-AskReason $r4c
+Assert-Equal 'ask' (Get-Decision $r4c) '[bod4/kontrola] mazani z roury je porad ask'
+Assert-True ($reason4c.Contains($textPipe)) ("[bod4/kontrola] duvod jmenuje mazani z roury: {0}" -f $reason4c)
+Assert-True ($textShort -eq '' -or -not $reason4c.Contains($textShort)) '[bod4/kontrola] duvod NEMLUVI o kratke absolutni ceste'
+
 # ------------------------ K-2: tvary v auditu u "SQL neni videt" (review Amber) ---
 #
 # 🔴 README ted nese TABULKU tvaru, ne vetu - a tabulka je tvrzeni, ktere musi jit
@@ -1335,6 +1489,96 @@ if (-not (Test-SafePath $vypisPath)) {
 
 # Prehrani radku zije v _harness.ps1 - od kola 4 ho vola i sada secrets (nalez H2).
 Invoke-InvariantRows 'gate'
+
+# ================================================================================
+#  TASK-106 bod 14 (0.2.0): `-Prijmout` je BAJTOVE neutralni.
+#
+#  Prijeti zmeneneho ocekavani smi v souboru zmenit presne dve veci: radek `expect` u tvaru
+#  ve sporu a hlavicku `_zmeneno`, do ktere se veta PRIPISE. Do 0.1.11 se hlavicka
+#  deserializovala a serializovala ConvertTo-Json, ktery v PS 5.1 escapuje `&` a `'`
+#  a pwsh 7 ne - stara cast hlavicky tak menila bajty podle interpretu, ne podle rozhodnuti.
+#  Test bezi nad KOPII invariantu s hlavickou, ktera nese escapovany apostrof (pwsh 7 by
+#  ho rozbalil) i literalni `&` (PS 5.1 by ho escapoval): mutant "ConvertTo-Json bez
+#  unescape" zcervena v OBOU interpretech. Kontrolni skupina: spor existuje, takze diff
+#  NENULOVY byt musi - presne radek `expect` a hlavicka; nula zmen by znamenala, ze se
+#  neprijalo nic.
+# ================================================================================
+Start-Case 'bod 14 (TASK-106): -Prijmout meni jen radek expect a pripisuje hlavicku, ostatni bajty drzi'
+if (Test-CollectOnly) {
+    $script:Skip++
+} else {
+    $utf8b14 = [System.Text.UTF8Encoding]::new($false)
+    $invSrc14 = Join-Path $script:RepoRoot 'tests/fixtures/invariants.json'
+    $copy14 = Join-Path $script:TempDir 'invariants-bod14.json'
+    # (0) kopie se nejdriv SESYNCHRONIZUJE se sadami (prijmou se pripadne spory z prave
+    #     probihajiciho kola a pripoji nove radky), aby jediny spor v mereni byl ten vyrobeny
+    #     nize - jinak by test meril stav invariantu, ne generator.
+    [System.IO.File]::Copy($invSrc14, $copy14, $true)
+    function Invoke-Generator14([string]$Path, [string]$Citace) {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'pwsh'
+        $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $script:RepoRoot 'tests/_generate-invariants.ps1') + '" -InvariantsPath "' + $Path + '" -Prijmout "' + $Citace + '"'
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.WorkingDirectory = $script:RepoRoot
+        $psi.EnvironmentVariables['SINOGARD_HOOKS_COLLECT'] = ''
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $o = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
+        $p.WaitForExit()
+        return [pscustomobject]@{ Exit = $p.ExitCode; Out = $o }
+    }
+    $sync14 = Invoke-Generator14 $copy14 'bod14 priprava'
+    Assert-Equal 0 $sync14.Exit '[bod14/priprava] synchronizace kopie se sadami skoncila nulou'
+    $orig14 = [System.IO.File]::ReadAllText($copy14, $utf8b14)
+    # (1) hlavicka s escapovanym apostrofem (sekvence u0027 se zpetnym lomitkem) a literalnim ampersandem
+    $hdrBody14 = ('2026-01-01, bod14: ' + [char]92 + 'u0027x' + [char]92 + 'u0027 a & a ' + [char]92 + 'u003c<')
+    $reHdr14 = New-Object System.Text.RegularExpressions.Regex ('^(\s*"_zmeneno": ")(.*)(",\s*)$', 'Multiline')
+    $mHdr14 = $reHdr14.Match($orig14)
+    Assert-True $mHdr14.Success '[bod14] invariant ma hlavicku _zmeneno'
+    $crafted14 = $orig14.Substring(0, $mHdr14.Groups[2].Index) + $hdrBody14 + $orig14.Substring($mHdr14.Groups[2].Index + $mHdr14.Groups[2].Length)
+    # (2) spor: prvni radek `git status --porcelain` (gate) dostane opacne ocekavani
+    $reRow14 = New-Object System.Text.RegularExpressions.Regex ('("cmd": "git status --porcelain",\r?\n\s*"expect": ")allow(")')
+    $mRow14 = $reRow14.Match($crafted14)
+    Assert-True $mRow14.Success '[bod14] invariant ma radek git status --porcelain / allow'
+    $crafted14 = $crafted14.Substring(0, $mRow14.Index) + $mRow14.Groups[1].Value + 'deny' + $mRow14.Groups[2].Value + $crafted14.Substring($mRow14.Index + $mRow14.Length)
+    [System.IO.File]::WriteAllText($copy14, $crafted14, $utf8b14)
+
+    $run14 = Invoke-Generator14 $copy14 'bod14 test'
+    $out14short = ($run14.Out -replace '\s+', ' ')
+    if ($out14short.Length -gt 200) { $out14short = $out14short.Substring(0, 200) }
+    Assert-Equal 0 $run14.Exit ("[bod14] generator skoncil nulou: " + $out14short)
+    $after14 = [System.IO.File]::ReadAllText($copy14, $utf8b14)
+    $a14 = $crafted14 -split "`n"
+    $b14 = $after14 -split "`n"
+    Assert-True ($b14.Count -ge $a14.Count) ("[bod14] soubor se nezkratil ({0} -> {1} radku)" -f $a14.Count, $b14.Count)
+    # Vsechny puvodni radky krome zaveru pole (`  ]`, `}`) se porovnaji 1:1. Povolene rozdily:
+    #   - radek _zmeneno: puvodni bajty jsou PREFIX noveho radku (veta se pripsala, nic se neprepsalo)
+    #   - radek expect sporu: deny -> allow
+    #   - posledni `    }` pred `  ]`: smi dostat carku, kdyz generator pripojil nove radky
+    $hdrLine14 = -1; $expectLine14 = -1; $jine14 = New-Object System.Collections.ArrayList
+    $lastBraceIdx14 = -1
+    for ($k = $a14.Count - 1; $k -ge 0; $k--) { if ($a14[$k] -match '^\s{4}\}\s*\r?$') { $lastBraceIdx14 = $k; break } }
+    Assert-Equal $a14.Count $b14.Count '[bod14] pocet radku souboru se nezmenil (zadne pripojene radky - kopie byla sesynchronizovana)'
+    for ($k = 0; $k -lt [Math]::Min($a14.Count, $b14.Count); $k++) {
+        if ($a14[$k] -eq $b14[$k]) { continue }
+        if ($a14[$k] -match '^\s*"_zmeneno": "') {
+            $hdrLine14 = $k
+            $origBody14 = $a14[$k] -replace '",\s*\r?$', ''
+            Assert-True ($b14[$k].StartsWith($origBody14)) '[bod14] stare bajty hlavicky jsou prefixem nove (nic se neprepsalo)'
+            Assert-True ($b14[$k].Contains(' || 2') -and $b14[$k].Contains('bod14 test')) '[bod14] nova veta je pripsana za ||'
+            continue
+        }
+        if ($a14[$k] -match '^\s*"expect": "deny"' -and $b14[$k] -match '^\s*"expect": "allow"') { $expectLine14 = $k; continue }
+        if ($k -eq $lastBraceIdx14 -and $b14[$k] -match '^\s{4}\},\s*\r?$') { continue }
+        [void]$jine14.Add(("{0}: <{1}> -> <{2}>" -f ($k + 1), $a14[$k].TrimEnd(), $b14[$k].TrimEnd()))
+    }
+    Assert-True ($hdrLine14 -ge 0) '[bod14] hlavicka _zmeneno se zmenila (veta pripsana)'
+    Assert-True ($expectLine14 -ge 0) '[bod14/kontrola] radek expect sporu se zmenil deny -> allow (diff NENI nulovy)'
+    Assert-Equal 0 $jine14.Count ("[bod14] zadny jiny radek se nezmenil: " + ($jine14 -join ' | '))
+    $doc14 = $after14 | ConvertFrom-Json
+    Assert-True (@($doc14.rows).Count -ge @(($orig14 | ConvertFrom-Json).rows).Count) '[bod14] pocet radku neklesl'
+}
 
 # Nestaci, ze rozhodnuti sedi - musi souhlasit i BAJTY duvodu. Cesky text prochazi
 # stdin -> skript -> stdout/stderr; kterykoli clanek v OEM strance by ho rozsypal
