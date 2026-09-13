@@ -114,6 +114,11 @@ dál, když `denyPathPatterns` sedne doslova na jeho text (`ls ~/.ssh/*`, `cp *.
 nebo když jmenuje adresář kanonické cesty ze `secrets.protectedPaths` (`cat ~/.aws/*`,
 `cat .claude/*`, `cat **/credentials`). Glob jen na chráněné **jméno** (`cat *`,
 `.github/workflows/*.yml`) → **audit** `secrets:wildcardName` a ticho.
+🔴 **`C1` (delta review Amber 2026-09-13, vada výroku 7):** první tvar poslal do auditu i glob,
+který na secret **míří vzorem** (`cat *.env`, `cat .env*`, `cat *secrets.json`) — regrese
+proti 0.1.11 (`ask`). Opraveno v témž vydání: jméno globu proti `envFile.denyNames` a glob
+bez zástupných znaků rovný chráněnému jménu → `ask`. Mez, která zůstává pojmenovaná
+(README 9): `cat *` a `.en?`.
 `Write-GateAudit` se přesunul do `_common.ps1` (sdílený). 🔴 **Dosah — 3 řádky
 invariantu mění očekávání `ask` → `allow`** (`cat *`, `cat *.env`, `Get-Content .en?`),
 přijato `-Prijmout` s citací výroků; `cat ~/AppData/…/UserSecrets/*/secrets.json`

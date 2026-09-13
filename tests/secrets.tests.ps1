@@ -335,7 +335,10 @@ $n26SecretCases = @(
     #    chranena JMENEM u globu `audit` (zapise se, mlci), trida chranena CESTOU zustava
     #    `ask` - viz sekce "TASK-106 D2" nize, kde je i doklad auditu. Radek invariantu
     #    prosel `-Prijmout` s touto citaci.
-    (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'allow')
+    # 🔴 C1 (delta review Amber 2026-09-13): `*.env` MIRI na secret vzorem (jmeno globu sedne na
+    #    `envFile.denyNames`) - zustava ask jako `*.pem`. Prvni tvar 0.2.0 ho poslal do auditu = regrese.
+    (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'ask')
+    #    `.en?` (zastupny znak UVNITR jmena) deterministicky rozlisit nejde - pojmenovana mez (README 9), audit.
     (CmdCase 'N26 kontrola Get-Content' 'Get-Content .en?' 'allow' 'PowerShell')
     # `*.pem` sedne DOSLOVA na vzor `denyPathPatterns` (pripona) -> trida chranena VZOREM cesty, ask dal
     (CmdCase 'N26 kontrola cp glob'     'cp *.pem /tmp/x' 'ask')
@@ -424,6 +427,18 @@ $bod11Cases = @(
     (CmdCase 'B11 kontrola ② UserSecrets/*/secrets.json' 'cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json' 'ask')
     # 🔴 presne jmeno v tomtez adresari je deny dal - mez je jen u globu
     (CmdCase 'B11 kontrola presne jmeno v adresari'   'cat .github/workflows/secrets.yml' 'deny')
+    # 🔴 C1 (delta review Amber 2026-09-13): glob, ktery na secret MIRI VZOREM, je ask - jmeno globu
+    #    sedne na `envFile.denyNames` nebo glob bez zastupnych znaku vypisuje chranene jmeno. Mutant:
+    #    vratit Test-GlobAimsAtProtectedPath bez (c)+(d) -> `cat *.env` allow -> cervena.
+    (CmdCase 'C1 cat *.env'                           'cat *.env' 'ask')
+    (CmdCase 'C1 cat .env*'                           'cat .env*' 'ask')
+    (CmdCase 'C1 cat *.env.local'                     'cat *.env.local' 'ask')
+    (CmdCase 'C1 cat *secrets.json'                   'cat *secrets.json' 'ask')
+    (CmdCase 'C1 Get-Content src/*.env'               'Get-Content src/*.env' 'ask' 'PowerShell')
+    #    kontrolni skupina C1: glob, ktery na jmeno narazi NAHODOU, mlci dal (pripad vyroku 7)
+    (CmdCase 'C1 kontrola *.yml v adresari'           'head .github/workflows/*.yml' 'allow')
+    (CmdCase 'C1 kontrola *.json'                     'ls docs/technical/*.json' 'allow')
+    (CmdCase 'C1 kontrola *.md'                       'ls *.md' 'allow')
     # ③ N26 kontrolni skupina (git commit -m "**2**", echo **2**, Write-Host "**2**") je v sekci N26 vyse.
 )
 
@@ -456,6 +471,7 @@ Test-SecretsAudit 'jmenna trida yml'   'head -25 .github/workflows/*.yml' 'allow
 Test-SecretsAudit 'jmenna trida *'     'cat *' 'allow' $true
 Test-SecretsAudit 'kontrola txt'       'cat .github/workflows/*.txt' 'allow' $false
 Test-SecretsAudit 'kontrola cesta'     'cat ~/.aws/*' 'ask' $false
+Test-SecretsAudit 'kontrola C1 *.env'  'cat *.env' 'ask' $false
 Test-SecretsAudit 'kontrola bezny glob' 'ls *.md' 'allow' $false
 
 # --- bod 12 + N-H1 + N-H2 + N-H4 + N-H6 (druhy nositel): chranene JMENO v TEXTU prikazu

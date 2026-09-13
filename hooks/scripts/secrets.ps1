@@ -93,9 +93,29 @@ function ConvertTo-GlobRegex([string]$Glob) {
 #       u `**` se kanonicka cesta zkousi za libovolnym prefixem.
 # Glob, ktery adresar chranene cesty NEJMENUJE (`cat *`, `*.json`), na cestu nemiri - to je
 # trida chranena jmenem a resi ji volajici auditem (vyrok 7).
+#
+# !! C1 (delta review Amber 2026-09-13, vada vyroku 7): glob, ktery na secret MIRI VZOREM
+# (`*.env`, `.env*`, `*secrets.json`), je jina trida nez glob, ktery na chranene jmeno NARAZI
+# NAHODOU (`*.yml` ~ `secrets.yml`). Prvni tvar 0.2.0 slil obe do auditu a `cat *.env` zacal
+# mlcet - regrese proti 0.1.11 (`ask`), pricemz `permissions.deny` v GSD kryje jen tool Read.
+# Rozliseni je DOSLOVNE nad textem globu, zadne cteni disku:
+#   (c) `envFile.denyNames` sedne na JMENO globu (`*.env` -> `\.env$`), stejne jako `.pem`
+#       sedi na `denyPathPatterns`;
+#   (d) glob bez zastupnych znaku se ROVNA chranenemu jmenu (`*.env` -> `.env`, `.env*` -> `.env`,
+#       `*secrets.json` -> `secrets.json`) - glob to jmeno vypisuje, ne trefuje.
+# Co tim zustava mez (README 9): `cat *` a `.en?` - glob bez pripony nebo se zastupnym znakem
+# uvnitr jmena deterministicky nerozlisit; audit + pojmenovana mez se spoustecem.
 function Test-GlobAimsAtProtectedPath([string]$GlobNorm, $Sec) {
     if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'denyPathPatterns' @())) { return $true }
     if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'askPathPatterns' @())) { return $true }
+    $globBase = Get-BaseName $GlobNorm
+    if (Test-AnyPattern $globBase @(Get-Field (Get-Field $Sec 'envFile') 'denyNames' @())) { return $true }
+    $literal = ($globBase -replace '[\*\?]', '')
+    if ($literal -ne '') {
+        foreach ($known in @(Get-Field $Sec 'protectedBaseNames' @())) {
+            if ($literal -eq ([string]$known).ToLowerInvariant()) { return $true }
+        }
+    }
     $globRegex = '^' + (ConvertTo-GlobRegex $GlobNorm) + '$'
     $gsegs = @($GlobNorm.Split('/'))
     foreach ($p in @(Get-Field $Sec 'protectedPaths' @())) {

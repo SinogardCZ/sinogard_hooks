@@ -1,7 +1,7 @@
 {
   "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli sad, ne rucnim vyberem - generator je tests/_generate-invariants.ps1 (nalez Amber H2: soubor se na generator odvolaval, ale ten v repu nebyl). Radek bez klice 'hook'/'kind' je z prvniho vydani, kdy byl invariant jen pro branu nad prikazy; chybejici klic znamena 'gate' / 'cmd' a dopisovat ho zpetne by znamenalo prepsat 142 radku, ktere prepsat nemam.",
   "_odebrano": "2026-09-05: tvar 'echo DROP | TABLE users | psql' - radek nikdy neplatil. 'DROP | TABLE' neni platne SQL, takze deny bylo MOJE chybne ocekavani z tehoz kola, ne drivejsi chovani. Nahrazeno tvarem, ktery roury i stredniky v retezci testuje na platnem SQL.",
-  "_zmeneno": "2026-09-07, rozhodnuti Toma T36-O5 = A (audit misto dotazu u nerozebratelnych tvaru): 11 radkum se zmenilo ocekavani z \"ask\" na \"allow\". Radek z invariantu NEODESEL zadny. Seznam: $tool build - bash -c \"$x\" - cmd /c %X% - eval $cmd - $TOOL git push - [Math]::Truncate($x) - neukonceny heredoc (bash \u003c\u003cEOF / git status) - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq (x) -or (git reset --hard) } - $_.Name -like \"*.cs\" (Bash) - bash -c \"$CMD\". Vsechny jsou trida \"nerozebratelne\" (pricina variable, interpreter nebo heredocUnterminated); od 0.1.10 o nich rozhoduje vrstva opravneni Claude Code, ne plugin. NEZMENILY se: \u0026 $cmd, pwsh -enc, ssh host \"cmd\", ssh prod \u003c\u003cEOF, git -c alias., python -c s destruktivnim tokenem - a ZADNY radek s \"deny\". || 2026-09-08, T36-N34 (i) / T36-N35: 7 radkum se zmenilo ocekavani (allow -\u003e ask). Seznam: bash -c \"$x\" - cmd /c %X% - eval $cmd - bash \u003c\u003cEOF / git status - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq \u0027x\u0027 -or (git reset --hard) } - bash -c \"$CMD\". || 2026-09-13, TASK-106 bod 11, vyroky 7 + 8 Amber 2026-09-12 v mandatu Toma (jmenna trida u globu = audit): 3 radkum se zmenilo ocekavani (ask -> allow). Seznam: Get-Content .en? - cat * - cat *.env.",
+  "_zmeneno": "2026-09-07, rozhodnuti Toma T36-O5 = A (audit misto dotazu u nerozebratelnych tvaru): 11 radkum se zmenilo ocekavani z \"ask\" na \"allow\". Radek z invariantu NEODESEL zadny. Seznam: $tool build - bash -c \"$x\" - cmd /c %X% - eval $cmd - $TOOL git push - [Math]::Truncate($x) - neukonceny heredoc (bash \u003c\u003cEOF / git status) - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq (x) -or (git reset --hard) } - $_.Name -like \"*.cs\" (Bash) - bash -c \"$CMD\". Vsechny jsou trida \"nerozebratelne\" (pricina variable, interpreter nebo heredocUnterminated); od 0.1.10 o nich rozhoduje vrstva opravneni Claude Code, ne plugin. NEZMENILY se: \u0026 $cmd, pwsh -enc, ssh host \"cmd\", ssh prod \u003c\u003cEOF, git -c alias., python -c s destruktivnim tokenem - a ZADNY radek s \"deny\". || 2026-09-08, T36-N34 (i) / T36-N35: 7 radkum se zmenilo ocekavani (allow -\u003e ask). Seznam: bash -c \"$x\" - cmd /c %X% - eval $cmd - bash \u003c\u003cEOF / git status - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq \u0027x\u0027 -or (git reset --hard) } - bash -c \"$CMD\". || 2026-09-13, TASK-106 bod 11, vyroky 7 + 8 Amber 2026-09-12 v mandatu Toma (jmenna trida u globu = audit): 3 radkum se zmenilo ocekavani (ask -> allow). Seznam: Get-Content .en? - cat * - cat *.env. || 2026-09-13, C1 delta review Amber 2026-09-13 (vada vyroku 7): glob mirici vzorem na secret = ask, ne audit: 1 radkum se zmenilo ocekavani (allow -> ask). Seznam: cat *.env.",
   "_ponechano": "2026-09-13, TASK-106 bod 7, vyrok 4 Amber 2026-09-12 v mandatu Toma (NECHAT + PREMERIT): ctyri radky s rozsypanym ceskym textem (rm -rf docs/hl?sen?/z?r? deny, rm -rf bin/hl?sen? allow, rm -rf bin/hl?sen?/* ask, docs/logs/session/hl?sen?-01.md allow; znak U+FFFD) se po davkach D1 a D2 verze 0.2.0 PREMERILY a rozhodnuti v nich drzi (sada gate i secrets zelena nad temito radky). Datovana poznamka o puvodu: artefakt behu generatoru, ktery vystup necetl jako UTF-8; spravne radky pribyly v kole 5b. Rozhodnuti v nich sedi - proto zustavaji.",
   "rows": [
     {
@@ -3407,7 +3407,7 @@
     {
       "tool": "Bash",
       "cmd": "cat *.env",
-      "expect": "allow",
+      "expect": "ask",
       "since": "N26 kontrola cat glob",
       "hook": "secrets"
     },
@@ -4340,6 +4340,41 @@
       "cmd": "cat $1/.env",
       "expect": "deny",
       "since": "NH2 hlaska nese cestu s $1 doslova",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env*",
+      "expect": "ask",
+      "since": "C1 cat .env*",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat *.env.local",
+      "expect": "ask",
+      "since": "C1 cat *.env.local",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat *secrets.json",
+      "expect": "ask",
+      "since": "C1 cat *secrets.json",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content src/*.env",
+      "expect": "ask",
+      "since": "C1 Get-Content src/*.env",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "head .github/workflows/*.yml",
+      "expect": "allow",
+      "since": "C1 kontrola *.yml v adresari",
       "hook": "secrets"
     }
   ]

@@ -75,8 +75,10 @@ z fáze 1 téhož úkolu (`docs/logs/session/2026-09-12-task-106-…-hlaseni-01`
 | **obal s LITERÁLNÍ hlavou a proměnnou v těle** (`pwsh -Command "git status; Write-Host $x"`, `bash -c "echo $HOME"`) | ask (`invoked`) | **rozebere se** — rozhodují listy uvnitř | 41 ze 44 dotazů `invoked` mělo tenhle tvar, pravých 0; `Test-Unexpandable` běžel nad celým vnitřkem obalu |
 | obal s proměnnou nebo substitucí **v hlavě** (`bash -c "$x"`, `bash -c "$cmd arg"`, `pwsh -c "$x"`, `cmd /c %X%`, `eval $cmd`, `bash -c "$(cat cmd.txt)"`) | ask | ask | obsah se spustí — kontrolní skupina zúžení |
 | **blok, kterým statement nekončí** (`if ($x) { rm -rf src } else { git status }`, `try { … } catch { … }`, `{ … } # pozn.`) | **allow** (nerozebráno) | podle těla: `deny`/`ask` | stará díra K2 (0.1.4); výrok 2: práh „bez vzorku se brána nemění" chrání před zúžením, ne před zavřením díry |
-| glob, který sedne jen na chráněné **JMÉNO** (`head .github/workflows/*.yml` ~ `secrets.yml`, `ls docs/technical/*.json`, `cat *`) | ask | **audit** (`secrets:wildcardName`, hook mlčí) | 2 ze 3 dotazů `wildcardPath`; výroky 7 + 8 |
+| glob, který na chráněné **JMÉNO** narazí **náhodou** (`head .github/workflows/*.yml` ~ `secrets.yml`, `ls docs/technical/*.json`) | ask | **audit** (`secrets:wildcardName`, hook mlčí) | 2 ze 3 dotazů `wildcardPath`; výroky 7 + 8 |
+| glob, který na secret **míří vzorem** (`cat *.env`, `cat .env*`, `cat *secrets.json`) | ask | ask | 🔴 `C1` delta review Amber 2026-09-13: první tvar 0.2.0 ho poslal do auditu — regrese, `permissions.deny` kryje jen tool `Read`. Jméno globu sedne na `envFile.denyNames`, nebo glob bez zástupných znaků **vypisuje** chráněné jméno |
 | glob, který **míří na chráněnou CESTU** (`cat ~/.aws/*`, `ls ~/.ssh/*`, `.docker/*.json`, `*.pem`) | ask | ask | `denyPathPatterns` sedne doslova na text globu nebo glob jmenuje adresář z `protectedPaths` |
+| glob **bez přípony nebo se zástupným znakem uvnitř jména** (`cat *`, `Get-Content .en?`) | ask | **audit** | 🔴 **pojmenovaná mez:** deterministicky nerozlišit od `*.yml`; spouštěč = fixture adresář u invariantu (omezení 9) |
 | chráněné jméno **v textu**, ne v pozici cesty (`$_.Key`, `SelectOption.Key`, `console.log(obj.key)`, próza v `cat >> x <<EOF`) | **deny** (`secretFile`) | mlčí | N-H1: 3 ze 7 `deny` ve vzorku byly identifikátory s příponou `.Key`, 1 próza |
 | čtení souboru brány s `2>/dev/null` / `2>&1` (`cat ~/.claude/settings.json 2>/dev/null`) | ask (`selfProtect`, „zápis") | mlčí | N-H3: `isWrite` byl jeden příznak na celý příkaz; od 0.2.0 je vlastnost kandidáta |
 | `…KeyId` (`$env:Gsd__Cursor__ActiveKeyId`) | ask (`envVarRead`) | mlčí | N-H4: identifikátor klíče, ne secret — 4 z 5 dotazů `envVarRead` |
@@ -85,7 +87,8 @@ z fáze 1 téhož úkolu (`docs/logs/session/2026-09-12-task-106-…-hlaseni-01`
 🔴 **Co se tím NEotevřelo:** destruktivní literál uvnitř obalu je `deny` dál
 (`pwsh -Command "git reset --hard; Write-Host $x"`), přesné chráněné jméno v pozici cesty
 je `deny` dál (`cat .github/workflows/secrets.yml`, `openssl -in server.key`), přesměrování
-a `--file=` s chráněnou cestou jsou `deny` dál (N14). Politika `gate.opaque` se **nezměnila**
+a `--file=` s chráněnou cestou jsou `deny` dál (N14), `cat *.env` / `cat .env*` / `cp *.pem x`
+jsou `ask` dál (`C1`). Politika `gate.opaque` se **nezměnila**
 (`invoked` = `ask`) — zúžení je v kódu, ne v konfiguraci.
 
 🔴 **„audit" není totéž co „allow".** Hook **mlčí** — zapíše řádek do
@@ -313,6 +316,18 @@ aby si je nikdo nemusel objevit sám.
    ho shell rozvine** (nález N26, 0.1.8): nad neuvozeným tokenem v pozici cesty u příkazu
    ze `secrets.pathCommands`; `git commit -m "**2**"`, `echo **2**` ani `Write-Host "**2**"`
    nejsou cesty.
+   🔴 **`C1` (delta review Amber 2026-09-13, vada výroku 7):** glob, který na secret **míří
+   vzorem**, není totéž co glob, který na chráněné jméno **narazí náhodou** — a první tvar
+   0.2.0 obě třídy slil do auditu, takže `cat *.env` **mlčel** (regrese proti 0.1.11; v GSD
+   `.env` nese pět secretů a `permissions.deny` kryje jen tool `Read`). Rozlišení je doslovné
+   nad textem globu, bez čtení disku: **(c)** jméno globu sedne na `envFile.denyNames`
+   (`*.env`, `*.env.local`), **(d)** glob bez zástupných znaků se rovná chráněnému jménu
+   (`.env*` → `.env`, `*secrets.json` → `secrets.json`). Obojí → `ask` jako `*.pem`.
+   ⚠️ **Pojmenovaná mez, která zůstává:** `cat *` (glob bez přípony) a `Get-Content .en?`
+   (zástupný znak **uvnitř** jména) deterministicky od `*.yml` nerozlišit — končí auditem,
+   ne dotazem. V repu s secrety v `.env` to má konkrétní cenu: `cat *` v kořeni repa `.env`
+   přečte. Spouštěč přehodnocení je týž jako výše (fixture adresář u invariantu); do té doby
+   je druhou vrstvou `permissions.deny` (jen `Read`) a auto-mode klasifikátor.
 10. **SQL, které v příkazu není vidět, se ZAPÍŠE DO AUDITU a pustí dál.**
     `psql -f migrace.sql`, `sqlcmd -i migrace.sql`, `psql -h prod < drop.sql`,
     `psql -h prod <<< $SQL` i `cat migrace.sql | psql` — obsah souboru ani roury hook
