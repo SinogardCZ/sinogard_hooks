@@ -359,6 +359,83 @@ function Invoke-InvariantRows([string]$HookName) {
     }
 }
 
+# TASK-117 (0.3.0): pripady v datovem souboru tests/fixtures/task117-<hook>.json. Radek nese
+# tool, cmd, expect (nebo expectNot), volitelne mode (permission_mode), override (text
+# projektoveho prepisu; `@<klic>` = hodnota `_override<Klic>` z tehoz souboru), reasonContains,
+# audit (auditShape regex, auditDecision, auditNotContains) a faze. Radek s `faze` vetsi nez
+# `$script:Task117Faze` ceka na schvaleny navrh a pocita se jako PRESKOCENY - ne zeleny.
+$script:Task117Faze = 1
+function Invoke-Task117Rows([string]$HookName) {
+    $path = Join-Path $PSScriptRoot ('fixtures/task117-' + $HookName + '.json')
+    $doc = [System.IO.File]::ReadAllText($path, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+    $rows = @($doc.rows)
+    Assert-True ($rows.Count -ge 1) ("[task117/{0}] fixture nese pripady: {1}" -f $HookName, $rows.Count)
+    foreach ($row in $rows) {
+        $faze = if ($row.PSObject.Properties['faze']) { [int]$row.faze } else { 1 }
+        $expect = if ($row.PSObject.Properties['expect']) { [string]$row.expect } else { '' }
+        if ($expect -ne '') { Add-CollectedCase $HookName 'cmd' ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name) }
+        if (Test-CollectOnly) { continue }
+        $label = ("[task117/{0}/{1}] {2}" -f $row.group, $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
+        if ($faze -gt $script:Task117Faze) {
+            $script:Skip++
+            if ($Full) { Write-Host ("    SKIP {0} (faze {1})" -f $label, $faze) -ForegroundColor Yellow }
+            continue
+        }
+        $template = if ([string]$row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+        $values = @{ 'tool_input.command' = [string]$row.cmd }
+        if ($row.PSObject.Properties['mode']) { $values['permission_mode'] = [string]$row.mode }
+        $json = New-HookInput $template $values
+        # Bez vlastniho CLAUDE_PROJECT_DIR by hook vzal projekt z `cwd` sablony (W:/dev/gsd/repo)
+        # a na stroji, kde GSD repo je, by mlcky platil jeho skutecny prepis (`gate.opaque.*`
+        # = audit) - sada by merila konfiguraci GSD, ne vychozi chovani. Prazdny projekt proto vzdy.
+        $envh = @{ 'CLAUDE_PROJECT_DIR' = (Join-Path $script:TempDir ('t117p-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))) }
+        [void][System.IO.Directory]::CreateDirectory($envh['CLAUDE_PROJECT_DIR'])
+        if ($row.PSObject.Properties['override']) {
+            $ov = [string]$row.override
+            if ($ov.StartsWith('@')) {
+                $key = '_override' + $ov.Substring(1, 1).ToUpperInvariant() + $ov.Substring(2)
+                $ov = [string]$doc.PSObject.Properties[$key].Value
+            }
+            $dir = Join-Path $script:TempDir ('t117-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+            [void][System.IO.Directory]::CreateDirectory((Join-Path $dir '.claude'))
+            [System.IO.File]::WriteAllText((Join-Path $dir '.claude/sinogard-hooks.json'), $ov, ([System.Text.UTF8Encoding]::new($false)))
+            $envh['CLAUDE_PROJECT_DIR'] = $dir
+        }
+        $auditDir = Join-Path $script:TempDir ('t117a-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+        $envh['CLAUDE_PLUGIN_DATA'] = $auditDir
+        $r = Invoke-Hook -Script ($HookName + '.ps1') -InputJson $json -Environment $envh
+        $decision = Get-Decision $r
+        if ($expect -ne '') { Assert-Equal $expect $decision $label }
+        if ($row.PSObject.Properties['expectNot']) {
+            Assert-True ($decision -ne [string]$row.expectNot) ("{0}: nesmi byt <{1}>, dostano <{2}>" -f $label, $row.expectNot, $decision)
+        }
+        if ($row.PSObject.Properties['reasonContains']) {
+            $reason = ''
+            if (-not [string]::IsNullOrWhiteSpace($r.Stdout)) { $reason = [string]($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason }
+            Assert-True ($reason.Contains([string]$row.reasonContains)) ("{0}: duvod nese <{1}>: {2}" -f $label, $row.reasonContains, $reason)
+        }
+        if ($row.PSObject.Properties['auditShape']) {
+            $auditPath = Join-Path $auditDir 'gate-audit.jsonl'
+            $lines = @()
+            if ([System.IO.File]::Exists($auditPath)) {
+                $lines = @([System.IO.File]::ReadAllLines($auditPath, ([System.Text.UTF8Encoding]::new($false))) | Where-Object { $_ -ne '' })
+            }
+            $hit = $null
+            foreach ($l in $lines) {
+                $o = $l | ConvertFrom-Json
+                if ([string]$o.shape -match [string]$row.auditShape -and
+                    (-not $row.PSObject.Properties['auditDecision'] -or [string]$o.decision -eq [string]$row.auditDecision)) { $hit = $l; break }
+            }
+            Assert-True ($null -ne $hit) ("{0}: radek auditu shape~<{1}> decision=<{2}>; radky: {3}" -f $label, $row.auditShape, $row.auditDecision, ($lines -join ' || '))
+            if ($row.PSObject.Properties['auditNotContains']) {
+                foreach ($l in $lines) {
+                    Assert-True (-not $l.Contains([string]$row.auditNotContains)) ("{0}: audit NEnese text prikazu <{1}>" -f $label, $row.auditNotContains)
+                }
+            }
+        }
+    }
+}
+
 function Get-HookCeilingMs { return $script:HookCeilingMs }
 
 # Jen pro test opakovani (kolo 5b): sada si strop docasne snizi, aby se opakovani

@@ -1799,6 +1799,11 @@ if (-not (Test-CollectOnly)) {
     }
 }
 
+# --- TASK-117 (0.3.0): H-f dbDestroyLocal (13), H-a invoked (11), H-b audit ask/deny (8).
+#     Pripady v tests/fixtures/task117-gate.json; vycet a mutanti v repu GSD docs/logs/mutants/task-117/.
+Start-Case 'TASK-117 (fixtures/task117-gate.json)'
+Invoke-Task117Rows 'gate'
+
 Write-CollectedCases
 Assert-TimingBudget
 

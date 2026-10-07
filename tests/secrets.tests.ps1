@@ -626,6 +626,12 @@ if ($null -eq $missing) {
 
 Invoke-InvariantRows 'secrets'
 
+# --- TASK-117 (0.3.0): jmenujici tvary (polozka 7), pathCommands (4), audit (H-b), H-g + Z117-Q15.
+#     Pripady v tests/fixtures/task117-secrets.json; vycet a mutanti v repu GSD
+#     docs/logs/mutants/task-117/. TDD: faze 1 = cervena z praveho duvodu nad 0.2.0.
+Start-Case 'TASK-117 (fixtures/task117-secrets.json)'
+Invoke-Task117Rows 'secrets'
+
 Write-CollectedCases
 Assert-TimingBudget
 
