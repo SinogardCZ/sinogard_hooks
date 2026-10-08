@@ -483,7 +483,9 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
         foreach ($s in $sources) {
             $leaf = (([string]$s) -replace '\\', '/').TrimEnd('/')
             $leaf = $leaf.Substring($leaf.LastIndexOf('/') + 1)
-            if ($leaf -ne '') { [void]$out.Add(([string]$d).TrimEnd('/', '\') + '/' + $leaf) }
+            # Zdroj se zastupnym znakem (`cp *.pem /tmp/x`) se neskladani: rozhoduje jeho cteni (glob, `ask`) jako
+            # v 0.2.0 - slozeny `/tmp/x/*.pem` by z dotazu udelal `deny` (zachytila sada N26, CI 37844345253).
+            if ($leaf -ne '' -and $leaf -notmatch '[\*\?]') { [void]$out.Add(([string]$d).TrimEnd('/', '\') + '/' + $leaf) }
         }
     }
     return ,@($out)
