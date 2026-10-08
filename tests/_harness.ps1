@@ -109,6 +109,9 @@ $script:RepoRoot   = Split-Path $PSScriptRoot -Parent
 $script:ScriptsDir = Join-Path $script:RepoRoot 'hooks/scripts'
 $script:TempDir    = Join-Path ([System.IO.Path]::GetTempPath()) ("sinogard-hooks-tests-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][System.IO.Directory]::CreateDirectory($script:TempDir)
+# Prazdny projekt (bez `.claude/sinogard-hooks.json`) - vychozi CLAUDE_PROJECT_DIR kazdeho behu hooku.
+$script:EmptyProjectDir = Join-Path $script:TempDir 'prazdny-projekt'
+[void][System.IO.Directory]::CreateDirectory($script:EmptyProjectDir)
 
 # Zapise vstup hooku do docasneho souboru jako UTF-8 BEZ BOM (BOM by rozbil
 # ConvertFrom-Json na strane hooku) a vrati cestu.
@@ -196,6 +199,15 @@ function Invoke-HookOnce {
     # kanarkove testy doma merily neco jineho nez na CI - proslo to jen proto, ze
     # muj shell ji nema. Test nesmi merit okolni prostredi; hodnotu si urcuje sam.
     $psi.EnvironmentVariables['SINOGARD_HOOKS_DRYRUN'] = ''
+    # TASK-117 (0.3.0): tataz trida "hodnota z okoli" jeste dvakrat. Bez CLAUDE_PROJECT_DIR
+    # bere hook projekt z `cwd` sablony (W:/dev/gsd/repo) a na stroji, kde GSD repo je, mlcky
+    # platil jeho skutecny prepis (`gate.opaque.*` = audit) - sada merila konfiguraci GSD,
+    # ne vychozi chovani (CI ten adresar nema, takze tam merila neco jineho). A od 0.3.0 hook
+    # zapisuje audit i u `ask`/`deny` (H-b): zdedeny CLAUDE_PLUGIN_DATA by sada psala do
+    # skutecneho auditu. Vychozi je proto prazdny projekt a zadny audit; pripad si oboji
+    # urcuje sam parametrem -Environment.
+    $psi.EnvironmentVariables['CLAUDE_PROJECT_DIR'] = $script:EmptyProjectDir
+    $psi.EnvironmentVariables['CLAUDE_PLUGIN_DATA'] = ''
 
     if ($Environment) {
         foreach ($k in $Environment.Keys) { $psi.EnvironmentVariables[$k] = [string]$Environment[$k] }
@@ -314,7 +326,12 @@ function Add-CollectedCase([string]$Hook, [string]$Kind, [string]$Tool, [string]
 function Write-CollectedCases {
     if (-not (Test-CollectOnly)) { return }
     Write-Host '<<<SINOGARD-CASES'
-    Write-Host (($script:CollectedCases | ConvertTo-Json -Depth 5 -Compress))
+    # TASK-117: pripad s typografickou uvozovkou (M25, U+201C) prosel konzoli
+    # powershell.exe pres OEM stranku a "best fit" z U+201C udelal `"` - JSON se rozbil a generator
+    # spadl. Mimo-ASCII znaky se proto vypisuji jako \uXXXX (uvnitr retezce JSON je to tyz znak).
+    $jsonCases = ($script:CollectedCases | ConvertTo-Json -Depth 5 -Compress)
+    $jsonCases = [regex]::Replace($jsonCases, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
+    Write-Host $jsonCases
     Write-Host 'SINOGARD-CASES>>>'
 }
 
@@ -364,7 +381,7 @@ function Invoke-InvariantRows([string]$HookName) {
 # projektoveho prepisu; `@<klic>` = hodnota `_override<Klic>` z tehoz souboru), reasonContains,
 # audit (auditShape regex, auditDecision, auditNotContains) a faze. Radek s `faze` vetsi nez
 # `$script:Task117Faze` ceka na schvaleny navrh a pocita se jako PRESKOCENY - ne zeleny.
-$script:Task117Faze = 1
+$script:Task117Faze = 2
 function Invoke-Task117Rows([string]$HookName) {
     $path = Join-Path $PSScriptRoot ('fixtures/task117-' + $HookName + '.json')
     $doc = [System.IO.File]::ReadAllText($path, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
@@ -373,14 +390,21 @@ function Invoke-Task117Rows([string]$HookName) {
     foreach ($row in $rows) {
         $faze = if ($row.PSObject.Properties['faze']) { [int]$row.faze } else { 1 }
         $expect = if ($row.PSObject.Properties['expect']) { [string]$row.expect } else { '' }
-        if ($expect -ne '') { Add-CollectedCase $HookName 'cmd' ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name) }
-        if (Test-CollectOnly) { continue }
         $label = ("[task117/{0}/{1}] {2}" -f $row.group, $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
+        # Faze se kontroluje PRED sberem: radek, ktery ceka na schvaleny navrh, do invariantu
+        # nepatri - generator by z nej udelal tvrzeni, ktere zadna sada nemerila.
         if ($faze -gt $script:Task117Faze) {
+            if (Test-CollectOnly) { continue }
             $script:Skip++
             if ($Full) { Write-Host ("    SKIP {0} (faze {1})" -f $label, $faze) -ForegroundColor Yellow }
             continue
         }
+        # Radek s projektovym prepisem nebo rezimem meri JINY stav nez invariant (ten bezi
+        # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim.
+        if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode']) {
+            Add-CollectedCase $HookName 'cmd' ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
+        }
+        if (Test-CollectOnly) { continue }
         $template = if ([string]$row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
         $values = @{ 'tool_input.command' = [string]$row.cmd }
         if ($row.PSObject.Properties['mode']) { $values['permission_mode'] = [string]$row.mode }

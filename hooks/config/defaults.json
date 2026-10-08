@@ -1,5 +1,25 @@
 {
-  "_comment": "Vychozi konfigurace sinogard-hooks. Projektovy override: ${CLAUDE_PROJECT_DIR}/.claude/sinogard-hooks.json (stejny tvar, MELKE slouceni - klic v override nahradi cely klic zde). Skripty .ps1 jsou zamerne ASCII-only, vsechny lidske texty zijou tady a ctou se jako UTF-8.",
+  "_comment": "Vychozi konfigurace sinogard-hooks. Projektovy override: ${CLAUDE_PROJECT_DIR}/.claude/sinogard-hooks.json (stejny tvar, JEDNOUROVNOVE slouceni od 0.1.11 - objekt se slucuje klic po klici o jednu uroven, pole a skalary se nahrazuji CELE; obsah override kontroluje od 0.3.0 _overridePolicy). Skripty .ps1 jsou zamerne ASCII-only, vsechny lidske texty zijou tady a ctou se jako UTF-8.",
+
+  "_overridePolicyComment": "TASK-117 H-c (0.3.0, Z117-Q21 = A, Tom 2026-10-08): projektový přepis smí bránu jen ZPŘÍSNIT, s pojmenovanými výjimkami. Pravidla se čtou z TÉTO výchozí konfigurace PŘED sloučením — přepis je sám změnit nemůže. Pravidla: `superset` = pole přepisu musí obsahovat všechny výchozí položky (přidání zpřísňuje; kratší pole by tiše odebralo ochranu, protože pole se nahrazují celá) · `subset` = pole přepisu smí jen vybírat z výchozích (přidání povoluje) · `localHosts` = jen jména z pevné místní množiny v kódu (localhost, 127.0.0.1, ::1, (local), ., (localdb)\\<instance>) — jinak by přepis udělal ze vzdáleného hostitele „lokální“ · `opaque` = hodnoty `audit`|`ask`, `encoded` jen `ask` · `envFile` = `denyNames` nadmnožina, `allowNames` podmnožina, `otherPolicy` beze změny · `dbDestroyLocal` = schéma H-f · `accept` = beze změny. Klíč bez pravidla (regexy jmen proměnných, `shapes`, `auditFile`, neznámý klíč) se ODMÍTNE. Režim selhání: odmítne se jen vadný klíč (platí jeho výchozí hodnota), zbytek přepisu platí; kanárek vypíše jména odmítnutých klíčů a každé volání hooku, které je potkalo, zapíše audit `config:overrideRejected:<klíč>`.",
+  "_overridePolicy": {
+    "acceptTopLevel": ["hooks", "texts", "notify", "resumeCost"],
+    "gate": {
+      "denyPatterns": "superset", "askPatterns": "superset", "rawDestructiveTokens": "superset",
+      "interpreterDestructiveTokens": "superset", "sqlClients": "superset", "shellInterpreters": "superset",
+      "codeInterpreters": "superset", "remoteShells": "superset", "protectedBranches": "superset",
+      "allowedRemoveRoots": "subset",
+      "localDbHosts": "localHosts",
+      "opaque": "opaque",
+      "dbDestroyLocal": "dbDestroyLocal"
+    },
+    "secrets": {
+      "denyPathPatterns": "superset", "askPathPatterns": "superset", "selfProtectPathPatterns": "superset",
+      "protectedBaseNames": "superset", "protectedPaths": "superset", "pathCommands": "superset", "writeCommands": "superset",
+      "dataHeredocHosts": "subset",
+      "envFile": "envFile"
+    }
+  },
 
   "hooks": {
     "gate": true,
@@ -19,6 +39,8 @@
     "canaryDryRun": " · notify: DRY-RUN (upozornění se neposílají)",
     "_canaryAuditComment": "TASK-106, výrok 6 (2026-09-12): audit brány měl 1 197 řádků a nula čtenářů. Kanárek proto hlásí přírůstek řádků gate-audit.jsonl od minulého SessionStart; celý rozpad dá tests/_audit-report.ps1 (krok uzávěry). Bez audit souboru se nic nepřipojí.",
     "canaryAudit": " · audit +{delta} řádků od minulého startu ({total} celkem)",
+    "_canaryOverrideRejectedComment": "TASK-117 H-c (0.3.0): klíč projektového přepisu, který by bránu uvolnil nebo který plugin nezná, se odmítne (platí výchozí hodnota) — kanárek to řekne jménem klíče, nikdy hodnotou.",
+    "canaryOverrideRejected": " · přepis: odmítnuto {count} klíčů ({keys})",
     "resumeMessage": "Resume po {h} h {m} min · {tokens} tokenů v kontextu · cache expirovala: {expired} · odhad zápisu do cache ${usd}",
     "resumeYes": "ano",
     "resumeNo": "ne",
@@ -28,6 +50,9 @@
   "gate": {
     "allowedRemoveRoots": ["bin", "obj", "node_modules", "tmp", "dist", "TestResults"],
     "localDbHosts": ["localhost", "127.0.0.1", "::1"],
+
+    "_dbDestroyLocalComment": "TASK-117 H-f (0.3.0; Z117-Q13 = A, tvar Z117-Q19 = A, Tom 2026-10-08; žádost HRMS): rozhodnutí o destruktivní operaci nad LOKÁLNÍ databází je nastavitelné projektovým přepisem. `decision`: `ask` (výchozí = 0.2.0) | `deny` | `allow`. `allow` platí JEN pro příkaz, který jméno serveru i databáze nese sám a jednoznačně: `sqlcmd -S <server> -Q \"[ALTER DATABASE [X] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;] DROP DATABASE [X]\"` (přepínače jen -S, -Q, -E, -b) nebo `dotnet ef database drop --connection \"Server=…;Database=…\"` (EF Core 11+). Server musí být v `hosts` A v pevné místní množině v kódu; jméno DB musí sedět na vzor z `databases` (glob `*`/`?`, ukotvený na celé jméno, bez ohledu na velikost písmen). „allow“ = hook MLČÍ a zapíše audit `gate:dbDestroyLocal` — NE `permissionDecision: allow`; v headless běhu je potřeba i pravidlo `permissions.allow` Claude Code. Vzdálený hostitel = `deny` vždy; `sqllocaldb delete` (Z117-Q20) se `allow` nikdy netýká.",
+    "dbDestroyLocal": { "decision": "ask", "databases": [], "hosts": [] },
 
     "_auditFileComment": "Rozhodnutí Toma 2026-09-07/T36-F1 T-10 A: tvary, kde SQL v příkazu není vidět, se už neptají — zapíšou se sem a pustí dál (audit místo brány). Loguje se UDÁLOST, ne obsah: čas, nástroj, id tvaru, rozhodnutí. Soubor vzniká v ${CLAUDE_PLUGIN_DATA}; bez té proměnné se nezapisuje nic a hook mlčí.",
     "auditFile": "gate-audit.jsonl",
@@ -102,6 +127,7 @@
       "sqlFromPipe": "SQL, které v příkazu není vidět — teče do klienta z roury nebo ze souboru ({text})",
       "dbDestroyRemote": "destruktivní DB operace na hostiteli {host}",
       "dbDestroyLocal": "destruktivní DB operace na lokální databázi (dotaz v terminálu = SCHVALUJU vynucené nástrojem)",
+      "dbDestroyLocalDenied": "destruktivní DB operace na lokální databázi — projekt ji zakázal (gate.dbDestroyLocal = deny)",
       "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
       "pushDeleteRefspec": "smazání vzdálené větve prázdným refspecem",
       "deleteFromPipeline": "mazání se vstupem z roury (cíl není v příkazu vidět)",
@@ -164,8 +190,10 @@
       "cat", "type", "get-content", "gc", "more", "less", "head", "tail",
       "cp", "copy", "copy-item", "mv", "move", "move-item",
       "ls", "dir", "get-childitem", "gci", "get-item", "gi",
-      "compress-archive", "tar", "zip", "scp", "rsync", "findstr", "select-string"
+      "compress-archive", "tar", "zip", "scp", "rsync", "findstr", "select-string",
+      "openssl", "ssh-keygen", "keytool", "certutil", "gpg"
     ],
+    "_pathCommands0300Comment": "TASK-117 položka 4 (Z117-Q6 = A, Tom 2026-10-01): nástroje na klíče a certifikáty čtou soubor z poziční cesty i z hodnoty přepínače (`openssl rsa -in private.pem`, `ssh-keygen -y -f key`, `keytool -keystore app.jks`, `certutil -dump cert.pfx`, `gpg --decrypt x.gpg`). Do 0.2.0 tu nebyly a holé jméno souboru bez lomítka (README mez 22) mlčelo.",
 
     "_writeCommandsComment": "TASK-106 bod 9 + N-H3 (0.2.0): zápis je vlastnost KANDIDÁTA, ne příkazu. Do 0.1.11 jeden příznak nad celým textem udělal z `cat ~/.claude/settings.json 2>/dev/null` „zápis do souboru, kterým se brána vypíná“. Zápis = cíl přesměrování `>`/`>>` (i `2> soubor`) a poziční argument těchto příkazů; vše ostatní je čtení.",
     "writeCommands": ["tee", "set-content", "sc", "out-file", "add-content", "ac"],

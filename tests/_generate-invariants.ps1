@@ -8,9 +8,13 @@
   v repu nebyl. Pri pristim rustu sady by ho nikdo nezopakoval, invariant by
   zkamenel na 142 radcich a prestal by delat to, kvuli cemu vznikl.
 
-  Postup: sady se spusti v rezimu SBERU (parametr -Collect) - pripady se jen
-  ohlasi, hook se nespousti, takze to trva sekundy. Vysledek se PRIDA
-  k existujicim radkum.
+  Postup: sady se spusti v rezimu SBERU (parametr -Collect) - pripady z poli
+  `Test-Cases`, invariantu a fixtur TASK-117 se jen ohlasi a hook se pro ne
+  nespousti. Vysledek se PRIDA k existujicim radkum.
+  N-H8 (TASK-117, A117-O1): do 0.2.0 tu stalo "trva to sekundy" - nepravda. Bloky
+  mimo `Test-Cases` (bod 4, K-2, audit, J2, bod 14 ...) hook spousti i v rezimu sberu.
+  Zmereno 2026-10-08 (pwsh 7, klon 0.3.0, oba hooky za sebou): 253 s celkem;
+  test bodu 14 v gate.tests.ps1 spousti generator dvakrat.
 
   Nalez Amber L2: tenhle odstavec jmenoval promennou prostredi SINOGARD_HOOKS_COLLECT.
   Ta rezim od opravy J2 nezapina, naopak sadu SHODI - popis by navadel na presny

@@ -420,7 +420,10 @@ $bod11Cases = @(
     # 🔴 kontrolni skupina ②: glob MIRICI na cestu z `denyPathPatterns` zustava ask
     (CmdCase 'B11 kontrola ② ~/.aws/*'                'cat ~/.aws/*' 'ask')
     (CmdCase 'B11 kontrola ② .docker/*.json'          'cat .docker/*.json' 'ask')
-    (CmdCase 'B11 kontrola ② ~/.ssh/*'                'ls ~/.ssh/*' 'ask')
+    # TASK-117 (Z117-Q2/Q3/Q5 = A): `ls ~/.ssh/*` jen VYPISUJE jmena - jmenujici tvar, od 0.3.0 ticho
+    # (zadani par. 4: flip invariantu vyctem, README 80). Kontrolni skupina tehoz globu je ctouci tvar.
+    (CmdCase 'B11 kontrola ② ~/.ssh/* vypis (Z117-Q5)' 'ls ~/.ssh/*' 'allow')
+    (CmdCase 'B11 kontrola ② ~/.ssh/* cteni'          'cat ~/.ssh/*' 'ask')
     (CmdCase 'B11 kontrola ② ~/.kube/*'               'Get-Content ~/.kube/*' 'ask' 'PowerShell')
     (CmdCase 'B11 kontrola ② .claude/*'               'cat .claude/*' 'ask')
     (CmdCase 'B11 kontrola ② **/credentials'          'cat **/credentials' 'ask')
@@ -461,8 +464,15 @@ function Test-SecretsAudit([string]$Name, [string]$Cmd, [string]$Expect, [bool]$
             Assert-True ($line -match '"shape":"secrets:wildcardName"') ("[audit/{0}] tvar je secrets:wildcardName" -f $Name)
             Assert-True ($line -match '"decision":"allow"') ("[audit/{0}] rozhodnuti allow (= mlci)" -f $Name)
         }
-    } else {
+    } elseif ($Expect -eq 'allow') {
         Assert-True (-not [System.IO.File]::Exists($path)) ("[audit/{0}] radek auditu NEVZNIKL" -f $Name)
+    } else {
+        # TASK-117 H-b (Z117-Q8 = B): od 0.3.0 se zapisuje i `ask`/`deny` - s id tvaru a SKUTECNYM
+        # rozhodnutim. Kontrolni skupina proto uz netvrdi "zadny radek", ale "zadny radek, ktery by
+        # tvrdil ticho": tvar neni wildcardName a rozhodnuti je to vydane.
+        $line = if ([System.IO.File]::Exists($path)) { [System.IO.File]::ReadAllText($path, ([System.Text.UTF8Encoding]::new($false))) } else { '' }
+        Assert-True ($line -notmatch 'secrets:wildcardName') ("[audit/{0}] zadny radek wildcardName" -f $Name)
+        Assert-True ($line -match ('"decision":"' + $Expect + '"') -and $line -notmatch '"decision":"allow"') ("[audit/{0}] radek nese rozhodnuti {1}, ne allow" -f $Name, $Expect)
     }
 }
 
@@ -601,7 +611,14 @@ $ovEnvFile = '{"secrets":{"envFile":{"maxBytes":1024}}}'
 Test-PartialSecretsOverride 'id_rsa drzi i pri override envFile' 'id_rsa' 'deny' $ovEnvFile
 # 🔴 kontrolni skupina: co override skutecne prepsal, PLATI - jinak by "nic se
 #    neztratilo" mohlo znamenat "override se vubec nenacetl"
-Test-PartialSecretsOverride 'prazdne askPathPatterns plati' '.claude/settings.local.json' 'allow' $ovAskEmpty
+# TASK-117 H-c (Z117-Q21 = A, Tom 2026-10-08; navrh 01 (j) to predpovedel): do 0.2.0 tu stalo
+# `allow` - prazdne `askPathPatterns` platilo. Prazdne pole je UVOLNENI, H-c ho odmitne a plati
+# vychozi -> ask. Kontrolni skupina "override se nacetl" je proto zprisnujici klic, ktery PLATI.
+Test-PartialSecretsOverride 'prazdne askPathPatterns odmitnuto (H-c)' '.claude/settings.local.json' 'ask' $ovAskEmpty
+$ovAskPlus = '{"secrets":{"askPathPatterns":["(^|/)\\.claude/settings\\.local\\.json$","(^|/)tajne\\.txt$"]}}'
+Test-PartialSecretsOverride 'zprisnujici askPathPatterns plati (H-c)' 'docs/tajne.txt' 'ask' $ovAskPlus
+Test-PartialSecretsOverride 'zprisnujici askPathPatterns drzi vychozi' '.claude/settings.local.json' 'ask' $ovAskPlus
+Test-PartialSecretsOverride 'kontrola: bez prepisu tajne.txt mlci' 'docs/tajne.txt' 'allow' '{}'
 
 # ------------------------------------------------- cesta na cizi jednotce ---
 

@@ -78,6 +78,24 @@ $expectedOff = $expectedOff -replace '\{notify\}', $cfg.texts.canaryOff
 Assert-Equal $expectedOff $msg2 'vypnuty notify je v kanarku videt'
 Assert-True ($msg2 -ne $msg) 'kanarek se zmenil (jinak by nemohl selhat)'
 
+# TASK-117 H-c (Z117-Q21 = A): odmitnuty klic projektoveho prepisu je v kanarku videt JMENEM,
+# nikdy hodnotou. Kontrolni skupina: zprisnujici prepis (GSD dnes) kanarek nemeni.
+Start-Case 'H-c: kanarek hlasi odmitnute klice prepisu'
+function Get-CanaryWithOverride([string]$Name, [string]$Json) {
+    $d = Join-Path $script:TempDir ('projekt-hc-' + $Name)
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $d '.claude'))
+    [System.IO.File]::WriteAllText((Join-Path $d '.claude/sinogard-hooks.json'), $Json, ([System.Text.UTF8Encoding]::new($false)))
+    $rr = Invoke-Hook -Script 'resume-cost.ps1' -InputJson (New-HookInput 'sessionstart-startup' @{}) -Environment @{ CLAUDE_PROJECT_DIR = $d }
+    return (Get-SystemMessage $rr)
+}
+$rejText = $cfg.texts.canaryOverrideRejected
+$msgRej = Get-CanaryWithOverride 'rej' '{"gate":{"denyPatterns":[],"localDbHosts":["db.firma.cz"]}}'
+$expRej = $msg + $rejText.Replace('{count}', '2').Replace('{keys}', 'gate.denyPatterns, gate.localDbHosts')
+Assert-Equal $expRej $msgRej '[H-c] kanarek jmenuje oba odmitnute klice'
+Assert-True (-not $msgRej.Contains('db.firma.cz')) '[H-c] kanarek NEnese hodnotu klice'
+$msgOk = Get-CanaryWithOverride 'ok' '{"gate":{"opaque":{"invoked":"audit","variable":"audit","interpreter":"audit","heredocUnterminated":"audit","depth":"audit"}}}'
+Assert-Equal $msg $msgOk '[H-c] dnesni prepis GSD kanarek nemeni (zadny odmitnuty klic)'
+
 # ------------------------------------------------------ resume s hodnotami ---
 
 Start-Case 'resume s plnym vstupem -> cena + radek JSONL'

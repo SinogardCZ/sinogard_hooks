@@ -175,7 +175,7 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # prehodnoceni (fixture adresar u invariantu) nese README.
     if ($AllowGlob -and $norm -match '[\*\?]') {
         if (Test-GlobAimsAtProtectedPath $norm $sec) {
-            return @{ Decision = 'ask'
+            return @{ Id = 'wildcardPath'; Decision = 'ask'
                       Shape = (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)) }
         }
         $globRegex = '^' + (ConvertTo-GlobRegex $base) + '$'
@@ -195,30 +195,30 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     if ($base -match '^\.env($|\.)') {
         if (Test-AnyPattern $base @(Get-Field $envCfg 'allowNames' @())) { return $null }
         if (Test-AnyPattern $base @(Get-Field $envCfg 'denyNames' @())) {
-            return @{ Decision = 'deny'
+            return @{ Id = 'secretFile'; Decision = 'deny'
                       Shape = (([string](Get-Field $shapes 'secretFile' '{path}')).Replace('{path}', [string]($Path))) }
         }
         $rel = Get-RelativeToCwd $norm (ConvertTo-NormalPath $script:Cwd)
         if (Test-GitTracked $script:Cwd $rel) { return $null }
-        return @{ Decision = 'ask'
+        return @{ Id = 'envFileUntracked'; Decision = 'ask'
                   Shape = (([string](Get-Field $shapes 'envFileUntracked' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
     # (2) tvrde zakazane tvary
     if (Test-AnyPattern $norm @(Get-Field $sec 'denyPathPatterns' @())) {
-        return @{ Decision = 'deny'
+        return @{ Id = 'secretFile'; Decision = 'deny'
                   Shape = (([string](Get-Field $shapes 'secretFile' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
     # (3) sebeochrana - soubory, kterymi se brana vypina (jen zapis)
     if ($IsWrite -and (Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @()))) {
-        return @{ Decision = 'ask'
+        return @{ Id = 'selfProtect'; Decision = 'ask'
                   Shape = (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
     # (4) seda zona
     if (Test-AnyPattern $norm @(Get-Field $sec 'askPathPatterns' @())) {
-        return @{ Decision = 'ask'
+        return @{ Id = 'settingsLocal'; Decision = 'ask'
                   Shape = (([string](Get-Field $shapes 'settingsLocal' '{path}')).Replace('{path}', [string]($Path))) }
     }
 
@@ -250,7 +250,8 @@ $script:PathReadCommandsFallback = @(
     'cat', 'type', 'get-content', 'gc', 'more', 'less', 'head', 'tail',
     'cp', 'copy', 'copy-item', 'mv', 'move', 'move-item',
     'ls', 'dir', 'get-childitem', 'gci', 'get-item', 'gi',
-    'compress-archive', 'tar', 'zip', 'scp', 'rsync', 'findstr', 'select-string'
+    'compress-archive', 'tar', 'zip', 'scp', 'rsync', 'findstr', 'select-string',
+    'openssl', 'ssh-keygen', 'keytool', 'certutil', 'gpg'
 )
 $script:WriteCommandsFallback = @('tee', 'set-content', 'sc', 'out-file', 'add-content', 'ac')
 
@@ -325,6 +326,60 @@ function Remove-DataHeredocBody([string]$Command, $Config) {
     return ($keep -join "`n")
 }
 
+# N-C (TASK-117): zavorka seskupeni na okraji tokenu (`(Get-ChildItem`, `<soubor>)`) do cesty
+# nepatri. Vedouci `(` se strhne vzdy, koncova `)` jen tehdy, kdyz je v tokenu NAVIC - `foo(1)`
+# zustava cele.
+function Remove-GroupingParen([string]$Token) {
+    $x = [string]$Token
+    if ($x.StartsWith('(')) { $x = $x.TrimStart('(') }
+    while ($x.EndsWith(')')) {
+        $open = @($x.ToCharArray() | Where-Object { $_ -eq '(' }).Count
+        $close = @($x.ToCharArray() | Where-Object { $_ -eq ')' }).Count
+        if ($close -le $open) { break }
+        $x = $x.Substring(0, $x.Length - 1)
+    }
+    return $x
+}
+
+# N-C (TASK-117): obsah zavorkoveho seskupeni `( ... )` a `@( ... )` je SPUSTENY prikaz (PowerShell
+# vyhodnoti seskupeni pred volanim, Bash `( ... )` je subshell). `$( ... )`, `<( ... )` a `>( ... )`
+# uz rozebira Split-CommandLine. Volani metody nebo funkce (`.Replace(...)`, `foo(...)`,
+# `[IO.File]::ReadAllText(...)`) seskupenim neni - zavorka hned za slovem, `]` nebo `)` se
+# preskoci (jeho literal v uvozovkach chyta Get-PathCandidate bod (a)). Kvotove korektne.
+function Get-GroupingSubcommand([string]$Text, [int]$Depth) {
+    $out = New-Object System.Collections.ArrayList
+    if ([string]::IsNullOrEmpty($Text) -or $Depth -gt 5) { return ,@($out) }
+    $esc = Get-ScannerEscape
+    $inSingle = $false
+    $inDouble = $false
+    $i = 0
+    $n = $Text.Length
+    while ($i -lt $n) {
+        $c = $Text[$i]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
+        if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
+        if ($c -eq '"') { $inDouble = -not $inDouble; $i++; continue }
+        if ($c -eq "'" -and -not $inDouble) { $inSingle = $true; $i++; continue }
+        if ($c -eq '(') {
+            $prev = if ($i -gt 0) { $Text[$i - 1] } else { ' ' }
+            $isGroup = -not ([char]::IsLetterOrDigit($prev) -or $prev -eq '_' -or $prev -eq ']' -or
+                             $prev -eq ')' -or $prev -eq '.' -or $prev -eq '$' -or $prev -eq '<' -or $prev -eq '>')
+            $j = Find-CloseParen $Text ($i + 1)
+            if ($isGroup) {
+                $len = [Math]::Max(0, ($j - 1) - ($i + 1))
+                if ($len -gt 0) {
+                    $body = $Text.Substring($i + 1, $len)
+                    foreach ($s in (Split-CommandLine $body)) { [void]$out.Add($s) }
+                    foreach ($s in (Get-GroupingSubcommand $body ($Depth + 1))) { [void]$out.Add($s) }
+                }
+                $i = $j; continue
+            }
+        }
+        $i++
+    }
+    return ,@($out)
+}
+
 function Get-PathCandidate([string]$Command, $Config = $null) {
     $out = New-Object System.Collections.ArrayList
     $sec = $null
@@ -357,10 +412,15 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
 
     # Prikaz se rozebira po PODPRIKAZECH, aby se u tokenu vedelo, ktery program ho
     # dostane - glob u `cat` je cesta, glob u `echo` je text.
-    foreach ($sub in (Split-CommandLine $Command)) {
+    # N-C (TASK-117, Z117-Q16 = A): obsah zavorkoveho seskupeni `( ... )` / `@( ... )` je
+    # SPUSTENY prikaz stejne jako `$( ... )` - rozebira se navic jako podprikaz.
+    $subs = New-Object System.Collections.ArrayList
+    foreach ($x in (Split-CommandLine $Command)) { [void]$subs.Add($x) }
+    foreach ($x in (Get-GroupingSubcommand $Command 0)) { [void]$subs.Add($x) }
+    foreach ($sub in $subs) {
         $argv = Split-Arguments $sub
         if ($argv.Count -eq 0) { continue }
-        $subExe = (Get-ExecutableName $argv[0]).ToLowerInvariant()
+        $subExe = (Get-ExecutableName (Remove-GroupingParen ([string]$argv[0]))).ToLowerInvariant()
         $isPathCommand  = ($pathCommands -contains $subExe)
         $isWriteCommand = ($writeCommands -contains $subExe)
         $pending = ''   # 'r' | 'w' za samostatnym operatorem presmerovani
@@ -368,7 +428,12 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
         # (viz poznamka u Split-UnquotedCore) - Count by byl 1 a token cely argv.
         $tokens = Expand-ColonParameter $argv
         for ($ti = 0; $ti -lt $tokens.Count; $ti++) {
-            $token = [string]$tokens[$ti]
+            # N-C (TASK-117, Z117-Q16 = A): do 0.2.0 nesl token zavorku seskupeni
+            # (`Get-Content (Get-ChildItem <soubor>)` -> `<soubor>)`), zadny vzor ho nechranil
+            # a soubor se secrets se precetl BEZ dotazu. S mezerou (`( Get-ChildItem x )`) to
+            # deny bylo. Zavorka seskupeni do cesty nepatri - strhne se.
+            $token = Remove-GroupingParen ([string]$tokens[$ti])
+            if ($token -eq '') { continue }
 
             # (P1) samostatny operator: `>`, `>>`, `<`, `2>`, `&>`, `*>`, `>|`
             if ($token -match '^[\d*&]*(>>|>|<)\|?$') {
@@ -398,6 +463,22 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
                 if ($t -eq '') { continue }
             }
             if ($ti -eq 0 -and $t -eq $token) { continue }   # jmeno prikazu neni cesta
+
+            # N-D (TASK-117, nalez councilu Codex, Z117-Q16 = A): `@<cesta>` je u curl
+            # (a obdobnych nastroju) "obsah souboru" - `curl -d @<soubor>`, `--data-binary
+            # @<soubor>`, `-F f=@<soubor>`. Token zacinal `@`, kandidatem cesty nebyl, a soubor
+            # se secrets odesel na sit BEZ dotazu. Hodnota za `@` (i za `jmeno=@`) je cesta
+            # v pozici cteni; `;type=...` za ni je parametr formulare. Splatting `@args`,
+            # `@{...}`, `@(...)` a revize `HEAD@{1}` timhle tvarem nejsou (`@` nestoji na
+            # zacatku nebo hodnota neprojde sirokym testem cesty).
+            $at = [regex]::Match($t, '^(?:-{1,2}[A-Za-z][A-Za-z0-9-]*=)?(?:[A-Za-z0-9_.\-]*=)?@([^@{(;][^;]*)')
+            if ($at.Success) {
+                $atPath = $at.Groups[1].Value
+                if (Test-PathLikeBroad $atPath) {
+                    [void]$out.Add(@{ Value = $atPath; AllowGlob = $false; IsWrite = $false })
+                }
+                continue
+            }
 
             # (P2) hodnota prepinace `--opt=hodnota`
             if ($t.StartsWith('-')) {
@@ -463,26 +544,441 @@ function Test-EnvironmentDump([string]$Command) {
     return $false
 }
 
-function Get-SensitiveEnvName([string]$Command, [string]$NamePattern, [string]$CamelPattern) {
-    $patterns = @(
-        '\$env:([A-Za-z_][A-Za-z0-9_]*)',
-        '(?:^|[^A-Za-z0-9_])env:([A-Za-z_][A-Za-z0-9_]*)',
-        '\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?',
-        'getenvironmentvariable\s*\(\s*["'']([^"'']+)["'']',
-        '%([A-Za-z_][A-Za-z0-9_]*)%'
-    )
-    foreach ($p in $patterns) {
+# ------------------------------------------- polozka 7: prikaz, ktery soubor jen JMENUJE ---
+#
+# TASK-117 (0.3.0) - Z117-Q1 = A (Tom 2026-09-28), Z117-Q2 = A, Z117-Q3 = A, Z117-Q5 = A (Tom
+# 2026-10-01): do 0.2.0 rozhodovala CESTA, ne co s ni prikaz dela, takze `git check-ignore -v
+# <soubor prostredi>` nebo `git ls-files .claude/settings.local.json` koncily deny/ask, prestoze
+# obsah souboru nikdo necetl. Od 0.3.0 statement, ktery je CELY jednim z uzavreneho vyctu
+# jmenujicich tvaru a jehoz vystup NIKAM NETECE, hook do rozboru cest nebere a zapise audit
+# `secrets:nameOnly` (bez cesty).
+#
+# Vycet (Z117-Q5): `git ls-files`, `git check-ignore`, `git ls-tree --name-only`, `Test-Path`,
+# `ls` / `dir` / `Get-ChildItem` - kazdy jen s prepinaci z POVOLENE mnoziny daneho programu
+# (T117-N2); cokoli mimo ni = jako 0.2.0.
+# "Vystup nikam netece" (Z117-Q3): statement nesmi nest rouru, substituci, promennou, blok,
+# seskupeni ani presmerovani - dovolene je jen presmerovani stderr do nicoty. Pro jistotu se
+# odmita KAZDY z techto znaku kdekoli ve statementu, i v uvozovkach.
+# Nalez councilu Codex (K1): jmenujici tvar jde ZASTINIT - Bash `ls() { cat "$@"; }; ls <soubor>`,
+# PowerShell `function x { Get-Content @args }; Set-Alias ls x; ls <soubor>`, nebo zmenou PATH.
+# Vyjimka proto neplati pro CELY prikaz, ktery definuje funkci nebo alias, meni PATH, nacita
+# cizi kod (`source`, dot-source, `Import-Module`), text spousti (`eval`, `iex`) nebo nese
+# heredoc. Statement, ktery vyjimku nedostal, se rozebira presne jako v 0.2.0.
+$script:NamingDisqualifiers = @(
+    '(^|[\s;&|({])(function|filter)\s+[\w:.\-]+',
+    '[\w.\-]+\s*\(\s*\)\s*\{',
+    '(^|[\s;&|({])(set-alias|new-alias|sal|nal|alias|unalias|hash|enable|source|import-module|ipmo|eval|iex|invoke-expression)(\s|$)',
+    '(^|[\s;&|({])\.\s+\S',
+    '\bpath\s*\+?=',
+    'export\s+path\b',
+    '\b(function|alias):',
+    '<<'
+)
+
+function Test-NamingDisqualified([string]$Command) {
+    foreach ($p in $script:NamingDisqualifiers) {
+        if ([regex]::IsMatch($Command, $p, 'IgnoreCase')) { return $true }
+    }
+    return $false
+}
+
+function Test-NamingGit($Rest) {
+    $i = 0
+    $n = $Rest.Count
+    while ($i -lt $n) {
+        $t = [string]$Rest[$i]
+        if ($t -ceq '-C') { if (($i + 1) -ge $n) { return $false }; $i += 2; continue }
+        if ($t -ceq '--no-optional-locks' -or $t -ceq '--no-pager') { $i++; continue }
+        if ($t -ceq '-c') {
+            if (($i + 1) -ge $n) { return $false }
+            # Jen `core.quotepath` - `-c alias.*` je jina trida (gate) a jine klice nikdo nezmeril.
+            if ([string]$Rest[$i + 1] -notmatch '^core\.quotepath=(true|false|on|off|yes|no|0|1)$') { return $false }
+            $i += 2; continue
+        }
+        break
+    }
+    if ($i -ge $n) { return $false }
+    $sub = [string]$Rest[$i]
+    $i++
+    $allowed = switch -CaseSensitive ($sub) {
+        'ls-files'     { @('--error-unmatch', '-c', '--cached', '-o', '--others', '-i', '--ignored', '--exclude-standard', '--full-name', '-z') }
+        'check-ignore' { @('-v', '--verbose', '-n', '--non-matching', '-q', '--quiet', '--no-index', '-z') }
+        'ls-tree'      { @('--name-only', '--name-status', '-r', '-d', '-t', '--full-name', '--full-tree', '-z') }
+        default        { $null }
+    }
+    if ($null -eq $allowed) { return $false }
+    $nameFlag = $false
+    $positional = 0
+    $endOpts = $false
+    for (; $i -lt $n; $i++) {
+        $t = [string]$Rest[$i]
+        if (-not $endOpts -and $t -ceq '--') { $endOpts = $true; continue }
+        if (-not $endOpts -and $t.StartsWith('-')) {
+            if ($allowed -cnotcontains $t) { return $false }
+            if ($t -ceq '--name-only' -or $t -ceq '--name-status') { $nameFlag = $true }
+            continue
+        }
+        $positional++
+    }
+    # `git ls-tree` bez `--name-only` vypise id blobu (M11) a potrebuje prave jeden <tree-ish>.
+    if ($sub -ceq 'ls-tree' -and (-not $nameFlag -or $positional -lt 1)) { return $false }
+    return $true
+}
+
+function Test-NamingPsParams($Rest, $ValueParams, $SwitchParams) {
+    $n = $Rest.Count
+    for ($i = 0; $i -lt $n; $i++) {
+        $t = ([string]$Rest[$i]).ToLowerInvariant()
+        if (-not $t.StartsWith('-')) { continue }
+        if ($SwitchParams -contains $t) { continue }
+        if ($ValueParams.ContainsKey($t)) {
+            if (($i + 1) -ge $n) { return $false }
+            $v = [string]$Rest[$i + 1]
+            if ($ValueParams[$t] -ne '' -and $v -notmatch $ValueParams[$t]) { return $false }
+            $i++
+            continue
+        }
+        return $false
+    }
+    return $true
+}
+
+function Test-NamingStatement([string]$Statement, [string]$ToolName) {
+    $s = ([string]$Statement).Trim()
+    if ($s -eq '') { return $false }
+    # stderr do nicoty vystup NEposila dal - jedine dovolene presmerovani
+    $s = [regex]::Replace($s, '(?<=^|\s)2>\s*(/dev/null|\$null|nul|&1)(?=\s|$)', ' ', 'IgnoreCase')
+    if ($s -match '[|<>$`(){}@;&]') { return $false }
+    # typograficke uvozovky jsou v PowerShellu uvozovky; skener je nezna -> radsi nic
+    if ($s -match '[^\x20-\x7E\t]') { return $false }
+    $argv = Split-Arguments $s
+    if ($argv.Count -lt 2) { return $false }
+    # Jen hole jmeno programu - `./ls`, `C:\x\git.exe` nebo `X=1 git ...` vycet nejsou.
+    if ([string]$argv[0] -notmatch '^[A-Za-z][A-Za-z\-]*(\.exe)?$') { return $false }
+    $exe = Get-ExecutableName ([string]$argv[0])
+    $rest = @($argv[1..($argv.Count - 1)])
+    $isPs = ($ToolName -eq 'PowerShell')
+    if ($exe -eq 'git') { return (Test-NamingGit $rest) }
+    if ($isPs -and $exe -eq 'test-path') {
+        return (Test-NamingPsParams $rest @{ '-path' = ''; '-literalpath' = ''; '-pathtype' = '^(?i)(leaf|container|any)$' } @('-isvalid'))
+    }
+    if ($isPs -and @('ls', 'dir', 'gci', 'get-childitem') -contains $exe) {
+        return (Test-NamingPsParams $rest @{ '-path' = ''; '-literalpath' = ''; '-depth' = '^[0-9]+$' } `
+                                    @('-force', '-file', '-directory', '-hidden', '-name', '-recurse'))
+    }
+    if (-not $isPs -and @('ls', 'dir') -contains $exe) {
+        $endOpts = $false
+        foreach ($t in $rest) {
+            $t = [string]$t
+            if ($endOpts -or -not $t.StartsWith('-')) { continue }
+            if ($t -ceq '--') { $endOpts = $true; continue }
+            if ($t.StartsWith('--')) {
+                if (@('--all', '--almost-all', '--directory', '--human-readable', '--color') -ccontains $t) { continue }
+                if ($t -cmatch '^--color=(always|auto|never)$') { continue }
+                return $false
+            }
+            if ($t -cnotmatch '^-[1aAdFhlRrStisG]+$') { return $false }
+        }
+        return $true
+    }
+    return $false
+}
+
+# Rozdeli text (po odstraneni datovych tel heredocu) na statementy, ktere soubor jen jmenuji,
+# a zbytek. Zbytek se rozebira beze zmeny proti 0.2.0.
+function Split-NamingStatement([string]$Scan, [string]$Command, [string]$ToolName) {
+    $named = New-Object System.Collections.ArrayList
+    if (Test-NamingDisqualified $Command) { return @{ Rest = $Scan; Named = '' } }
+    $keep = New-Object System.Collections.ArrayList
+    foreach ($st in @(Split-Statement $Scan)) {
+        if (Test-NamingStatement $st $ToolName) { [void]$named.Add($st) } else { [void]$keep.Add($st) }
+    }
+    if ($named.Count -eq 0) { return @{ Rest = $Scan; Named = '' } }
+    return @{ Rest = ($keep -join "`n"); Named = ($named -join "`n") }
+}
+
+# ------------------------------------- H-g: jmeno citlive promenne JEN JAKO TEXT ---
+#
+# TASK-117 H-g (Z117-Q14 = A, Tom 2026-10-07; vycet Z117-Q22 = A, Tom 2026-10-08 = varianta A
+# navrhu `01-navrh-allow-list.md` par. 5): do 0.2.0 se `Get-SensitiveEnvName` ptal u KAZDEHO
+# vyskytu jmena kdekoli v textu, bez ohledu na uvozovky. Dotaz, ktery zastavil nocni session
+# na 7 h, byl `grep -n "^\$env:GSD_E2E_PASSWORD" ...` v Bash nastroji - `\$` v dvojitych
+# uvozovkach je doslovny dolar, grep hledal TEXT. Od 0.3.0 hook mlci (audit
+# `secrets:nameOnly:envVarText`), kdyz je KAZDY vyskyt citliveho jmena (M22) textem podle
+# uzavreneho vyctu:
+#   1 Bash  uvnitr '...'                                } vzor grep/egrep/fgrep/rg/git grep:
+#   2 Bash  v "..." a kazdy `$` v tom retezci za `\`     } prvni pozicni argument nebo hodnota -e
+#   3 PS    uvnitr '...' (i typograficke apostrofy)     } vzor Select-String (-Pattern / prvni
+#   4 PS    v "..." a kazdy `$` v tom retezci za `      } pozicni) a nativni grep/rg/git grep
+# Zdroj pravidel uvozovani: Bash manual par. Quoting, SC2016, about_Quoting_Rules (PowerShell).
+# Podminky (vse ostatni = jako 0.2.0): prikaz je JEDEN statement bez seskupeni, bloku,
+# substituce a vstupniho presmerovani; kazdy prepinac programu je z povolene mnoziny (nalez
+# councilu Codex K7: `rg --pre=printenv`, `git grep --textconv` text SPUSTI); roura za
+# programem jen do programu, ktery nic nespousti (`grep '$X' f.sh | bash` by text z souboru
+# rozvinul - zprisneni proti navrhu, faze 2). Pasti uvozovek (T117-N17): jednoduche uvnitr
+# dvojitych nejsou uvozovky, v Bash '...' `\` neescapuje, parita escapu, sousedstvi `'x'$X`,
+# typograficke uvozovky v PowerShellu - resi je skener nize, ne regex.
+
+$script:EnvPatterns = @(
+    '\$env:([A-Za-z_][A-Za-z0-9_]*)',
+    # Z117-Q15 + A117-O5: cesta `Env:\X` / `Env:/X` (PowerShell provider) cte hodnotu stejne
+    # jako `env:X` - do 0.2.0 chtel vzor za `env:` hned pismeno a obe cesty mlcely.
+    '(?:^|[^A-Za-z0-9_])env:[\\/]?([A-Za-z_][A-Za-z0-9_]*)',
+    '\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?',
+    'getenvironmentvariable\s*\(\s*["'']([^"'']+)["'']',
+    '%([A-Za-z_][A-Za-z0-9_]*)%'
+)
+
+function Test-SensitiveEnvName([string]$Name, [string]$NamePattern, [string]$CamelPattern) {
+    # DVA vzory se DVEMA rezimy - jeden vzor to neumi (nalezy Amber C6 a E5):
+    #  - podtrzitkovy zapis IGNORE-CASE, aby chytil i `db_password`;
+    #    mnozne cislo jen ZA podtrzitkem, takze `API_KEYS` ano, hole `tokens` ne,
+    #  - camelCase CASE-SENSITIVNE, jinak by `monkey` a `keyFile` byly citlive.
+    if ([regex]::IsMatch($Name, $NamePattern, 'IgnoreCase')) { return $true }
+    if ($CamelPattern -ne '' -and [regex]::IsMatch($Name, $CamelPattern)) { return $true }
+    return $false
+}
+
+# Vsechny vyskyty citliveho jmena: pozice, delka, jmeno. Poradi = poradi vzoru, pak pozice -
+# prvni prvek je tedy tyz, ktery do 0.2.0 vracel Get-SensitiveEnvName (text duvodu se nemeni).
+function Get-SensitiveEnvOccurrence([string]$Command, [string]$NamePattern, [string]$CamelPattern) {
+    $out = New-Object System.Collections.ArrayList
+    foreach ($p in $script:EnvPatterns) {
         foreach ($m in [regex]::Matches($Command, $p, 'IgnoreCase')) {
             $name = $m.Groups[1].Value
-            # DVA vzory se DVEMA rezimy - jeden vzor to neumi (nalezy Amber C6 a E5):
-            #  - podtrzitkovy zapis IGNORE-CASE, aby chytil i `db_password`;
-            #    mnozne cislo jen ZA podtrzitkem, takze `API_KEYS` ano, hole `tokens` ne,
-            #  - camelCase CASE-SENSITIVNE, jinak by `monkey` a `keyFile` byly citlive.
-            if ([regex]::IsMatch($name, $NamePattern, 'IgnoreCase')) { return $name }
-            if ($CamelPattern -ne '' -and [regex]::IsMatch($name, $CamelPattern)) { return $name }
+            if (-not (Test-SensitiveEnvName $name $NamePattern $CamelPattern)) { continue }
+            $start = $m.Index
+            $end = $m.Groups[1].Index + $m.Groups[1].Length
+            # vzor 2 nese hranicni znak pred `env:` - do vyskytu nepatri
+            if ($m.Value.Length -gt 0 -and $Command[$start] -ne '$' -and $Command[$start] -ne '%' -and
+                $Command.Substring($start, [Math]::Min(4, $Command.Length - $start)) -inotmatch '^(env:|getenv)') { $start++ }
+            [void]$out.Add(@{ Start = $start; End = $end; Name = $name })
+        }
+    }
+    return ,@($out)
+}
+
+# Z117-Q15 (Tom 2026-10-07): `printenv NAME` vypise hodnotu jedne promenne - do 0.2.0 se
+# Test-EnvironmentDump ptal jen u `printenv` BEZ argumentu.
+function Get-PrintenvSensitiveName([string]$Command, [string]$NamePattern, [string]$CamelPattern) {
+    foreach ($sub in (Split-CommandLine $Command)) {
+        $argv = Split-Arguments $sub
+        if ($argv.Count -lt 2) { continue }
+        if ((Get-ExecutableName $argv[0]) -ne 'printenv') { continue }
+        foreach ($a in @($argv[1..($argv.Count - 1)])) {
+            $a = [string]$a
+            if ($a.StartsWith('-')) { continue }
+            if (Test-SensitiveEnvName $a $NamePattern $CamelPattern) { return $a }
         }
     }
     return ''
+}
+
+# Skener uvozovek s POZICI: pro kazdy znak stav (0 mimo, 1 jednoduche, 2 dvojite), priznak
+# "escapovany", cislo dvojiteho retezce; tokeny (bily znak mimo uvozovky) se zacatkem, koncem
+# a hodnotou bez uvozovek; hranice roury. $null = tvar, ktery vycet nepokryva.
+function Get-QuoteMap([string]$Text, [bool]$IsPs) {
+    $n = $Text.Length
+    $state = New-Object int[] $n
+    $escaped = New-Object bool[] $n
+    $seg = New-Object int[] $n
+    $tokens = New-Object System.Collections.ArrayList
+    $stages = New-Object System.Collections.ArrayList
+    $cur = New-Object System.Collections.ArrayList
+    $sq = if ($IsPs) { "'" + [char]0x2018 + [char]0x2019 + [char]0x201A + [char]0x201B } else { "'" }
+    $dq = if ($IsPs) { '"' + [char]0x201C + [char]0x201D + [char]0x201E } else { '"' }
+    $esc = if ($IsPs) { '`' } else { '\' }
+    $st = 0
+    $segId = 0
+    $tokStart = -1
+    $buf = New-Object System.Text.StringBuilder
+    $i = 0
+    while ($i -lt $n) {
+        $c = [string]$Text[$i]
+        if ($st -eq 0) {
+            if ($c -eq ' ' -or $c -eq "`t") {
+                if ($tokStart -ge 0) { [void]$cur.Add(@{ Start = $tokStart; End = $i; Value = $buf.ToString() }); [void]$buf.Clear(); $tokStart = -1 }
+                $i++; continue
+            }
+            if ($c -eq '|') {
+                if ($tokStart -ge 0) { [void]$cur.Add(@{ Start = $tokStart; End = $i; Value = $buf.ToString() }); [void]$buf.Clear(); $tokStart = -1 }
+                if (($i + 1) -lt $n -and $Text[$i + 1] -eq '|') { return $null }
+                [void]$stages.Add($cur); $cur = New-Object System.Collections.ArrayList
+                $i++; continue
+            }
+            if ('(){}<'.Contains($c) -or $c -eq "`n" -or $c -eq "`r") { return $null }
+            if (-not $IsPs -and $c -eq '`') { return $null }
+            if ($tokStart -lt 0) { $tokStart = $i }
+            if ($c -eq $esc) {
+                if (($i + 1) -ge $n) { return $null }
+                $escaped[$i + 1] = $true
+                [void]$buf.Append($Text[$i + 1]); $i += 2; continue
+            }
+            if ($sq.Contains($c)) { $st = 1; $state[$i] = 1; $i++; continue }
+            if ($dq.Contains($c)) { $st = 2; $segId++; $state[$i] = 2; $seg[$i] = $segId; $i++; continue }
+            [void]$buf.Append($c); $i++; continue
+        }
+        if ($st -eq 1) {
+            $state[$i] = 1
+            if ($sq.Contains($c)) {
+                if ($IsPs -and ($i + 1) -lt $n -and $sq.Contains([string]$Text[$i + 1])) {
+                    $state[$i + 1] = 1; [void]$buf.Append("'"); $i += 2; continue
+                }
+                $st = 0; $i++; continue
+            }
+            [void]$buf.Append($c); $i++; continue
+        }
+        # st 2 - dvojite uvozovky
+        $state[$i] = 2
+        $seg[$i] = $segId
+        if (-not $IsPs -and $c -eq '`') { return $null }
+        if ($c -eq $esc -and ($i + 1) -lt $n) {
+            $next = [string]$Text[$i + 1]
+            if ($IsPs -or ('$`"\'.Contains($next))) {
+                $state[$i + 1] = 2; $seg[$i + 1] = $segId; $escaped[$i + 1] = $true
+                [void]$buf.Append($next); $i += 2; continue
+            }
+        }
+        if ($dq.Contains($c)) {
+            if ($IsPs -and ($i + 1) -lt $n -and $dq.Contains([string]$Text[$i + 1])) {
+                $state[$i + 1] = 2; $seg[$i + 1] = $segId; [void]$buf.Append('"'); $i += 2; continue
+            }
+            $st = 0; $i++; continue
+        }
+        [void]$buf.Append($c); $i++
+    }
+    if ($st -ne 0) { return $null }
+    if ($tokStart -ge 0) { [void]$cur.Add(@{ Start = $tokStart; End = $n; Value = $buf.ToString() }) }
+    [void]$stages.Add($cur)
+    return @{ State = $state; Escaped = $escaped; Seg = $seg; Stages = $stages }
+}
+
+# Index tokenu, ktere jsou VZOREM grep/rg/git grep (od $From). $null = nepovoleny prepinac.
+function Get-GrepPatternToken($Tokens, [int]$From, [string]$Flavor) {
+    $letters = switch ($Flavor) { 'rg' { 'nilcwFvoHS' } default { 'nirlcwFEvohH' } }
+    $patterns = New-Object System.Collections.ArrayList
+    $positional = New-Object System.Collections.ArrayList
+    $endOpts = $false
+    $n = $Tokens.Count
+    for ($i = $From; $i -lt $n; $i++) {
+        $t = [string]$Tokens[$i].Value
+        if (-not $endOpts -and $t -ceq '--') { $endOpts = $true; continue }
+        if (-not $endOpts -and $t.StartsWith('--')) {
+            $ok = switch ($Flavor) {
+                'grep'   { ($t -ceq '--color') -or ($t -cmatch '^--(color|include|exclude)=.+$') }
+                'rg'     { ($t -ceq '--no-config') -or ($t -cmatch '^--color=.+$') }
+                default  { ($t -ceq '--color') -or ($t -cmatch '^--color=.+$') }
+            }
+            if (-not $ok) { return $null }
+            continue
+        }
+        if (-not $endOpts -and $t.StartsWith('-') -and $t.Length -gt 1) {
+            if ($t -cmatch '^-[ABC][0-9]+$') { continue }
+            if ($t -cmatch '^-[ABC]$') {
+                if (($i + 1) -ge $n -or ([string]$Tokens[$i + 1].Value) -notmatch '^[0-9]+$') { return $null }
+                $i++; continue
+            }
+            $body = $t.Substring(1)
+            $takesPattern = $false
+            if ($body.EndsWith('e')) { $takesPattern = $true; $body = $body.Substring(0, $body.Length - 1) }
+            foreach ($ch in $body.ToCharArray()) { if (-not $letters.Contains([string]$ch)) { return $null } }
+            if ($takesPattern) {
+                if (($i + 1) -ge $n) { return $null }
+                [void]$patterns.Add($i + 1); $i++
+            }
+            continue
+        }
+        [void]$positional.Add($i)
+    }
+    if ($patterns.Count -eq 0) {
+        if ($positional.Count -eq 0) { return $null }
+        [void]$patterns.Add($positional[0])
+    }
+    return ,@($patterns)
+}
+
+function Get-SelectStringPatternToken($Tokens, [int]$From) {
+    $valueParams = @('-pattern', '-path', '-literalpath', '-context')
+    $switchParams = @('-simplematch', '-casesensitive', '-list', '-notmatch')
+    $patterns = New-Object System.Collections.ArrayList
+    $positional = New-Object System.Collections.ArrayList
+    $n = $Tokens.Count
+    for ($i = $From; $i -lt $n; $i++) {
+        $t = ([string]$Tokens[$i].Value).ToLowerInvariant()
+        if ($t.StartsWith('-') -and $t.Length -gt 1) {
+            if ($switchParams -contains $t) { continue }
+            if ($valueParams -contains $t) {
+                if (($i + 1) -ge $n) { return $null }
+                if ($t -eq '-pattern') { [void]$patterns.Add($i + 1) }
+                $i++; continue
+            }
+            return $null
+        }
+        [void]$positional.Add($i)
+    }
+    if ($patterns.Count -eq 0) {
+        if ($positional.Count -eq 0) { return $null }
+        [void]$patterns.Add($positional[0])
+    }
+    return ,@($patterns)
+}
+
+# Programy, do kterych smi tect vystup vyhledavani: radky souboru jen preusporadaji nebo
+# zkrati, nic z nich nespusti.
+$script:EnvTextDownstream = @('head', 'tail', 'sort', 'uniq', 'wc', 'cut', 'select-object', 'sort-object', 'measure-object', 'out-null')
+
+function Test-EnvOccurrenceText([string]$Command, $Occurrences, [string]$ToolName) {
+    if (@(Split-Statement $Command).Count -ne 1) { return $false }
+    $isPs = ($ToolName -eq 'PowerShell')
+    $map = Get-QuoteMap $Command $isPs
+    if ($null -eq $map) { return $false }
+    $stages = $map.Stages
+    if ($stages.Count -lt 1 -or $stages[0].Count -lt 2) { return $false }
+    for ($s = 1; $s -lt $stages.Count; $s++) {
+        if ($stages[$s].Count -lt 1) { return $false }
+        $down = [string]$stages[$s][0].Value
+        if ($down -notmatch '^[A-Za-z][A-Za-z\-]*$' -or $script:EnvTextDownstream -notcontains $down.ToLowerInvariant()) { return $false }
+    }
+    $tok = $stages[0]
+    $head = [string]$tok[0].Value
+    if ($head -notmatch '^[A-Za-z][A-Za-z\-]*$') { return $false }
+    $exe = $head.ToLowerInvariant()
+    $patternIdx = $null
+    if (@('grep', 'egrep', 'fgrep') -contains $exe) { $patternIdx = Get-GrepPatternToken $tok 1 'grep' }
+    elseif ($exe -eq 'rg') { $patternIdx = Get-GrepPatternToken $tok 1 'rg' }
+    elseif ($exe -eq 'git') {
+        $i = 1
+        while ($i -lt $tok.Count) {
+            $v = [string]$tok[$i].Value
+            if ($v -ceq '-C') { $i += 2; continue }
+            if ($v -ceq '--no-pager' -or $v -ceq '--no-optional-locks') { $i++; continue }
+            break
+        }
+        if ($i -lt $tok.Count -and ([string]$tok[$i].Value) -ceq 'grep') { $patternIdx = Get-GrepPatternToken $tok ($i + 1) 'gitgrep' }
+    }
+    elseif ($isPs -and @('select-string', 'sls') -contains $exe) { $patternIdx = Get-SelectStringPatternToken $tok 1 }
+    if ($null -eq $patternIdx) { return $false }
+
+    foreach ($o in $Occurrences) {
+        $hit = -1
+        for ($k = 0; $k -lt $tok.Count; $k++) {
+            if ($o.Start -ge $tok[$k].Start -and $o.End -le $tok[$k].End) { $hit = $k; break }
+        }
+        if ($hit -lt 0 -or $patternIdx -notcontains $hit) { return $false }
+        $segs = New-Object System.Collections.Generic.HashSet[int]
+        for ($c = $o.Start; $c -lt $o.End; $c++) {
+            if ($map.State[$c] -eq 0) { return $false }
+            if ($map.State[$c] -eq 2) { [void]$segs.Add($map.Seg[$c]) }
+        }
+        # Dvojite uvozovky: KAZDY `$` v celem retezci musi byt escapovany - `"${env:X}"`
+        # nese `$` PRED vyskytem a `"\$X $Y"` jinou promennou vedle nej.
+        foreach ($sid in $segs) {
+            for ($c = 0; $c -lt $Command.Length; $c++) {
+                if ($map.State[$c] -eq 2 -and $map.Seg[$c] -eq $sid -and $Command[$c] -eq '$' -and -not $map.Escaped[$c]) { return $false }
+            }
+        }
+    }
+    return $true
 }
 
 function Test-SecretCommand([string]$Command, $Config) {
@@ -494,25 +990,45 @@ function Test-SecretCommand([string]$Command, $Config) {
     # heredocu s datovym hostem se do rozboru cest nebere (bod 12); promenne prostredi se
     # hledaji nad CELYM textem - `echo $DB_PASSWORD` v tele `cat <<EOF` shell rozvine.
     $scan = Remove-DataHeredocBody $Command $Config
-    foreach ($candidate in (Get-PathCandidate $scan $Config)) {
+    # Polozka 7 (TASK-117): statementy, ktere soubor jen jmenuji, do rozboru cest nejdou.
+    $split = Split-NamingStatement $scan $Command $script:ToolName
+    foreach ($candidate in (Get-PathCandidate $split.Rest $Config)) {
         $r = Test-SecretPath $candidate.Value ([bool]$candidate.IsWrite) $Config ([bool]$candidate.AllowGlob)
         if ($null -eq $r) { continue }
         if ($r.Decision -eq 'deny') { return $r }
         if ($null -eq $worst) { $worst = $r }
     }
+    # H-b: jmenovani, ktere by v 0.2.0 rozhodlo, se zapise do auditu - bez cesty.
+    if ($split.Named -ne '') {
+        foreach ($candidate in (Get-PathCandidate $split.Named $Config)) {
+            $r = Test-SecretPath $candidate.Value ([bool]$candidate.IsWrite) $Config ([bool]$candidate.AllowGlob)
+            if ($null -ne $r) { Write-GateAudit $script:ToolName 'secrets:nameOnly' 'allow' $Config; break }
+        }
+    }
 
     if (Test-EnvironmentDump $Command) {
         if ($null -eq $worst) {
-            $worst = @{ Decision = 'ask'; Shape = (Get-Field $shapes 'envDump' 'env') }
+            $worst = @{ Id = 'envDump'; Decision = 'ask'; Shape = (Get-Field $shapes 'envDump' 'env') }
         }
     }
 
     $namePattern = [string](Get-Field $sec 'envVarNamePattern' '(^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)S?(_|$)')
     $camelPattern = [string](Get-Field $sec 'envVarNameCamelPattern' '')
-    $name = Get-SensitiveEnvName $Command $namePattern $camelPattern
+    $name = Get-PrintenvSensitiveName $Command $namePattern $camelPattern
+    if ($name -eq '') {
+        $occ = Get-SensitiveEnvOccurrence $Command $namePattern $camelPattern
+        if ($occ.Count -gt 0) {
+            # H-g: rozhodnuti PER VYSKYT (M22) - mlci se, jen kdyz je textem kazdy z nich.
+            if (Test-EnvOccurrenceText $Command $occ $script:ToolName) {
+                Write-GateAudit $script:ToolName 'secrets:nameOnly:envVarText' 'allow' $Config
+            } else {
+                $name = [string]$occ[0].Name
+            }
+        }
+    }
     if ($name -ne '') {
         if ($null -eq $worst) {
-            $worst = @{ Decision = 'ask'
+            $worst = @{ Id = 'envVarRead'; Decision = 'ask'
                         Shape = (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name))) }
         }
     }
@@ -546,6 +1062,8 @@ $known = @($script:ReadTools + $script:WriteTools + $script:CmdTools)
 if ($known -notcontains $toolName) { Write-HookStderr $script:InternalMessage; exit 2 }
 
 if (-not (Test-HookEnabled $config 'secrets')) { exit 0 }
+# H-c: odmitnuty klic prepisu je videt pri KAZDEM volani, ktere ho potkalo (jen jmeno klice).
+Write-OverrideRejectedAudit $toolName $config
 
 # Tyz skener jako brana, takze i tyz escape znak podle shellu (nalez Amber G1).
 # Pro nastroje nad souborem (Read/Edit/Write) je hodnota bez vyznamu - skener se
@@ -566,6 +1084,9 @@ if ($script:CmdTools -contains $toolName) {
 }
 
 if ($null -eq $decision) { exit 0 }
+
+# H-b (TASK-117): kazde `ask` a `deny` jde do auditu s ID tvaru - nikdy s cestou ani jmenem.
+Write-GateAudit $toolName ('secrets:' + [string]$decision.Id) ([string]$decision.Decision) $config
 
 $reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
 
