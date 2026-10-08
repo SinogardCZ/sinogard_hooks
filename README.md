@@ -619,8 +619,10 @@ aby si je nikdo nemusel objevit sám.
     ruší; zastínění **dřívějším** příkazem téže session nebo profilem shellu hook nevidí —
     shell drží stav mezi příkazy. Hlava s cestou (`./ls`, `C:\x\git.exe`) výčet není.
 25. **Ochrana konfigurace pluginu platí jen pro nainstalovanou kopii** (0.3.0, `Z117-Q23`). Rozhoduje text cesty
-    (`.claude/plugins/` v absolutní cestě), ne disk: junction nebo symlink z jiného místa do nainstalované kopie hook
-    nerozpozná. Zápis do vývojového klonu se neptá — kanárek a sady klonu chrání jinak (testy, review, tag).
+    (`.claude/plugins/` v absolutní cestě, nebo `hooks/` právě běžícího pluginu), ne disk: junction, symlink nebo
+    jméno 8.3 hook nerozpozná. Zápis do vývojového klonu, který neběží, se neptá — chrání ho sady, review a tag.
+    ⚠️ **Cíl kopie není zápis** (díra už v 0.2.0, neopraveno): `cp x .claude/settings.json` a `Copy-Item` do chráněné
+    cesty mlčí — `cp`/`Copy-Item` jsou v `pathCommands` a jejich argumenty se posuzují jako čtení.
 
 ---
 

@@ -402,23 +402,26 @@ function Invoke-Task117Rows([string]$HookName) {
         # Radek s projektovym prepisem nebo rezimem meri JINY stav nez invariant (ten bezi
         # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim.
         if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode'] -and
-            -not $row.PSObject.Properties['cwd']) {
+            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}')) {
             $kind = if (@('Write', 'Edit', 'Read') -contains [string]$row.tool) { 'path' } else { 'cmd' }
             Add-CollectedCase $HookName $kind ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
         }
         if (Test-CollectOnly) { continue }
         # Z117-Q23: radek muze byt i nastroj nad souborem (Write/Edit/Read - `cmd` je cesta) a nest vlastni `cwd`.
+        # `{PLUGIN_ROOT}` = koren pluginu, ze ktereho sada hooky spousti (= "prave bezici plugin", R2 kolo 2).
+        $rootFwd = ([string]$script:RepoRoot).Replace('\', '/')
+        $cmdText = ([string]$row.cmd).Replace('{PLUGIN_ROOT}', $rootFwd)
         $tool = [string]$row.tool
         $values = @{}
         if (@('Write', 'Edit', 'Read') -contains $tool) {
             $template = 'pretooluse-' + $tool.ToLowerInvariant()
-            $values['tool_input.file_path'] = [string]$row.cmd
+            $values['tool_input.file_path'] = $cmdText
         } else {
             $template = if ($tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
-            $values['tool_input.command'] = [string]$row.cmd
+            $values['tool_input.command'] = $cmdText
         }
         if ($row.PSObject.Properties['mode']) { $values['permission_mode'] = [string]$row.mode }
-        if ($row.PSObject.Properties['cwd']) { $values['cwd'] = [string]$row.cwd }
+        if ($row.PSObject.Properties['cwd']) { $values['cwd'] = ([string]$row.cwd).Replace('{PLUGIN_ROOT}', $rootFwd) }
         $json = New-HookInput $template $values
         # Bez vlastniho CLAUDE_PROJECT_DIR by hook vzal projekt z `cwd` sablony (W:/dev/gsd/repo)
         # a na stroji, kde GSD repo je, by mlcky platil jeho skutecny prepis (`gate.opaque.*`

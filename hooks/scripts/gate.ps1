@@ -527,8 +527,9 @@ function Get-LiteralAssignment([string]$Command) {
     if ([string]::IsNullOrWhiteSpace($Command)) { return $result }
     # CR-P2 (/code-review): promennou meni i `Set-Item variable:x`, `(Get-Variable x).Value = ...`, `Clear-Variable`,
     # `$ExecutionContext.SessionState.PSVariable.Set(...)` a vicenasobne prirazeni `$a, $x = ...` - kterykoli z nich
-    # v prikazu rozbaleni vypne CELE (zustava `invoked` = ask).
-    if ([regex]::IsMatch($Command, '(?i)\b(set-variable|new-variable|sv|nv|get-variable|gv|clear-variable|clv|remove-variable|rv)\b|variable:|psvariable|sessionstate')) { return $result }
+    # v prikazu rozbaleni vypne CELE (zustava `invoked` = ask). Kolo 2: `variable:` jen jako cesta providera, ne
+    # konec spolecneho parametru `-ErrorVariable:e` / `-OutVariable:x`.
+    if ([regex]::IsMatch($Command, '(?i)\b(set-variable|new-variable|sv|nv|get-variable|gv|clear-variable|clv|remove-variable|rv)\b|(^|[^\w-])variable:|psvariable|sessionstate')) { return $result }
     if ([regex]::IsMatch($Command, '(\$\{?[\w:]+\}?\s*,\s*)+\$\{?[\w:]+\}?\s*=(?!=)')) { return $result }
     $counts = @{}
     $assignPatterns = @(
@@ -1976,7 +1977,7 @@ $script:ToolName = $toolName
 $script:PermissionMode = $mode
 
 if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
-# H-c: odmitnuty klic prepisu je videt pri KAZDEM volani, ktere ho potkalo (jen jmeno klice).
+# H-c: odmitnuty klic prepisu je videt v auditu jednou za session (CR-P10) a v kanarku (jen jmeno klice).
 Write-OverrideRejectedAudit $toolName $config ([string](Get-Field $payload 'session_id' ''))
 
 $script:PendingAsk = $null

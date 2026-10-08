@@ -882,8 +882,10 @@ function Test-ExpressionStatement([string]$Text) {
 #
 # TASK-117 H-b (0.3.0, Z117-Q8 = B): radek auditu nese i kazde `ask` a `deny` - s ID tvaru
 # (`gate:git-reset-hard`, `secrets:secretFile`), nikdy s textem prikazu, cestou ani jmenem
-# promenne. Odmitnute klice prepisu (H-c) se zapisuji pri kazdem volani hooku, ktere je
-# potkalo: `config:overrideRejected:<klic>`, rozhodnuti `reject`.
+# promenne. Odmitnute klice prepisu (H-c) se zapisuji jednou za session (CR-P10; znacka bez zamku -
+# soubezne volani gate + secrets radek muze zdvojit a dve soubezne session nad tymz CLAUDE_PLUGIN_DATA si znacku
+# prepisuji, takze se radek opakuje - nikdy se neztrati):
+# `config:overrideRejected:<klic>`, rozhodnuti `reject`.
 function Write-OverrideRejectedAudit([string]$ToolName, $Config, [string]$SessionId = '') {
     if (@($script:OverrideRejected).Count -eq 0) { return }
     # CR-P10 (/code-review): radek pri KAZDEM volani obou hooku by audit zaplavil (2 radky na tool call) a prehlusil

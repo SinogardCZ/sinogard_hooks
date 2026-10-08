@@ -53,6 +53,15 @@ verze (`A117-O3`). Doklady: `docs/logs/mutants/task-117/` v repu GSD (výčet `0
 - CR-P10: audit odmítnutého klíče přepisu jednou za session (značka `override-rejected.json`), ne při každém volání.
 - Vědomě beze změny: CR-P3 (`hooks.*` v přepisu smí hook vypnout) — řádek `hooks.*` přijat v návrhu H-c, který
   schválil Tom (`Z117-Q21`); vypnutí je viditelné v kanárku (`—`).
+- Kolo 2 (`/code-review` nad opravami): `selfProtect` chrání navíc cokoli pod `hooks/` **právě běžícího** pluginu
+  (`--plugin-dir`, jiný `CLAUDE_CONFIG_DIR`) a relativní cíl v příkazu, který mění adresář (`cd`, `Set-Location`,
+  `Push-Location` → vzor 0.2.0 kdekoli); absolutní cesta i mimo Windows; výjimka „jen jména" u `envDump` padá při
+  zastínění aliasem/funkcí; N-D i ve shluku přepínačů (`curl -sd@.env`); `variable:` vypíná H-a jen jako cesta providera
+  (ne `-ErrorVariable:e`).
+- ⚠️ Migrace: výchozí `secrets.selfProtectPathPatterns` se změnil (`Z117-Q23`) — projektový přepis, který kopíroval
+  seznam 0.2.0, už není nadmnožina a H-c ho celý odmítne (kanárek to ukáže). Projekt přepíše seznam z 0.3.0.
+- ⚠️ Zjištěno, **neopraveno** (díra už v 0.2.0, mimo rozhodnutí TASK-117): cíl kopie se nebere jako zápis —
+  `cp x .claude/settings.json`, `Copy-Item x .claude/settings.json` i kopie do nainstalované kopie pluginu mlčí.
 
 ### Přidáno
 

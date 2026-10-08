@@ -30,6 +30,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
 $PluginRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$script:PluginRootPath = $PluginRoot
 
 $script:ReadTools  = @('Read')
 $script:WriteTools = @('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
@@ -150,9 +151,18 @@ function Get-AbsoluteNormalPath([string]$Path) {
         $cwd = ConvertTo-NormalPath ([string]$script:Cwd)
         if ($cwd -ne '') { $n = $cwd.TrimEnd('/') + '/' + $n }
     }
-    try { $n = ([System.IO.Path]::GetFullPath($n.Replace([char]47, [char]92))).Replace([char]92, [char]47).ToLowerInvariant() } catch { }
+    # R2 (/code-review kolo 2): `\` je oddelovac jen na Windows - jinde je to znak jmena a `..` by se nesbalilo.
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    try { $n = ([System.IO.Path]::GetFullPath($n.Replace([char]47, $sep))).Replace($sep, [char]47).ToLowerInvariant() } catch { }
     return $n
 }
+
+# Meni prikaz pracovni adresar pred zapisem? Pak relativni cil nejde dosadit k cwd hooku (R2, /code-review kolo 2:
+# `Set-Location <kopie pluginu>; Set-Content hooks/hooks.json '{}'`).
+function Test-CwdChange([string]$Command) {
+    return [regex]::IsMatch([string]$Command, '(?i)(^|[\s;&|({])(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)(\s|;|$)')
+}
+$script:CwdUncertain = $false
 
 function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true) {
     $sec = Get-Field $Config 'secrets'
@@ -227,8 +237,16 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # Z117-Q23 = A (Tom 2026-10-08): konfigurace pluginu je chranena jen v NAINSTALOVANE kopii (`.claude/plugins/`),
     # ne ve vyvojovem klonu. Aby to neslo obejit relativni cestou z adresare kopie nebo `..`, posuzuje se navic
     # ABSOLUTNI cesta (relativni vuci cwd, `..` sbalene) - vzory se zkousi nad obema tvary.
-    if ($IsWrite -and ((Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @())) -or
-                       (Test-AnyPattern (Get-AbsoluteNormalPath $Path) @(Get-Field $sec 'selfProtectPathPatterns' @())))) {
+    # R2 (/code-review kolo 2): navic (a) cokoli pod korenem PRAVE BEZICIHO pluginu (`$PluginRoot` - pokryje i
+    # `--plugin-dir` a jiny CLAUDE_CONFIG_DIR) a (b) relativni cil v prikazu, ktery meni adresar - tam se cwd hooku
+    # nevi, takze plati vzor 0.2.0 (`hooks/hooks.json`, `hooks/config/*` kdekoli).
+    $abs = Get-AbsoluteNormalPath $Path
+    $rootNorm = (ConvertTo-NormalPath $script:PluginRootPath).TrimEnd('/')
+    $underRoot = ($rootNorm -ne '' -and $abs.StartsWith($rootNorm + '/hooks/'))
+    $relUncertain = ($script:CwdUncertain -and $norm -notmatch '^([a-z]:/|/)' -and
+                     $norm -match '(^|/)hooks/(hooks\.json|config/[^/]+)$')
+    if ($IsWrite -and ($underRoot -or $relUncertain -or (Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @())) -or
+                       (Test-AnyPattern $abs @(Get-Field $sec 'selfProtectPathPatterns' @())))) {
         return @{ Id = 'selfProtect'; Decision = 'ask'
                   Shape = (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))) }
     }
@@ -488,8 +506,9 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
             # v pozici cteni; `;type=...` za ni je parametr formulare. Splatting `@args`,
             # `@{...}`, `@(...)` a revize `HEAD@{1}` timhle tvarem nejsou (`@` nestoji na
             # zacatku nebo hodnota neprojde sirokym testem cesty).
-            # CR-P5 (/code-review): i slepeny kratky prepinac `-d@<soubor>`, `-Ff=@<soubor>`.
-            $at = [regex]::Match($t, '^(?:-{1,2}[A-Za-z][A-Za-z0-9-]*=|-[A-Za-z])?(?:[A-Za-z0-9_.\-]*=)?@([^@{(;][^;]*)')
+            # CR-P5 (/code-review): i slepeny kratky prepinac `-d@<soubor>`, `-Ff=@<soubor>`; kolo 2: i shluk
+            # prepinacu `-sd@<soubor>`, `-sSd@<soubor>` (curl ho cte jako `-s -S -d @<soubor>`).
+            $at = [regex]::Match($t, '^(?:-{1,2}[A-Za-z][A-Za-z0-9-]*=|-[A-Za-z]+)?(?:[A-Za-z0-9_.\-]*=)?@([^@{(;][^;]*)')
             if ($at.Success) {
                 $atPath = $at.Groups[1].Value
                 if (Test-PathLikeBroad $atPath) {
@@ -575,7 +594,10 @@ function Test-EnvNamesOnly([string]$Statement) {
 
 function Test-EnvironmentDump([string]$Command) {
     $kept = New-Object System.Collections.ArrayList
-    foreach ($st in @(Split-Statement $Command)) { if (-not (Test-EnvNamesOnly $st)) { [void]$kept.Add($st) } }
+    # R2 (/code-review kolo 2): zastineni `measure` / `select` / `%` aliasem nebo funkci v temze prikazu
+    # (`Set-Alias measure Format-List; gci env: | measure`) vyjimku rusi - tataz pojistka jako u jmenujicich tvaru.
+    $namesOnlyAllowed = -not (Test-NamingDisqualified $Command)
+    foreach ($st in @(Split-Statement $Command)) { if (-not ($namesOnlyAllowed -and (Test-EnvNamesOnly $st))) { [void]$kept.Add($st) } }
     $Command = ($kept -join "`n")
     foreach ($sub in (Split-CommandLine $Command)) {
         $argv = Split-Arguments $sub
@@ -1040,6 +1062,7 @@ function Test-SecretCommand([string]$Command, $Config) {
     $sec = Get-Field $Config 'secrets'
     $shapes = Get-Field $sec 'shapes'
     $worst = $null
+    $script:CwdUncertain = Test-CwdChange $Command
 
     # Zapis je vlastnost KANDIDATA (bod 9 + N-H3, 0.2.0) - viz Get-PathCandidate. Telo
     # heredocu s datovym hostem se do rozboru cest nebere (bod 12); promenne prostredi se
@@ -1117,7 +1140,7 @@ $known = @($script:ReadTools + $script:WriteTools + $script:CmdTools)
 if ($known -notcontains $toolName) { Write-HookStderr $script:InternalMessage; exit 2 }
 
 if (-not (Test-HookEnabled $config 'secrets')) { exit 0 }
-# H-c: odmitnuty klic prepisu je videt pri KAZDEM volani, ktere ho potkalo (jen jmeno klice).
+# H-c: odmitnuty klic prepisu je videt v auditu jednou za session (CR-P10) a v kanarku (jen jmeno klice).
 Write-OverrideRejectedAudit $toolName $config ([string](Get-Field $payload 'session_id' ''))
 
 # Tyz skener jako brana, takze i tyz escape znak podle shellu (nalez Amber G1).
