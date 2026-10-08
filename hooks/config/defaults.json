@@ -164,9 +164,10 @@
       "(^|/)\\.claude/settings\\.json$",
       "(^|/)\\.claude/settings\\.local\\.json$",
       "(^|/)\\.claude/sinogard-hooks\\.json$",
-      "(^|/)hooks/hooks\\.json$",
-      "(^|/)hooks/config/[^/]+$"
+      "(^|/)\\.claude/plugins/(.*/)?hooks/hooks\\.json$",
+      "(^|/)\\.claude/plugins/(.*/)?hooks/config/[^/]+$"
     ],
+    "_selfProtect0300Comment": "TASK-117 Z117-Q23 = A (Tom 2026-10-08 18:43): `hooks/hooks.json` a `hooks/config/*` jsou chráněné jen v NAINSTALOVANÉ kopii pluginu (pod `.claude/plugins/`, např. `~/.claude/plugins/cache/sinogard-hooks/…`), ne ve vývojovém klonu — tam je úprava konfigurace běžná práce a dotaz `selfProtect` stál 5 dotazů za jednu session. Cesta se posuzuje ABSOLUTNÍ (relativní vůči `cwd`, `..` sbalené), takže relativní zápis z adresáře nainstalované kopie chráněný zůstává. `.claude/settings*.json` a `.claude/sinogard-hooks.json` jsou chráněné všude.",
 
     "envFile": {
       "denyNames": ["\\.env$", "\\.env\\.local$", "\\.env\\.[^/]+\\.local$"],

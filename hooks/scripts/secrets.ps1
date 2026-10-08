@@ -141,6 +141,19 @@ function Test-GlobAimsAtProtectedPath([string]$GlobNorm, $Sec) {
 
 # --------------------------------------------------------- pravidlo cesty ---
 
+# Absolutni normalizovana cesta: relativni se pripoji k cwd hooku, `.` a `..` se sbali ciste retezcove
+# ([IO.Path]::GetFullPath nesaha na disk). Junction/symlink se NEresi (README omezeni 25).
+function Get-AbsoluteNormalPath([string]$Path) {
+    $n = ConvertTo-NormalPath $Path
+    if ($n -eq '') { return '' }
+    if ($n -notmatch '^([a-z]:/|/)') {
+        $cwd = ConvertTo-NormalPath ([string]$script:Cwd)
+        if ($cwd -ne '') { $n = $cwd.TrimEnd('/') + '/' + $n }
+    }
+    try { $n = ([System.IO.Path]::GetFullPath($n.Replace([char]47, [char]92))).Replace([char]92, [char]47).ToLowerInvariant() } catch { }
+    return $n
+}
+
 function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true) {
     $sec = Get-Field $Config 'secrets'
     $shapes = Get-Field $sec 'shapes'
@@ -211,7 +224,11 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     }
 
     # (3) sebeochrana - soubory, kterymi se brana vypina (jen zapis)
-    if ($IsWrite -and (Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @()))) {
+    # Z117-Q23 = A (Tom 2026-10-08): konfigurace pluginu je chranena jen v NAINSTALOVANE kopii (`.claude/plugins/`),
+    # ne ve vyvojovem klonu. Aby to neslo obejit relativni cestou z adresare kopie nebo `..`, posuzuje se navic
+    # ABSOLUTNI cesta (relativni vuci cwd, `..` sbalene) - vzory se zkousi nad obema tvary.
+    if ($IsWrite -and ((Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @())) -or
+                       (Test-AnyPattern (Get-AbsoluteNormalPath $Path) @(Get-Field $sec 'selfProtectPathPatterns' @())))) {
         return @{ Id = 'selfProtect'; Decision = 'ask'
                   Shape = (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))) }
     }
@@ -471,7 +488,8 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
             # v pozici cteni; `;type=...` za ni je parametr formulare. Splatting `@args`,
             # `@{...}`, `@(...)` a revize `HEAD@{1}` timhle tvarem nejsou (`@` nestoji na
             # zacatku nebo hodnota neprojde sirokym testem cesty).
-            $at = [regex]::Match($t, '^(?:-{1,2}[A-Za-z][A-Za-z0-9-]*=)?(?:[A-Za-z0-9_.\-]*=)?@([^@{(;][^;]*)')
+            # CR-P5 (/code-review): i slepeny kratky prepinac `-d@<soubor>`, `-Ff=@<soubor>`.
+            $at = [regex]::Match($t, '^(?:-{1,2}[A-Za-z][A-Za-z0-9-]*=|-[A-Za-z])?(?:[A-Za-z0-9_.\-]*=)?@([^@{(;][^;]*)')
             if ($at.Success) {
                 $atPath = $at.Groups[1].Value
                 if (Test-PathLikeBroad $atPath) {
@@ -521,7 +539,44 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
     return ,@($out)
 }
 
+# Z117-Q23 = A (c) (Tom 2026-10-08): `Get-ChildItem Env: | Where-Object Name -like 'GSD_TEST*' | Select-Object
+# -ExpandProperty Name` vypise jen JMENA promennych - do 0.2.0 dotaz `envDump`, jako by vypisoval hodnoty.
+# Statement mlci, kdyz vypis prostredi tece JEN do filtru podle jmena a konci projekci na jmeno (nebo poctem);
+# filtr podle hodnoty, skript-blok, cokoli dalsiho nebo vypis bez projekce = envDump jako dosud.
+function Test-EnvNamesOnly([string]$Statement) {
+    $stages = @(Split-Pipe $Statement)
+    if ($stages.Count -lt 2) { return $false }
+    if (([string]$Statement).Contains('{') -or ([string]$Statement).Contains('$')) { return $false }
+    $a0 = Split-Arguments ([string]$stages[0])
+    if ($a0.Count -ne 2) { return $false }
+    if (@('get-childitem', 'gci', 'dir', 'ls') -notcontains (Get-ExecutableName $a0[0])) { return $false }
+    if ([string]$a0[1] -notmatch '^env:[\\/*]*$') { return $false }
+    for ($i = 1; $i -lt $stages.Count; $i++) {
+        $a = Split-Arguments ([string]$stages[$i])
+        if ($a.Count -eq 0) { return $false }
+        $exe = ([string]$a[0]).ToLowerInvariant()
+        $last = ($i -eq $stages.Count - 1)
+        if (-not $last) {
+            if (@('where-object', 'where', '?') -contains $exe -and $a.Count -eq 4 -and [string]$a[1] -ieq 'Name' -and
+                [string]$a[2] -match '^(?i)-(c|i)?(like|notlike|match|notmatch|eq|ne)$') { continue }
+            if (@('sort-object', 'sort') -contains $exe -and ($a.Count -eq 1 -or ($a.Count -eq 2 -and [string]$a[1] -ieq 'Name'))) { continue }
+            return $false
+        }
+        if (@('select-object', 'select') -contains $exe) {
+            $rest = @($a | Select-Object -Skip 1 | ForEach-Object { ([string]$_).ToLowerInvariant() })
+            return (($rest -join ' ') -match '^(-expandproperty |-property )?name$')
+        }
+        if (@('foreach-object', '%', 'foreach') -contains $exe) { return ($a.Count -eq 2 -and [string]$a[1] -ieq 'Name') }
+        if (@('measure-object', 'measure') -contains $exe) { return ($a.Count -eq 1) }
+        return $false
+    }
+    return $false
+}
+
 function Test-EnvironmentDump([string]$Command) {
+    $kept = New-Object System.Collections.ArrayList
+    foreach ($st in @(Split-Statement $Command)) { if (-not (Test-EnvNamesOnly $st)) { [void]$kept.Add($st) } }
+    $Command = ($kept -join "`n")
     foreach ($sub in (Split-CommandLine $Command)) {
         $argv = Split-Arguments $sub
         if ($argv.Count -eq 0) { continue }
@@ -751,7 +806,7 @@ function Get-SensitiveEnvOccurrence([string]$Command, [string]$NamePattern, [str
             $end = $m.Groups[1].Index + $m.Groups[1].Length
             # vzor 2 nese hranicni znak pred `env:` - do vyskytu nepatri
             if ($m.Value.Length -gt 0 -and $Command[$start] -ne '$' -and $Command[$start] -ne '%' -and
-                $Command.Substring($start, [Math]::Min(4, $Command.Length - $start)) -inotmatch '^(env:|getenv)') { $start++ }
+                $Command.Substring($start, [Math]::Min(6, $Command.Length - $start)) -inotmatch '^(env:|getenv)') { $start++ }
             [void]$out.Add(@{ Start = $start; End = $end; Name = $name })
         }
     }
@@ -1063,7 +1118,7 @@ if ($known -notcontains $toolName) { Write-HookStderr $script:InternalMessage; e
 
 if (-not (Test-HookEnabled $config 'secrets')) { exit 0 }
 # H-c: odmitnuty klic prepisu je videt pri KAZDEM volani, ktere ho potkalo (jen jmeno klice).
-Write-OverrideRejectedAudit $toolName $config
+Write-OverrideRejectedAudit $toolName $config ([string](Get-Field $payload 'session_id' ''))
 
 # Tyz skener jako brana, takze i tyz escape znak podle shellu (nalez Amber G1).
 # Pro nastroje nad souborem (Read/Edit/Write) je hodnota bez vyznamu - skener se

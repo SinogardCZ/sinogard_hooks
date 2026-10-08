@@ -401,13 +401,24 @@ function Invoke-Task117Rows([string]$HookName) {
         }
         # Radek s projektovym prepisem nebo rezimem meri JINY stav nez invariant (ten bezi
         # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim.
-        if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode']) {
-            Add-CollectedCase $HookName 'cmd' ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
+        if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode'] -and
+            -not $row.PSObject.Properties['cwd']) {
+            $kind = if (@('Write', 'Edit', 'Read') -contains [string]$row.tool) { 'path' } else { 'cmd' }
+            Add-CollectedCase $HookName $kind ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
         }
         if (Test-CollectOnly) { continue }
-        $template = if ([string]$row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
-        $values = @{ 'tool_input.command' = [string]$row.cmd }
+        # Z117-Q23: radek muze byt i nastroj nad souborem (Write/Edit/Read - `cmd` je cesta) a nest vlastni `cwd`.
+        $tool = [string]$row.tool
+        $values = @{}
+        if (@('Write', 'Edit', 'Read') -contains $tool) {
+            $template = 'pretooluse-' + $tool.ToLowerInvariant()
+            $values['tool_input.file_path'] = [string]$row.cmd
+        } else {
+            $template = if ($tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
+            $values['tool_input.command'] = [string]$row.cmd
+        }
         if ($row.PSObject.Properties['mode']) { $values['permission_mode'] = [string]$row.mode }
+        if ($row.PSObject.Properties['cwd']) { $values['cwd'] = [string]$row.cwd }
         $json = New-HookInput $template $values
         # Bez vlastniho CLAUDE_PROJECT_DIR by hook vzal projekt z `cwd` sablony (W:/dev/gsd/repo)
         # a na stroji, kde GSD repo je, by mlcky platil jeho skutecny prepis (`gate.opaque.*`

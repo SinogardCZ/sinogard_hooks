@@ -113,7 +113,7 @@ uzávěry v GSD. Nový tvar `secrets:wildcardName` zapisuje `secrets.ps1` (glob 
 jménem, viz omezení 9).
 
 ➕ **0.3.0 (TASK-117, 2026-10) — `secrets` jen u čtení obsahu, tři díry 0.2.0 zavřené,
-brána nastavitelná per projekt jen směrem k přísnosti.** Rozhodnutí Toma `Z117-Q1`–`Q22`
+přepis projektu smí bránu jen zpřísnit (výjimky `opaque` a `dbDestroyLocal`).** Rozhodnutí Toma `Z117-Q1`–`Q22`
 (zadání a hlášení TASK-117 v GSD); měření fáze 1 a 2 v `docs/logs/mutants/task-117/` repa GSD.
 Změna verdiktu má u sebe vždy tag rozhodnutí:
 
@@ -133,6 +133,8 @@ Změna verdiktu má u sebe vždy tag rozhodnutí:
 | `sqllocaldb delete <instance>` (smaže instanci **i všechny její DB**) | mlčí | `ask` | `Z117-Q20`, nález Amber A117-N4; `sqllocaldb stop` beze změny |
 | lokální destruktivní DB operace s projektovým `gate.dbDestroyLocal` | `ask` | `ask` / `deny` / **mlčí + audit** podle přepisu | `Z117-Q13/Q19` (H-f, „Konfigurace") |
 | projektový přepis, který bránu **uvolňuje** (`{"gate":{"denyPatterns":[]}}`, `localDbHosts` se vzdáleným hostitelem, `opaque.encoded: audit`, neznámý klíč) | platil | **odmítnut** (platí výchozí hodnota), kanárek + audit `config:overrideRejected` | `Z117-Q21` (H-c, „Konfigurace") |
+| zápis do `hooks/hooks.json` a `hooks/config/*` **mimo nainstalovanou kopii pluginu** (vývojový klon) | `ask` (`selfProtect`) | **mlčí** | `Z117-Q23` (a): chráněné jen pod `.claude/plugins/`; cesta se posuzuje absolutní (relativně k `cwd`, `..` sbalené); `.claude/settings*.json` a `.claude/sinogard-hooks.json` chráněné všude |
+| výpis prostředí, který teče jen do filtru podle **jména** a končí projekcí na jméno nebo počtem (`Get-ChildItem Env: \| Where-Object Name -like 'GSD_TEST*' \| Select-Object -ExpandProperty Name`, `gci env: \| % Name`) | `ask` (`envDump`) | **mlčí** | `Z117-Q23` (c); filtr podle hodnoty, skript-blok, projekce `Value` nebo výpis bez projekce = `ask` dál |
 
 🔴 **Audit nese od 0.3.0 i `ask` a `deny`** (`Z117-Q8`, H-b): řádek má id tvaru
 (`gate:git-reset-hard`, `gate:opaque:invoked`, `secrets:secretFile`, `secrets:envVarRead`) a vydané
@@ -189,7 +191,7 @@ ten seznam vyprázdnil celý — **od 0.3.0 ho ale odmítne kontrola obsahu (ní
 původního mělkého slučování tím drží — položku seznamu pořád nejde jen odebrat — jen kvůli
 jednomu klíči už nemizí zbytek objektu. Hlouběji než o jednu úroveň se **vědomě nejde**.
 
-### Přepis smí bránu jen ZPŘÍSNIT (od 0.3.0, H-c)
+### Přepis smí bránu jen ZPŘÍSNIT — s pojmenovanými výjimkami `opaque` a `dbDestroyLocal` (od 0.3.0, H-c)
 
 Do 0.2.0 se obsah přepisu nekontroloval: `{"gate":{"denyPatterns":[]}}` vypnulo
 `git reset --hard` a `localDbHosts` s `db.firma.cz` udělalo ze vzdáleného serveru „lokální".
@@ -616,6 +618,9 @@ aby si je nikdo nemusel objevit sám.
     v **témže** příkazu (funkce, alias, `PATH`, `source`, `Import-Module`, `hash -p`) výjimku
     ruší; zastínění **dřívějším** příkazem téže session nebo profilem shellu hook nevidí —
     shell drží stav mezi příkazy. Hlava s cestou (`./ls`, `C:\x\git.exe`) výčet není.
+25. **Ochrana konfigurace pluginu platí jen pro nainstalovanou kopii** (0.3.0, `Z117-Q23`). Rozhoduje text cesty
+    (`.claude/plugins/` v absolutní cestě), ne disk: junction nebo symlink z jiného místa do nainstalované kopie hook
+    nerozpozná. Zápis do vývojového klonu se neptá — kanárek a sady klonu chrání jinak (testy, review, tag).
 
 ---
 

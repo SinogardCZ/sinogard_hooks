@@ -108,8 +108,12 @@ $selfProtect = @(
     (PathCase 'zapis settings.json'      '.claude/settings.json' 'ask' 'Write')
     (PathCase 'edit settings.json'       '.claude/settings.json' 'ask' 'Edit')
     (PathCase 'zapis sinogard-hooks'     '.claude/sinogard-hooks.json' 'ask' 'Write')
-    (PathCase 'edit hooks.json'          'hooks/hooks.json' 'ask' 'Edit')
-    (PathCase 'edit config pluginu'      'hooks/config/defaults.json' 'ask' 'Edit')
+    # Z117-Q23 = A (Tom 2026-10-08): konfigurace pluginu je chranena jen v NAINSTALOVANE kopii. Relativni cesta se
+    # bere vuci cwd sablony (W:/dev/gsd/repo), takze tyhle dva radky od 0.3.0 mlci; do 0.2.0 tu stalo `ask`.
+    (PathCase 'edit hooks.json mimo instalaci (Z117-Q23)'     'hooks/hooks.json' 'allow' 'Edit')
+    (PathCase 'edit config mimo instalaci (Z117-Q23)'         'hooks/config/defaults.json' 'allow' 'Edit')
+    (PathCase 'edit hooks.json nainstalovane kopie'           'C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/hooks.json' 'ask' 'Edit')
+    (PathCase 'edit config nainstalovane kopie'               'C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/defaults.json' 'ask' 'Edit')
     # cteni settings.json neni sebeochrana - jen zapis
     (PathCase 'cteni settings.json'      '.claude/settings.json' 'allow' 'Read')
 )
@@ -374,7 +378,9 @@ $bod9Cases = @(
     (CmdCase 'NH3 kontrola append do settings'        'echo x >> .claude/settings.json' 'ask')
     (CmdCase 'NH3 kontrola tee do settings'           'cat x | tee .claude/settings.json' 'ask')
     (CmdCase 'NH3 kontrola Set-Content'               'Set-Content -Path .claude/sinogard-hooks.json -Value x' 'ask' 'PowerShell')
-    (CmdCase 'NH3 kontrola Out-File'                  '$j | Out-File hooks/hooks.json' 'ask' 'PowerShell')
+    # Z117-Q23: zapis do hooks/hooks.json mimo nainstalovanou kopii mlci; kontrolni skupina zapisu = settings.json
+    (CmdCase 'NH3 kontrola Out-File (Z117-Q23)'       '$j | Out-File hooks/hooks.json' 'allow' 'PowerShell')
+    (CmdCase 'NH3 kontrola Out-File settings.json'    '$j | Out-File .claude/settings.json' 'ask' 'PowerShell')
     (CmdCase 'NH3 kontrola 2> do souboru brany'       'dotnet build 2> .claude/settings.json' 'ask')
     # 🔴 a `deny` trida se s presmerovanim nemeni (cteni i zapis .env je deny)
     (CmdCase 'NH3 kontrola cteni .env s 2>/dev/null'  'grep -i port .env 2>/dev/null | head' 'deny')

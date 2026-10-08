@@ -36,7 +36,23 @@ verze (`A117-O3`). Doklady: `docs/logs/mutants/task-117/` v repu GSD (výčet `0
 | `& $m` / `& "$sp\x.ps1"` / `. $m` po jediném literálním přiřazení v témže příkazu (PowerShell) | `ask` (`invoked`) | podle rozbaleného literálu (skript souborem = ticho) | `Z117-Q17` (H-a, varianta 1) |
 | LocalDB `(localdb)\<instance>` v `--connection` | `deny` | `ask` | `Z117-Q18` |
 | lokální destruktivní DB operace s přepisem `gate.dbDestroyLocal = allow` přesně pokrytým tvarem (`sqlcmd -S … -Q "DROP DATABASE [X]"`, `ef database drop --connection …`) | `ask` | ticho + audit `gate:dbDestroyLocal` | `Z117-Q13/Q19` (H-f); výchozí `ask` beze změny |
+| zápis do `hooks/hooks.json` / `hooks/config/*` mimo nainstalovanou kopii (`.claude/plugins/`) | `ask` (`selfProtect`) | ticho | `Z117-Q23` (a), Tom 2026-10-08 18:43 |
+| výpis prostředí filtrovaný podle jména s projekcí na jméno / počet (`Get-ChildItem Env: \| Where-Object Name -like 'X*' \| Select-Object -ExpandProperty Name`) | `ask` (`envDump`) | ticho | `Z117-Q23` (c) |
 | `{"gate":{"opaque":{"variable":"maybe"}}}` (neznámá hodnota) | `ask` (fail-closed v kódu) | klíč odmítnut → výchozí `variable = audit` | `Z117-Q21` — test `politika/neznama` překlopen |
+
+### Opraveno po `/code-review` fáze 2 (CR-P1–P10)
+
+- CR-P1: hostitelé DB se slili do jednoho řetězce (dvojí obal pole) — dva místní hostitelé vyšli jako vzdálený `deny`.
+- CR-P2: rozbalení H-a vypne i `${x} = …`, `Set-Item variable:x`, `(Get-Variable x).Value = …`, `PSVariable.Set`,
+  vícenásobné přiřazení (`$a, $x = …`) — do opravy rozbalilo starou hodnotu a `git reset --hard` prošel tiše.
+- CR-P4: hodnota přepínače začínající pomlčkou není hostitel (`sqlcmd -h -1`, `psql -H -c`).
+- CR-P5: N-D i se slepeným krátkým přepínačem (`curl -d@.env`, `-Ff=@.env`).
+- CR-P6: H-c porovnává pravidlo `denyPatterns`/`askPatterns` podle `id` + `pattern`, ne celým JSON.
+- CR-P7: H-a rozhoduje první výskyt použití mimo přiřazení (ne poslední); náhrada proměnné s hranicí jména.
+- CR-P8: posun začátku výskytu u `GetEnvironmentVariable`. CR-P9: sdílené vzory LocalDB a synonym serveru.
+- CR-P10: audit odmítnutého klíče přepisu jednou za session (značka `override-rejected.json`), ne při každém volání.
+- Vědomě beze změny: CR-P3 (`hooks.*` v přepisu smí hook vypnout) — řádek `hooks.*` přijat v návrhu H-c, který
+  schválil Tom (`Z117-Q21`); vypnutí je viditelné v kanárku (`—`).
 
 ### Přidáno
 

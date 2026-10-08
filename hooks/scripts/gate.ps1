@@ -525,10 +525,14 @@ $script:EnvLiteralNames = '(?:LOCALAPPDATA|TEMP|TMP|USERPROFILE|APPDATA|HOME)'
 function Get-LiteralAssignment([string]$Command) {
     $result = @{}
     if ([string]::IsNullOrWhiteSpace($Command)) { return $result }
-    if ([regex]::IsMatch($Command, '(?i)\b(set-variable|new-variable|sv|nv)\b')) { return $result }
+    # CR-P2 (/code-review): promennou meni i `Set-Item variable:x`, `(Get-Variable x).Value = ...`, `Clear-Variable`,
+    # `$ExecutionContext.SessionState.PSVariable.Set(...)` a vicenasobne prirazeni `$a, $x = ...` - kterykoli z nich
+    # v prikazu rozbaleni vypne CELE (zustava `invoked` = ask).
+    if ([regex]::IsMatch($Command, '(?i)\b(set-variable|new-variable|sv|nv|get-variable|gv|clear-variable|clv|remove-variable|rv)\b|variable:|psvariable|sessionstate')) { return $result }
+    if ([regex]::IsMatch($Command, '(\$\{?[\w:]+\}?\s*,\s*)+\$\{?[\w:]+\}?\s*=(?!=)')) { return $result }
     $counts = @{}
     $assignPatterns = @(
-        '\$(?:script:|global:|local:|private:)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:[+\-*/%]|\?\?)?=(?!=)',
+        '\$\{?(?:script:|global:|local:|private:)?([A-Za-z_][A-Za-z0-9_]*)\}?\s*(?:[+\-*/%]|\?\?)?=(?!=)',
         '\[ref\]\s*\$([A-Za-z_][A-Za-z0-9_]*)',
         '(?i)-(?:outvariable|ov|pipelinevariable|pv|errorvariable|ev|warningvariable|wv|informationvariable|iv)\s*[:\s]\s*[''"]?\+?([A-Za-z_][A-Za-z0-9_]*)',
         '(?i)foreach\s*\(\s*\$([A-Za-z_][A-Za-z0-9_]*)\s+in\b'
@@ -551,7 +555,7 @@ function Get-LiteralAssignment([string]$Command) {
         $name = $m.Groups[1].Value
         if ([int]$counts[$name.ToLowerInvariant()] -ne 1) { continue }
         $value = if ($m.Groups[2].Success) { $m.Groups[2].Value } else { $m.Groups[3].Value }
-        $result[$name.ToLowerInvariant()] = @{ Value = $value; End = $pos }
+        $result[$name.ToLowerInvariant()] = @{ Value = $value; End = $pos; Start = $at }
     }
     # TOCTOU: statement, ktery ZAPISUJE a jmenuje promennou nebo jeji literal, rozbaleni rusi.
     foreach ($st in $statements) {
@@ -578,7 +582,19 @@ function Expand-LiteralHead([string]$Head, [string]$Raw) {
     if ($Head -match '\$\(' -or $Head -match '%') { return $null }
     $refs = [regex]::Matches($Head, '\$\{?([A-Za-z_][A-Za-z0-9_]*)(:[A-Za-z_])?\}?')
     if ($refs.Count -eq 0) { return $null }
-    $use = $script:FullCommand.LastIndexOf($Raw)
+    # CR-P7 (/code-review): rozhoduje PRVNI vyskyt pouziti - stejny text pred prirazenim i po nem by s LastIndexOf
+    # rozbalil i pouziti, ktere bezi s jinou hodnotou (`. .\init.ps1; & $m; $m = '...'; & $m`).
+    # Vyskyt textu pouziti, ktery lezi uvnitr prirazeni nektere promenne hlavy (`$m = ...` obsahuje `$m`), pouzitim neni.
+    $use = -1
+    $from = 0
+    while ($true) {
+        $p = $script:FullCommand.IndexOf($Raw, $from)
+        if ($p -lt 0) { break }
+        $inside = $false
+        foreach ($a0 in $script:LiteralAssign.Values) { if ($p -ge [int]$a0.Start -and $p -lt [int]$a0.End) { $inside = $true; break } }
+        if (-not $inside) { $use = $p; break }
+        $from = $p + 1
+    }
     $out = $Head
     foreach ($r in $refs) {
         if ($r.Groups[2].Success) { return $null }   # `$env:X` primo v hlave - neprirazena promenna
@@ -587,7 +603,7 @@ function Expand-LiteralHead([string]$Head, [string]$Raw) {
         $a = $script:LiteralAssign[$k]
         if ($use -lt 0 -or [int]$a.End -gt $use) { return $null }
         $lit = [regex]::Replace([string]$a.Value, ('(?i)\$env:(' + $script:EnvLiteralNames + ')'), 'ENV_$1')
-        $out = $out.Replace($r.Value, $lit)
+        $out = [regex]::Replace($out, ([regex]::Escape($r.Value) + '(?![A-Za-z0-9_])'), $lit.Replace('$', '$$'))
     }
     if ($out -match '\$') { return $null }
     return $out
@@ -1011,6 +1027,9 @@ function Get-DbHosts([string]$Raw, [string]$Exe = '') {
             for ($g = 1; $g -lt $m.Groups.Count; $g++) {
                 if ($m.Groups[$g].Success) {
                     $v = $m.Groups[$g].Value.Trim()
+                    # CR-P4 (/code-review): sber VSECH shod udelal z `sqlcmd -h -1` (hlavicky) a `psql -H -c` hostitele
+                    # `-1` / `-c`. Hodnota, ktera sama zacina pomlckou, je dalsi prepinac, ne hostitel.
+                    if ($v.StartsWith('-')) { break }
                     if ($out -notcontains $v) { [void]$out.Add($v) }
                     break
                 }
@@ -1029,7 +1048,7 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
     foreach ($h in $LocalHosts) {
         if ($HostName.ToLowerInvariant() -eq ([string]$h).ToLowerInvariant()) { return $true }
     }
-    if ($HostName -match '^\(localdb\)\\[A-Za-z0-9_][A-Za-z0-9_ .\-]*$') { return $true }
+    if ($HostName -match $script:LocalDbInstancePattern) { return $true }
     return $false
 }
 
@@ -1119,7 +1138,7 @@ function Test-DbDestroyLocalAllowed($Leaf, $DbDestroyLocal) {
             $key = (($part.Substring(0, $eq).Trim()) -replace '\s+', ' ').ToLowerInvariant()
             $val = $part.Substring($eq + 1).Trim()
             if ($val -eq '') { return $false }
-            if (@('host', 'server', 'data source', 'address', 'addr', 'network address') -contains $key) { [void]$servers.Add($val) }
+            if ($script:DbServerKeys -contains $key) { [void]$servers.Add($val) }
             elseif (@('database', 'initial catalog') -contains $key) { [void]$dbs.Add($val) }
         }
         if ($servers.Count -ne 1 -or $dbs.Count -ne 1) { return $false }
@@ -1654,7 +1673,9 @@ function Test-DatabaseRule($Leaf, $Config) {
     # proslo BEZ dotazu; hodnota v uvozovkach (`-S "db.firma.cz"`), slepena (`-Sdb.firma.cz`)
     # a URI bez uzivatele koncily `ask` misto `deny`. Od 0.3.0 se sbiraji VSECHNY hodnoty
     # vsech synonym a rozhoduje nejprisnejsi: kterykoli vzdaleny hostitel = vzdaleny prikaz.
-    $dbHosts = @(Get-DbHosts $hostText $hostExe.ToLowerInvariant())
+    # CR-P1 (/code-review): Get-DbHosts vraci `,@(...)` - dalsi `@()` by pole zabalil podruhe (N-H10) a vsechny
+    # hostitele slil do JEDNOHO retezce, takze dva mistni hostitele vysli jako jeden vzdaleny.
+    $dbHosts = Get-DbHosts $hostText $hostExe.ToLowerInvariant()
     $dbHost = ''
     $isLocal = $true
     foreach ($h in $dbHosts) {
@@ -1956,7 +1977,7 @@ $script:PermissionMode = $mode
 
 if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 # H-c: odmitnuty klic prepisu je videt pri KAZDEM volani, ktere ho potkalo (jen jmeno klice).
-Write-OverrideRejectedAudit $toolName $config
+Write-OverrideRejectedAudit $toolName $config ([string](Get-Field $payload 'session_id' ''))
 
 $script:PendingAsk = $null
 $decision = $null

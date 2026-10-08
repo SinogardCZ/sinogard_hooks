@@ -165,6 +165,10 @@ function Get-HookConfig([string]$PluginRoot, [string]$ProjectDir) {
 
 $script:OverrideRejected = New-Object System.Collections.ArrayList
 
+# CR-P9 (/code-review): jedna definice pro H-c, H-f i rozhodnuti o vzdalenosti.
+$script:LocalDbInstancePattern = '^\(localdb\)\\[A-Za-z0-9_][A-Za-z0-9_ .\-]*$'
+$script:DbServerKeys = @('host', 'server', 'data source', 'address', 'addr', 'network address')
+
 # Polozka seznamu jako ordinalni klic porovnani. Objekt (radek `denyPatterns`) se porovnava
 # kompaktnim JSON; objekt, ktery nese jen komentarove klice (`_...`), neni pravidlo a do
 # porovnani nevstupuje.
@@ -172,6 +176,9 @@ function Get-ListItemKey($Item) {
     if ($Item -is [System.Management.Automation.PSCustomObject]) {
         $real = @($Item.PSObject.Properties | Where-Object { -not $_.Name.StartsWith('_') })
         if ($real.Count -eq 0) { return $null }
+        # CR-P6 (/code-review): pravidlo (`denyPatterns`, `askPatterns`) urcuje jeho id a VZOR - poradi klicu ani
+        # lidsky text `shape` ho nemeni; porovnani celeho JSON by kvuli nim odmitlo zprisnujici prepis.
+        if ($Item.PSObject.Properties['pattern']) { return ([string](Get-Field $Item 'id' '') + [char]1 + [string]$Item.pattern) }
         return ($Item | ConvertTo-Json -Depth 6 -Compress)
     }
     return [string]$Item
@@ -197,7 +204,7 @@ function Test-ListRelation($Value, $Default, [string]$Relation) {
 function Test-FixedLocalDbHost([string]$HostName) {
     $h = ([string]$HostName).Trim()
     if ($h -eq '') { return $false }
-    if ($h -match '^\(localdb\)\\[A-Za-z0-9_][A-Za-z0-9_ .\-]*$') { return $true }
+    if ($h -match $script:LocalDbInstancePattern) { return $true }
     if ($h -match '^(localhost|127\.0\.0\.1)(,[0-9]{1,5})?$') { return $true }
     if ($h -match '^(localhost|127\.0\.0\.1|::1|\(local\)|\.)(\\[A-Za-z0-9_$\-]+)?$') { return $true }
     return $false
@@ -877,7 +884,20 @@ function Test-ExpressionStatement([string]$Text) {
 # (`gate:git-reset-hard`, `secrets:secretFile`), nikdy s textem prikazu, cestou ani jmenem
 # promenne. Odmitnute klice prepisu (H-c) se zapisuji pri kazdem volani hooku, ktere je
 # potkalo: `config:overrideRejected:<klic>`, rozhodnuti `reject`.
-function Write-OverrideRejectedAudit([string]$ToolName, $Config) {
+function Write-OverrideRejectedAudit([string]$ToolName, $Config, [string]$SessionId = '') {
+    if (@($script:OverrideRejected).Count -eq 0) { return }
+    # CR-P10 (/code-review): radek pri KAZDEM volani obou hooku by audit zaplavil (2 radky na tool call) a prehlusil
+    # kanarek. Zapisuje se proto jednou za session a sadu klicu: znacka `override-rejected.json` vedle auditu.
+    try {
+        $dir = $env:CLAUDE_PLUGIN_DATA
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and $SessionId -ne '') {
+            $mark = Join-SafePath $dir 'override-rejected.json'
+            $sig = $SessionId + '|' + (@($script:OverrideRejected) -join ',')
+            if ($null -ne $mark -and (Test-SafePath $mark) -and ([System.IO.File]::ReadAllText($mark)).Trim() -eq $sig) { return }
+            [void][System.IO.Directory]::CreateDirectory($dir)
+            if ($null -ne $mark) { [System.IO.File]::WriteAllText($mark, $sig) }
+        }
+    } catch { }
     foreach ($k in @($script:OverrideRejected)) {
         Write-GateAudit $ToolName ('config:overrideRejected:' + [string]$k) 'reject' $Config
     }
