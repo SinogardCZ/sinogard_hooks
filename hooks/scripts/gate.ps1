@@ -655,6 +655,20 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         return $out
     }
 
+    # Z117-Q26 = A (A117-N8): `$ExecutionContext.InvokeCommand.InvokeScript(<text>)` a `[scriptblock]::Create(<text>)`
+    # spousti TEXT stejne jako `iex` - do 0.3.0 hlava `$ExecutionContext...` nebo `[scriptblock]::Create('` nesedla na zadne
+    # pravidlo a `InvokeScript("$x reset --hard")` mlcel. Literal (bez promenne) se rozebere jako prikaz, jinak `invoked`.
+    $runner = [regex]::Match($trimmed, '(?i)(?:\.InvokeScript|\[scriptblock\]::create)\s*\(\s*(?:''([^'']*)''|"([^"]*)")?')
+    if ($runner.Success) {
+        $lit = if ($runner.Groups[1].Success) { $runner.Groups[1].Value } elseif ($runner.Groups[2].Success) { $runner.Groups[2].Value } else { $null }
+        if ($null -ne $lit -and -not (Test-Unexpandable $lit) -and ($runner.Groups[1].Success -or $lit -notmatch '[`$]')) {
+            foreach ($l in (Get-InvokedLeaves $lit '' $Depth)) { [void]$out.Add($l) }
+        } else {
+            [void]$out.Add((New-OpaqueLeaf $trimmed 'invoked'))
+        }
+        return $out
+    }
+
     $stripped = [regex]::Replace($trimmed,
         '^\s*([A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|''[^'']*''|\S*)\s+)+', '')
 

@@ -1034,6 +1034,24 @@ Assert-True ($lineI -match '"shape":"gate:opaque:invoked"' -and $lineI -match '"
 Assert-True ($lineI -notmatch '"decision":"allow"') '[opaque-ask] zadny radek allow'
 Assert-True (-not $lineI.Contains('cmd')) '[opaque-ask] radek NEOBSAHUJE text prikazu'
 
+# TASK-117 CR-P10 (A117-N12): odmitnuty klic prepisu se do auditu zapise JEDNOU za session (znacka
+# `override-rejected.json`), ne pri kazdem volani - a v NOVE session znovu.
+Start-Case 'CR-P10: audit odmitnuteho klice jednou za session'
+$hcDir = Join-Path $script:TempDir ('cr-p10-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+[void][System.IO.Directory]::CreateDirectory((Join-Path $hcDir '.claude'))
+[System.IO.File]::WriteAllText((Join-Path $hcDir '.claude/sinogard-hooks.json'), '{"gate":{"foo":1}}', ([System.Text.UTF8Encoding]::new($false)))
+$hcData = Join-Path $script:TempDir ('cr-p10-data-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+function Get-RejectLineCount {
+    $p = Join-Path $hcData 'gate-audit.jsonl'
+    if (-not [System.IO.File]::Exists($p)) { return 0 }
+    return @([System.IO.File]::ReadAllLines($p) | Where-Object { $_ -match 'config:overrideRejected:gate\.foo' }).Count
+}
+foreach ($sid in @('sess-A', 'sess-A', 'sess-B')) {
+    $jsonHc = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'git status'; 'session_id' = $sid }
+    [void](Invoke-Hook -Script 'gate.ps1' -InputJson $jsonHc -Environment @{ CLAUDE_PROJECT_DIR = $hcDir; CLAUDE_PLUGIN_DATA = $hcData })
+}
+Assert-Equal 2 (Get-RejectLineCount) '[CR-P10] 3 volani (A, A, B) = 2 radky odmitnuti (jednou za session)'
+
 # ================================================================================
 #  v0.1.11 - nalezy Ady N28, N33-N35, N39, N40, N49, N50
 # ================================================================================

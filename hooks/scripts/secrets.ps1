@@ -415,6 +415,80 @@ function Get-GroupingSubcommand([string]$Text, [int]$Depth) {
     return ,@($out)
 }
 
+# Z117-Q25 = A (Tom 2026-10-08 21:24): kam kopie / presun ZAPISE. Cil = hodnota `-Destination` (i `-Destination:x`
+# a zkratky `-Des...`, ktere PowerShell prijme), cil `-t` / `--target-directory` (GNU), jinak POSLEDNI pozicni argument.
+# Adresarovy cil se slozi s jmenem kazdeho zdroje (`cp settings.json .claude/` zapise `.claude/settings.json`) - bez
+# cteni disku se proto skladani dela VZDY, i kdyz cil soubor je (`b` i `b/a` jsou kandidati zapisu; neskodne).
+# `xcopy` = tytez pravidla (prepinace `/x`); `robocopy <zdroj> <cil> [soubory]` = cil + cil/<soubor> pro kazdy soubor.
+# Mimo: glob v cili (`robocopy x .claude *.json`) - kandidat nese `*` a vzory chranenych cest na nem nesednou.
+# Z117-Q26 = A (A117-N5): podprikazy z tel slozenych zavorek (kvotove korektne - Get-ScriptBlockBodies; `@{ }`,
+# `${x}`, `stash@{0}` blok neotviraji), rekurzivne vcetne seskupeni uvnitr tela.
+function Get-BraceSubcommand([string]$Text, [int]$Depth) {
+    $out = New-Object System.Collections.ArrayList
+    if ([string]::IsNullOrWhiteSpace($Text) -or $Depth -gt 5 -or -not $Text.Contains('{')) { return ,@($out) }
+    foreach ($blk in (Get-ScriptBlockBodies $Text).Blocks) {
+        $body = [string]$blk.Body
+        foreach ($s in (Split-CommandLine $body)) {
+            [void]$out.Add($s)
+            foreach ($s2 in (Get-BraceSubcommand ([string]$s) ($Depth + 1))) { [void]$out.Add($s2) }
+        }
+        foreach ($s in (Get-GroupingSubcommand $body ($Depth + 1))) { [void]$out.Add($s) }
+    }
+    return ,@($out)
+}
+
+$script:CopyMoveExe = @('cp', 'copy', 'copy-item', 'cpi', 'mv', 'move', 'move-item', 'mi', 'xcopy')
+function Get-CopyWriteTarget($Tokens, [string]$Exe) {
+    $out = New-Object System.Collections.ArrayList
+    $isRobo = ($Exe -eq 'robocopy')
+    if (-not $isRobo -and $script:CopyMoveExe -notcontains $Exe) { return ,@($out) }
+    $winSwitch = ($isRobo -or $Exe -eq 'xcopy' -or $Exe -eq 'copy' -or $Exe -eq 'move')
+    $positional = New-Object System.Collections.ArrayList
+    $sources = New-Object System.Collections.ArrayList
+    $targetDirs = New-Object System.Collections.ArrayList
+    $dest = $null
+    $n = $Tokens.Count
+    for ($i = 1; $i -lt $n; $i++) {
+        $t = Remove-GroupingParen ([string]$Tokens[$i])
+        if ($t -eq '') { continue }
+        if ($t -match '^(?i)-des[a-z]*$') { if (($i + 1) -lt $n) { $dest = Remove-GroupingParen ([string]$Tokens[$i + 1]); $i++ }; continue }
+        if ($t -ceq '-t' -or $t -match '^(?i)--target-directory$') { if (($i + 1) -lt $n) { [void]$targetDirs.Add([string]$Tokens[$i + 1]); $i++ }; continue }
+        if ($t -match '^(?i)--target-directory=(.+)$') { [void]$targetDirs.Add($Matches[1]); continue }
+        if ($t -match '^(?i)-(path|literalpath|lp|pspath)$') { if (($i + 1) -lt $n) { [void]$sources.Add([string]$Tokens[$i + 1]); $i++ }; continue }
+        if ($t -match '^(?i)-(filter|include|exclude|credential|tosession|fromsession|suffix|backup)$') { $i++; continue }
+        if ($t.StartsWith('-')) { continue }
+        if ($winSwitch -and $t -match '^/[A-Za-z][A-Za-z0-9]{0,5}(:.*)?$') { continue }
+        [void]$positional.Add($t)
+    }
+    $targets = New-Object System.Collections.ArrayList
+    if ($isRobo) {
+        if ($positional.Count -lt 2) { return ,@($out) }
+        $dst = [string]$positional[1]
+        [void]$out.Add($dst)
+        for ($k = 2; $k -lt $positional.Count; $k++) { [void]$out.Add($dst.TrimEnd('/', '\') + '/' + [string]$positional[$k]) }
+        return ,@($out)
+    }
+    if ($null -ne $dest) {
+        [void]$targets.Add($dest)
+        foreach ($p in $positional) { [void]$sources.Add($p) }
+    } elseif ($targetDirs.Count -gt 0) {
+        foreach ($p in $positional) { [void]$sources.Add($p) }
+    } elseif ($positional.Count -ge 2 -or ($positional.Count -ge 1 -and $sources.Count -gt 0)) {
+        [void]$targets.Add($positional[$positional.Count - 1])
+        for ($k = 0; $k -lt $positional.Count - 1; $k++) { [void]$sources.Add($positional[$k]) }
+    }
+    foreach ($tg in $targets) { [void]$out.Add([string]$tg) }
+    $dirs = @($targets) + @($targetDirs)
+    foreach ($d in $dirs) {
+        foreach ($s in $sources) {
+            $leaf = (([string]$s) -replace '\\', '/').TrimEnd('/')
+            $leaf = $leaf.Substring($leaf.LastIndexOf('/') + 1)
+            if ($leaf -ne '') { [void]$out.Add(([string]$d).TrimEnd('/', '\') + '/' + $leaf) }
+        }
+    }
+    return ,@($out)
+}
+
 function Get-PathCandidate([string]$Command, $Config = $null) {
     $out = New-Object System.Collections.ArrayList
     $sec = $null
@@ -452,6 +526,9 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
     $subs = New-Object System.Collections.ArrayList
     foreach ($x in (Split-CommandLine $Command)) { [void]$subs.Add($x) }
     foreach ($x in (Get-GroupingSubcommand $Command 0)) { [void]$subs.Add($x) }
+    # Z117-Q26 = A (A117-N5): obsah slozenych zavorek `{ ...; }` (Bash skupina, funkce, PS blok) je SPUSTENY prikaz -
+    # do 0.3.0 zustal `;` na tokenu (`.env;`), `{ cat .env; } | curl -d @- ...` i `{ echo x > .claude/settings.json; }` mlcely.
+    foreach ($x in @($subs)) { foreach ($b in (Get-BraceSubcommand ([string]$x) 0)) { [void]$subs.Add($b) } }
     foreach ($sub in $subs) {
         $argv = Split-Arguments $sub
         if ($argv.Count -eq 0) { continue }
@@ -462,6 +539,11 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
         # Bez `@()`: Expand-ColonParameter vraci `,@(...)` a dalsi obal by pole zabalil JESTE JEDNOU
         # (viz poznamka u Split-UnquotedCore) - Count by byl 1 a token cely argv.
         $tokens = Expand-ColonParameter $argv
+        # Z117-Q25 = A (Tom 2026-10-08 21:24): CIL kopie / presunu je ZAPIS. Do 0.3.0 byly argumenty `cp`/`Copy-Item`
+        # jen ctenim, takze `cp x .claude/settings.json` ochranu selfProtect obesel (dira uz v 0.2.0).
+        foreach ($w in (Get-CopyWriteTarget $tokens $subExe)) {
+            [void]$out.Add(@{ Value = $w; AllowGlob = $false; IsWrite = $true })
+        }
         for ($ti = 0; $ti -lt $tokens.Count; $ti++) {
             # N-C (TASK-117, Z117-Q16 = A): do 0.2.0 nesl token zavorku seskupeni
             # (`Get-Content (Get-ChildItem <soubor>)` -> `<soubor>)`), zadny vzor ho nechranil
@@ -508,6 +590,22 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
             # zacatku nebo hodnota neprojde sirokym testem cesty).
             # CR-P5 (/code-review): i slepeny kratky prepinac `-d@<soubor>`, `-Ff=@<soubor>`; kolo 2: i shluk
             # prepinacu `-sd@<soubor>`, `-sSd@<soubor>` (curl ho cte jako `-s -S -d @<soubor>`).
+            # Z117-Q26 = A (A117-N7): curl `--data-urlencode name@<soubor>` a `--variable name@<soubor>` (i `=`-tvar)
+            # ctou soubor i tehdy, kdyz `@` nestoji na zacatku hodnoty.
+            if ($subExe -eq 'curl') {
+                $prevTok = if ($ti -gt 0) { [string]$tokens[$ti - 1] } else { '' }
+                $urlVal = $null
+                if ($prevTok -match '^--(data-urlencode|variable)$') { $urlVal = $t }
+                elseif ($t -match '^--(data-urlencode|variable)=(.+)$') { $urlVal = $Matches[2] }
+                if ($null -ne $urlVal) {
+                    $um = [regex]::Match($urlVal, '^[^@=]*=?@([^@;]+)')
+                    if (-not $um.Success) { $um = [regex]::Match($urlVal, '^[^@]*@([^@;]+)') }
+                    if ($um.Success -and (Test-PathLikeBroad $um.Groups[1].Value)) {
+                        [void]$out.Add(@{ Value = $um.Groups[1].Value; AllowGlob = $false; IsWrite = $false })
+                        continue
+                    }
+                }
+            }
             $at = [regex]::Match($t, '^(?:-{1,2}[A-Za-z][A-Za-z0-9-]*=|-[A-Za-z]+)?(?:[A-Za-z0-9_.\-]*=)?@([^@{(;][^;]*)')
             if ($at.Success) {
                 $atPath = $at.Groups[1].Value

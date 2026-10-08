@@ -329,6 +329,10 @@ function ConvertTo-NormalPath([string]$Path) {
     $p = $Path.Trim()
     $p = $p.Trim('"').Trim("'")
     $p = $p -replace '\\', '/'
+    # Z117-Q26 = A (A117-N6): prefix Win32 cest `\\?\` / `\\.\` (a `\\?\UNC\server\share`) je jen zpusob zapisu - do 0.3.0
+    # zustal `?` v ceste, brala se jako glob a `\\?\...\.claude\settings.json` zapis mlcel, `\\?\...\.env` cteni bylo jen ask.
+    $p = [regex]::Replace($p, '^//[?.]/unc/', '//', 'IgnoreCase')
+    $p = [regex]::Replace($p, '^//[?.]/', '')
     $p = [regex]::Replace($p, '%([A-Za-z_][A-Za-z0-9_]*)%', {
         param($m)
         $v = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)

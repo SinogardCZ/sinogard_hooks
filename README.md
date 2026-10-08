@@ -135,6 +135,8 @@ Změna verdiktu má u sebe vždy tag rozhodnutí:
 | projektový přepis, který bránu **uvolňuje** (`{"gate":{"denyPatterns":[]}}`, `localDbHosts` se vzdáleným hostitelem, `opaque.encoded: audit`, neznámý klíč) | platil | **odmítnut** (platí výchozí hodnota), kanárek + audit `config:overrideRejected` | `Z117-Q21` (H-c, „Konfigurace") |
 | zápis do `hooks/hooks.json` a `hooks/config/*` **mimo nainstalovanou kopii pluginu** (vývojový klon) | `ask` (`selfProtect`) | **mlčí** | `Z117-Q23` (a): chráněné jen pod `.claude/plugins/`; cesta se posuzuje absolutní (relativně k `cwd`, `..` sbalené); `.claude/settings*.json` a `.claude/sinogard-hooks.json` chráněné všude |
 | výpis prostředí, který teče jen do filtru podle **jména** a končí projekcí na jméno nebo počtem (`Get-ChildItem Env: \| Where-Object Name -like 'GSD_TEST*' \| Select-Object -ExpandProperty Name`, `gci env: \| % Name`) | `ask` (`envDump`) | **mlčí** | `Z117-Q23` (c); filtr podle hodnoty, skript-blok, projekce `Value` nebo výpis bez projekce = `ask` dál |
+| 🔴 **cíl kopie / přesunu** do chráněné cesty (`cp x .claude/settings.json`, `Copy-Item … -Destination …`, `mv` do nainstalované kopie, `xcopy`, `robocopy`) | **mlčí** | `ask` / `deny` | `Z117-Q25`; omezení 25 |
+| 🔴 Bash skupina `{ cat .env; }` (i do roury, ve funkci, se zápisem), prefix `\\?\` / `\\.\` u nástrojů nad souborem, `curl --data-urlencode name@soubor` / `--variable`, `InvokeScript(…)` / `[scriptblock]::Create(…)` | **mlčí** (`\\?\…\.env` jen `ask`) | `deny` / `ask` jako bez obalu | `Z117-Q26` (`A117-N5`–`N8`) |
 
 🔴 **Audit nese od 0.3.0 i `ask` a `deny`** (`Z117-Q8`, H-b): řádek má id tvaru
 (`gate:git-reset-hard`, `gate:opaque:invoked`, `secrets:secretFile`, `secrets:envVarRead`) a vydané
@@ -322,7 +324,9 @@ aby si je nikdo nemusel objevit sám.
    přiřazení v bloku nebo až po volání, statement, který **zapisuje** a proměnnou, literál
    nebo jméno skriptu jmenuje (`Set-Content $p …; & $p` — soubor se změní po kontrole), obal,
    který text spouští (`iex $x`, `Start-Process $x`, `bash -c "$x"`), a Bash nástroj — tam
-   všechno zůstává `invoked` (`ask`). Nad 46 příkazy s proměnnou v hlavě z transkriptů GSD
+   všechno zůstává `invoked` (`ask`). ⚠️ **Co to uvolňuje i bez přepisu** (`A117-N9`): destruktivní ocas
+   v proměnné nebo poli (`$x = 'git'; & $x $y --hard`, `& $x @('reset','--hard')`) mlčí stejně jako literální
+   `git $y --hard` už v 0.2.0 (proměnná v argumentu = audit) — v 0.2.0 se ptal jako `invoked`. Nad 46 příkazy s proměnnou v hlavě z transkriptů GSD
    (2026-09-05 → 10-06): 0.2.0 bez přepisu 45 `ask`, 0.3.0 bez přepisu **3 `ask`** (2× skript,
    který sám sebe přepíše, 1× hlava v jednoduchých uvozovkách).
 2. **Obal, ve kterém se obsah proměnné SPUSTÍ, končí `ask`; hodnota a výraz končí
@@ -619,10 +623,12 @@ aby si je nikdo nemusel objevit sám.
     ruší; zastínění **dřívějším** příkazem téže session nebo profilem shellu hook nevidí —
     shell drží stav mezi příkazy. Hlava s cestou (`./ls`, `C:\x\git.exe`) výčet není.
 25. **Ochrana konfigurace pluginu platí jen pro nainstalovanou kopii** (0.3.0, `Z117-Q23`). Rozhoduje text cesty
-    (`.claude/plugins/` v absolutní cestě, nebo `hooks/` právě běžícího pluginu), ne disk: junction, symlink nebo
-    jméno 8.3 hook nerozpozná. Zápis do vývojového klonu, který neběží, se neptá — chrání ho sady, review a tag.
-    ⚠️ **Cíl kopie není zápis** (díra už v 0.2.0, neopraveno): `cp x .claude/settings.json` a `Copy-Item` do chráněné
-    cesty mlčí — `cp`/`Copy-Item` jsou v `pathCommands` a jejich argumenty se posuzují jako čtení.
+    (`.claude/plugins/` v absolutní cestě, nebo `hooks/` právě běžícího pluginu), ne disk: junction ani symlink hook
+    nerozpozná; existující jméno 8.3 (`CLAUDE~1`) rozvine `GetFullPath`, takže se pozná (změřila Amber, `A117-N11`).
+    Zápis do vývojového klonu, který neběží, se neptá — chrání ho sady, review a tag.
+    ✔️ **Cíl kopie / přesunu je od 0.3.0 zápis** (`Z117-Q25`; do 0.3.0 díra — `cp x .claude/settings.json` mlčel):
+    `-Destination` (i zkratky a `-Destination:`), `-t` / `--target-directory`, jinak poslední poziční argument; adresářový
+    cíl se skládá se jménem zdroje; `xcopy` a `robocopy <zdroj> <cíl> <soubor>` taky. Mez: glob v cíli (`robocopy x .claude *.json`).
 
 ---
 

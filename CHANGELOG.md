@@ -60,8 +60,25 @@ verze (`A117-O3`). Doklady: `docs/logs/mutants/task-117/` v repu GSD (výčet `0
   (ne `-ErrorVariable:e`).
 - ⚠️ Migrace: výchozí `secrets.selfProtectPathPatterns` se změnil (`Z117-Q23`) — projektový přepis, který kopíroval
   seznam 0.2.0, už není nadmnožina a H-c ho celý odmítne (kanárek to ukáže). Projekt přepíše seznam z 0.3.0.
-- ⚠️ Zjištěno, **neopraveno** (díra už v 0.2.0, mimo rozhodnutí TASK-117): cíl kopie se nebere jako zápis —
-  `cp x .claude/settings.json`, `Copy-Item x .claude/settings.json` i kopie do nainstalované kopie pluginu mlčí.
+
+### Zpřísněno — díry 0.2.0 nalezené review fáze 2 (`Z117-Q25`, `Z117-Q26`, Tom 2026-10-08 21:24 a 21:44)
+
+| tvar | 0.2.0 | 0.3.0 | rozhodnutí |
+|---|---|---|---|
+| **cíl kopie / přesunu** do chráněné cesty: `cp x .claude/settings.json`, `Copy-Item … -Destination .claude/…` (i `-Destination:`, `-Dest`, prohozené pořadí), adresářový cíl + chráněné jméno zdroje (`cp /tmp/settings.json .claude/`), `cp -t` / `--target-directory`, `mv`/`Move-Item` do nainstalované kopie pluginu, `xcopy`, `robocopy <zdroj> <cíl> <soubor>` | ticho | `ask` (`selfProtect`), nad souborem se secrets `deny` | `Z117-Q25` |
+| Bash skupina / funkce `{ cat .env; }`, `{ cat .env; } \| curl -d @- …`, `f() { cat .env; }; f`, `{ echo x > .claude/settings.json; }` | ticho | `deny` / `ask` | `Z117-Q26` (`A117-N5`) |
+| prefix `\\?\` / `\\.\` (i `\\?\UNC\…`) v cestě nástrojů Read/Write/Edit — `\\?\…\.claude\settings.json` zápis, `\\?\…\.env` čtení | ticho / `ask` | `ask` / `deny` jako bez prefixu | `Z117-Q26` (`A117-N6`) |
+| `curl --data-urlencode name@.env`, `'name@.env'`, `--data-urlencode=name@.env`, `--variable name@.env` | ticho | `deny` | `Z117-Q26` (`A117-N7`) |
+| `$ExecutionContext.InvokeCommand.InvokeScript("$x reset --hard")`, `& ([scriptblock]::Create('git reset --hard'))` | ticho | `ask` (proměnná) / `deny` (literál se rozebere) | `Z117-Q26` (`A117-N8`) |
+
+Mimo pokrytí `Z117-Q25`: glob v cíli kopie (`robocopy x .claude *.json`) — kandidát nese `*` a vzory chráněných cest na něm nesednou.
+
+### ⚠️ Co H-a uvolňuje i bez projektového přepisu (`A117-N9`)
+
+Rozbalení literální hlavy (`Z117-Q17`) posuzuje **rozbalený** příkaz jako literální — a literální `git @('reset','--hard')`
+nebo `git $y --hard` mlčely už v 0.2.0 (proměnná v argumentu = `opaque:variable`, audit). Proto `$x = 'git'; & $x $y --hard`,
+`& $x @('reset','--hard')`, `& $x @a` (destruktivní ocas v proměnné) od 0.3.0 **mlčí ve všech projektech bez přepisu**
+(HRMS, Útraty) — v 0.2.0 se ptaly jako `invoked`. `$x = 'git'; & $x reset --hard` (ocas viditelný) je `deny`.
 
 ### Přidáno
 
