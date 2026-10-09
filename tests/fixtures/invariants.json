@@ -6883,6 +6883,258 @@
       "expect": "allow",
       "since": "A117-N15 kontrola: Copy-Item cfg .claude bez -Recurse -> ticho",
       "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item cfg .claude -r",
+      "expect": "ask",
+      "since": "A117-N22 Copy-Item -r (zkratka -Recurse) do .claude -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item cfg .claude -re",
+      "expect": "ask",
+      "since": "A117-N22 Copy-Item -re do .claude -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cpi cfg .claude -r",
+      "expect": "ask",
+      "since": "A117-N22 cpi -r do .claude -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item evil\\hooks C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0 -r -Force",
+      "expect": "ask",
+      "since": "A117-N22 Copy-Item hooks -r do nainstalovane kopie -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item cfg dist -r",
+      "expect": "allow",
+      "since": "A117-N22 kontrola: Copy-Item cfg dist -r -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item cfg .claude -Recurse:$false",
+      "expect": "allow",
+      "since": "A117-N26 kontrola: -Recurse:$false neni rekurze -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem cfg | Copy-Item -Destination .claude",
+      "expect": "ask",
+      "since": "A117-N23 roura do Copy-Item -Destination .claude -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem cfg -Recurse | Copy-Item -Destination .claude -Force",
+      "expect": "ask",
+      "since": "A117-N23 roura -Recurse do Copy-Item -Force -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Item .claude\\x.json | Rename-Item -NewName settings.json",
+      "expect": "ask",
+      "since": "A117-N23 roura do Rename-Item -NewName settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item -Path (Get-ChildItem cfg) -Destination .claude",
+      "expect": "ask",
+      "since": "A117-N23 -Path (vyraz) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp cfg/[s]ettings.json .claude/",
+      "expect": "ask",
+      "since": "A117-N23 zdroj [s]ettings.json (Bash) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp cfg/{a,settings}.json .claude/",
+      "expect": "ask",
+      "since": "A117-N23 zdroj {a,settings}.json (Bash) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item cfg\\[s]ettings.json .claude",
+      "expect": "ask",
+      "since": "A117-N23 zdroj [s]ettings.json (PS) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp x.json .claude/settings.js*",
+      "expect": "ask",
+      "since": "A117-N23 glob v cili settings.js* -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv .claude/x.json .claude/settings.jso?",
+      "expect": "ask",
+      "since": "A117-N23 glob v cili mv settings.jso? -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp x.json .claude/[s]ettings.json",
+      "expect": "ask",
+      "since": "A117-N23 glob v cili [s]ettings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item x.json .claude\\settings.js*",
+      "expect": "ask",
+      "since": "A117-N23 glob v cili (PS) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-ChildItem src | Copy-Item -Destination dist",
+      "expect": "allow",
+      "since": "A117-N23 kontrola: roura do Copy-Item -Destination dist -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Item docs\\a.md | Rename-Item -NewName b.md",
+      "expect": "allow",
+      "since": "A117-N23 kontrola: roura do Rename-Item -NewName b.md -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp a.txt b[1].txt",
+      "expect": "allow",
+      "since": "A117-N23 kontrola: cil b[1].txt -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp docs/{a,b}.md out/",
+      "expect": "allow",
+      "since": "A117-N23 kontrola: zdroj {a,b}.md do out/ -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r cfg/. .",
+      "expect": "ask",
+      "since": "A117-N24 cp -r cfg/. . (koren projektu) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r cfg/. ./",
+      "expect": "ask",
+      "since": "A117-N24 cp -r cfg/. ./ -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r cfg/* .",
+      "expect": "ask",
+      "since": "A117-N24 cp -r cfg/* . -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r /tmp/x/. ~",
+      "expect": "ask",
+      "since": "A117-N24 cp -r /tmp/x/. ~ (domov) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r cfg/. $CLAUDE_PROJECT_DIR",
+      "expect": "ask",
+      "since": "A117-N24 cp -r cfg/. $CLAUDE_PROJECT_DIR -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item C:\\tmp\\x\\* . -Recurse -Force",
+      "expect": "ask",
+      "since": "A117-N24 Copy-Item x\\* . -Recurse -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item C:\\tmp\\x\\* $HOME -Recurse -Force",
+      "expect": "ask",
+      "since": "A117-N24 Copy-Item x\\* $HOME -Recurse -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "robocopy C:\\tmp\\x . /E",
+      "expect": "ask",
+      "since": "A117-N24 robocopy x . /E -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "xcopy C:\\tmp\\x . /E /Y",
+      "expect": "ask",
+      "since": "A117-N24 xcopy x . /E /Y -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv cfg/* .",
+      "expect": "ask",
+      "since": "A117-N24 mv cfg/* . -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r src .",
+      "expect": "allow",
+      "since": "A117-N24 kontrola: cp -r src . -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp ../other/*.md .",
+      "expect": "allow",
+      "since": "A117-N24 kontrola: cp *.md . bez rekurze -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r src/. dist",
+      "expect": "allow",
+      "since": "A117-N24 kontrola: cp -r src/. dist -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "robocopy C:\\tmp\\x . a.txt",
+      "expect": "allow",
+      "since": "A117-N24 kontrola: robocopy x . a.txt -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv /tmp/x.json .",
+      "expect": "allow",
+      "since": "A117-N24 kontrola: mv x.json . -> ticho",
+      "hook": "secrets"
     }
   ]
 }

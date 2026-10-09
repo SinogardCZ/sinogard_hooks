@@ -309,7 +309,7 @@ aby si je nikdo nemusel objevit sám.
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
    uvnitř byl `git reset --hard`. Obal s literálem (`bash -c "…"`) se rozebere,
    obal se souborem ne. ⚠️ Rozebírá ho jen hook `gate`; hook `secrets` obal `bash -c` / `pwsh -c` nerozbaluje
-   (změřila Amber, `A117-N16`; omezení 25).
+   (změřila Amber, `A117-N16`; omezení 25). A `Start-Process git -ArgumentList 'reset','--hard'` gate nesloží (`A117-N18`).
    ➕ **A platí to i tehdy, když je ta cesta v proměnné** (0.1.11, nález Ada N49):
    `pwsh -File $p`, `bash $script` ani `Start-Process -FilePath 'pwsh' …
    -RedirectStandardOutput $log` nejsou spuštění obsahu proměnné — proměnná je tam
@@ -635,10 +635,22 @@ aby si je nikdo nemusel objevit sám.
     Adresář se přesune / zkopíruje i **bez** přepínače rekurze — `mv src/.claude .`, `mv cfg .claude`, `Rename-Item cfg
     .claude`, `xcopy cfg .claude /Y` (obsah adresáře) = `ask`; `cp` / `Copy-Item` bez rekurze adresář nepřenese. Cena:
     `mv x.json .claude` se ptá — hook nepozná, jestli `.claude` existuje (jinak by šlo o přejmenování adresáře).
-    ⚠️ **Mez, která zůstává** (čeká na rozhodnutí Toma, `A117-N16`–`N17`): jiné zápisové příkazy — `install`, `ln -sf`,
+    Za neznámé jméno zdroje platí i (`A117-N22`–`N24`): každá zkratka `-Recurse` v PowerShellu (`-r`, `-re` …; `-Recurse:$false`
+    rekurze není), zdroj z roury (`Get-ChildItem cfg | Copy-Item -Destination .claude`, `… | Rename-Item -NewName
+    settings.json` — nové jméno se zkusí ve všech chráněných adresářích), zdroj jako výraz nebo proměnná (`-Path (…)`, `$x`),
+    zástupné znaky `[…]` a Bash `{a,b}`. **Glob v cíli** (`cp x.json .claude/settings.js*`) se sonduje adresářem před prvním
+    segmentem se zástupným znakem — mez „glob v cíli" z kola 03 je tím zavřená. Rekurzivní kopie s neznámými jmény do
+    **kořene projektu nebo domova** (`cp -r ../sablona/. .`, `cp -r X/. ~`, `robocopy X . /E`, `Copy-Item X\* $HOME -Recurse`)
+    se ptá na `.claude/settings*.json`, `.claude/sinogard-hooks.json` a nainstalovanou kopii pod nimi; `cp -r src .` mlčí.
+    ⚠️ **Mez:** jiný předek chráněného adresáře (`cp -r X/. ..`, `cp -r X/. /c/Users`) se nesonduje — sonda `.claude/…` pod
+    každým cílem by ptala i u `cp -r src dist`. Seznam sondovaných jmen je pevný (`settings*.json`, `sinogard-hooks.json`,
+    `hooks.json`, `defaults.json`): jméno, které projekt přidá do `selfProtectPathPatterns` přepisem, chrání přímá kontrola,
+    sonda kopie s neznámým jménem zdroje ne (`A117-N27`).
+    ⚠️ **Mez, která zůstává** (čeká na rozhodnutí Toma, `A117-N16`–`N18`, `N25`): jiné zápisové příkazy — `install`, `ln -sf`,
     `rsync`, `dd of=`, `New-Item -ItemType SymbolicLink|HardLink`, `[IO.File]::Copy(…)`, cesta složená výrazem
-    (`Join-Path`), `cmd /c copy` (omezení 15) — a obaly `bash -c '…'` / `pwsh -c "…"`, které `secrets` (na rozdíl od `gate`)
-    nerozbaluje: zápis i čtení chráněného souboru jimi mlčí.
+    (`Join-Path`), `cmd /c copy` (omezení 15) —, skládání příkazů (`ls cfg/* | xargs cp -t .claude`, `find … -exec cp {}
+    .claude/ \;`) a obaly `bash -c '…'` / `pwsh -c "…"`, které `secrets` (na rozdíl od `gate`) nerozbaluje: zápis i čtení
+    chráněného souboru jimi mlčí. V hooku `gate` mlčí `Start-Process git -ArgumentList 'reset','--hard'` (`A117-N18`).
 
 ---
 

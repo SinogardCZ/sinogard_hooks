@@ -78,8 +78,14 @@ nejde (glob `cp cfg/* .claude/`, `cp *.json .claude/`, rekurze `cp -r cfg/. .cla
 Adresář bez přepínače rekurze taky: `mv src/.claude .`, `mv cfg .claude`, `Move-Item cfg .claude`, `Rename-Item cfg .claude`,
 `xcopy cfg .claude /Y` → `ask`; cena: `mv x.json .claude` se ptá (hook nepozná, jestli cíl existuje).
 `\??\` (NT prefix) se strhne jako `\\?\` (`A117-N19`).
-⚠️ Mez (čeká na rozhodnutí Toma, `A117-N16`–`N17`): `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` link, `[IO.File]::Copy`,
-`Join-Path` v cíli, `cmd /c copy` a obaly `bash -c` / `pwsh -c` v hooku `secrets` — zápis i čtení jimi mlčí (i v 0.2.0).
+➕ `A117-N22`–`N24`, `N26` (delta review Amber 04): PowerShell zkratky `-Recurse` (`Copy-Item cfg .claude -r`), zdroj z roury
+(`Get-ChildItem cfg | Copy-Item -Destination .claude`, `Get-Item x | Rename-Item -NewName settings.json`), výraz / proměnná ve
+zdroji, zástupné znaky `[…]` / `{a,b}`, glob v cíli (`cp x.json .claude/settings.js*`) a rekurzivní kopie s neznámými jmény do
+kořene projektu nebo domova (`cp -r ../sablona/. .`, `robocopy X . /E`) → `ask`; `cp -r src .`, `Copy-Item cfg .claude
+-Recurse:$false` mlčí. Mez: jiný předek `.claude` (README 25).
+⚠️ Mez (čeká na rozhodnutí Toma, `A117-N16`–`N18`, `N25`): `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` link, `[IO.File]::Copy`,
+`Join-Path` v cíli, `cmd /c copy`, `xargs cp -t` / `find -exec cp` a obaly `bash -c` / `pwsh -c` v hooku `secrets` — zápis i
+čtení jimi mlčí (i v 0.2.0); gate `Start-Process git -ArgumentList 'reset','--hard'`.
 
 ### ⚠️ Co H-a uvolňuje i bez projektového přepisu (`A117-N9`)
 

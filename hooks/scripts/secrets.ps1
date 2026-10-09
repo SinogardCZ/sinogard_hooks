@@ -447,14 +447,56 @@ $script:MoveExe = @('mv', 'move', 'move-item', 'mi')
 # tam, kde vzor chranene cesty opravdu sedne - `cp -r src dist` zustava ticho).
 $script:ProtectedChildProbe = @('settings.json', 'settings.local.json', 'sinogard-hooks.json', 'hooks.json', 'defaults.json',
                                 'config/defaults.json', 'hooks/hooks.json', 'hooks/config/defaults.json')
-function Add-ProtectedChildProbe($Out, [string]$Dir) {
+# A117-N27: seznam jmen je pevny vedle konfigurovatelnych `selfProtectPathPatterns` - jmeno pridane prepisem projektu
+# chrani prima kontrola, sonda kopie s neznamym jmenem zdroje ne (README omezeni 25).
+# A117-N24 (delta review Amber 04): rekurzivni kopie s neznamymi jmeny do PREDKA chraneneho adresare (`cp -r X/. .`,
+# `cp -r X/. ~`, `robocopy X . /E`) prepise `./.claude/settings.json`, kdyz ho `X` obsahuje (sablona, jiny projekt).
+# Sonda `.claude/...` pod KAZDYM cilem by ptala i u `cp -r src dist`, proto jen koren projektu (`.`, cwd,
+# `$CLAUDE_PROJECT_DIR`) a domov (`~`, `$HOME`, `$env:USERPROFILE`, `%USERPROFILE%`); jiny predek = mez README 25.
+$script:AncestorProbe = @('.claude/settings.json', '.claude/settings.local.json', '.claude/sinogard-hooks.json',
+                          '.claude/plugins/_/hooks/hooks.json', '.claude/plugins/_/hooks/config/defaults.json')
+function Test-RootOrHomeDir([string]$Dir) {
+    $d = ((([string]$Dir) -replace '\\', '/').Trim('"', "'")).TrimEnd('/')
+    if ($d -eq '' -or $d -match '^\.(/\.)*$') { return $true }
+    if ($d -match '^(?i)(~|\$home|\$\{home\}|\$env:(userprofile|home|claude_project_dir)|%userprofile%|\$\{?claude_project_dir\}?)$') { return $true }
+    if ($d.Contains('$') -or $d.Contains('%')) { return $false }
+    $abs = (Get-AbsoluteNormalPath $d).TrimEnd('/')
+    if ($abs -eq '') { return $false }
+    foreach ($r in @($script:Cwd, $env:CLAUDE_PROJECT_DIR, $env:USERPROFILE, $env:HOME)) {
+        if ([string]::IsNullOrWhiteSpace([string]$r)) { continue }
+        if ((Get-AbsoluteNormalPath ([string]$r)).TrimEnd('/') -eq $abs) { return $true }
+    }
+    return $false
+}
+# $Deep: kopie prenasi i podadresare (rekurze, `mv`) - jen tehdy muze vzniknout `<cil>/.claude/...`.
+function Add-ProtectedChildProbe($Out, [string]$Dir, [bool]$Deep = $false) {
     $d = ([string]$Dir).TrimEnd('/', '\')
     if ($d -eq '') { $d = '.' }
     foreach ($p in $script:ProtectedChildProbe) { [void]$Out.Add($d + '/' + $p) }
+    if ($Deep -and (Test-RootOrHomeDir $d)) { foreach ($p in $script:AncestorProbe) { [void]$Out.Add($d + '/' + $p) } }
+}
+# A117-N23: zastupne znaky Bash i PowerShellu - `*`, `?`, `[...]`, Bash `{a,b}`.
+$script:GlobCharPattern = '[\*\?\[\]\{\}]'
+# Adresar pred prvnim segmentem se zastupnym znakem (`.claude/settings.js*` -> `.claude`, `.cl*/x` -> `.`).
+function Get-GlobFreeParent([string]$Path) {
+    $segs = @((([string]$Path) -replace '\\', '/').Split('/'))
+    $keep = New-Object System.Collections.ArrayList
+    foreach ($g in $segs) { if ($g -match $script:GlobCharPattern) { break }; [void]$keep.Add($g) }
+    $parent = ($keep -join '/')
+    if ($parent -eq '') { $parent = '.' }
+    return $parent
 }
 
-function Get-CopyWriteTarget($Tokens, [string]$Exe) {
+function Get-CopyWriteTarget($Argv, [string]$Exe) {
     $out = New-Object System.Collections.ArrayList
+    # A117-N26: `-Recurse:$false` NENI rekurze - Expand-ColonParameter by `:$false` zahodil a zbyl by `-Recurse`.
+    $Tokens = New-Object System.Collections.ArrayList
+    foreach ($x in $Argv) {
+        if ([string]$x -match '^(?i)-[a-z]+:\$false$') { [void]$Tokens.Add([string]$x); continue }
+        foreach ($y in (Expand-ColonParameter @([string]$x))) { [void]$Tokens.Add([string]$y) }
+    }
+    # A117-N23: zdroj, jehoz jmeno nejde urcit - vyraz `(...)`, `$(...)`, `@(...)`, promenna `$x`.
+    $exprSource = $false
     $isRobo = ($Exe -eq 'robocopy')
     $isRename = ($script:RenameExe -contains $Exe)
     if (-not $isRobo -and -not $isRename -and $script:CopyMoveExe -notcontains $Exe) { return ,@($out) }
@@ -467,15 +509,26 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
     $recursive = $false
     $n = $Tokens.Count
     for ($i = 1; $i -lt $n; $i++) {
-        $t = Remove-GroupingParen ([string]$Tokens[$i])
+        $rawTok = [string]$Tokens[$i]
+        $t = Remove-GroupingParen $rawTok
         if ($t -eq '') { continue }
         if ($t -match '^(?i)-des[a-z]*$') { if (($i + 1) -lt $n) { $dest = Remove-GroupingParen ([string]$Tokens[$i + 1]); $i++ }; continue }
         if ($isRename -and $t -match '^(?i)-new[a-z]*$') { if (($i + 1) -lt $n) { $newName = [string]$Tokens[$i + 1]; $i++ }; continue }
         if ($t -ceq '-t' -or $t -match '^(?i)--target-directory$') { if (($i + 1) -lt $n) { [void]$targetDirs.Add([string]$Tokens[$i + 1]); $i++ }; continue }
         if ($t -match '^(?i)--target-directory=(.+)$') { [void]$targetDirs.Add($Matches[1]); continue }
-        if ($t -match '^(?i)-(path|literalpath|lp|pspath)$') { if (($i + 1) -lt $n) { [void]$sources.Add([string]$Tokens[$i + 1]); $i++ }; continue }
+        if ($t -match '^(?i)-(path|literalpath|lp|pspath)$') {
+            if (($i + 1) -lt $n) {
+                $v = [string]$Tokens[$i + 1]
+                if ($v -match '^[\(\$@]') { $exprSource = $true }
+                [void]$sources.Add($v); $i++
+            }
+            continue
+        }
         if ($t -match '^(?i)-(filter|include|exclude|credential|tosession|fromsession|suffix|backup)$') { $i++; continue }
+        if ($script:ToolName -eq 'PowerShell' -and $t -match '^(?i)-(fi(l(t(e(r)?)?)?)?|inc(l(u(d(e)?)?)?)?|ex(c(l(u(d(e)?)?)?)?)?)$') { $i++; continue }
         if ($t -match '^(?i)-rec[a-z]*$' -or $t -match '^(?i)--(recursive|archive)$') { $recursive = $true; continue }
+        # A117-N22: PowerShell bere kazdou jednoznacnou zkratku parametru - `-r`, `-re`, ... `-Recurse` (zmerila Amber, 5.1 i 7.6).
+        if ($script:ToolName -eq 'PowerShell' -and $t -match '^(?i)-r(e(c(u(r(s(e)?)?)?)?)?)?$') { $recursive = $true; continue }
         # GNU shluk kratkych prepinacu (`-r`, `-R`, `-a`, `-rf`) jen v Bash nastroji - v PowerShellu je `-Force` parametr.
         if ($script:ToolName -ne 'PowerShell' -and $t -cmatch '^-[a-zA-Z]{1,4}$' -and $t -cmatch '[rRa]') { $recursive = $true; continue }
         if ($t.StartsWith('-')) { continue }
@@ -483,6 +536,7 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
             if ($t -match '^(?i)/(e|s|mir)$') { $recursive = $true }
             continue
         }
+        if ($rawTok -match '^[\(\$@]') { $exprSource = $true }
         [void]$positional.Add($t)
     }
     if ($isRename) {
@@ -492,7 +546,16 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
             $rest = @(if ($sources.Count -gt 0) { $positional } else { $positional | Select-Object -Skip 1 })
             if ($rest.Count -gt 0) { $newName = [string]$rest[0] }
         }
-        if ($src -eq '' -or $null -eq $newName) { return ,@($out) }
+        if ($null -eq $newName) { return ,@($out) }
+        if ($src -eq '' -or $exprSource) {
+            # A117-N23: `Get-Item .claude\x.json | Rename-Item -NewName settings.json` - adresar zdroje neznamy (roura,
+            # vyraz): fail-closed - nove jmeno se zkusi ve vsech chranenych adresarich.
+            # `hooks/config/` chrani KAZDE jmeno - tam jen jmena, ktera plugin opravdu nese (jinak by se ptala kazda roura do Rename-Item).
+            foreach ($pd in @('.claude', '.claude/plugins/_/hooks')) { [void]$out.Add($pd + '/' + $newName) }
+            if ($script:ProtectedChildProbe -contains ([string]$newName).ToLowerInvariant()) { [void]$out.Add('.claude/plugins/_/hooks/config/' + $newName) }
+            Add-ProtectedChildProbe $out $newName
+            return ,@($out)
+        }
         $s2 = ($src -replace '\\', '/').TrimEnd('/')
         $dir = if ($s2.Contains('/')) { $s2.Substring(0, $s2.LastIndexOf('/')) } else { '' }
         $renamed = $(if ($dir -ne '') { $dir + '/' + $newName } else { $newName })
@@ -510,9 +573,9 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
         if ($positional.Count -lt 3) { $exactFiles = $false }
         for ($k = 2; $k -lt $positional.Count; $k++) {
             $f = [string]$positional[$k]
-            if ($f -match '[\*\?]') { $exactFiles = $false } else { [void]$out.Add($dst.TrimEnd('/', '\') + '/' + $f) }
+            if ($f -match $script:GlobCharPattern) { $exactFiles = $false } else { [void]$out.Add($dst.TrimEnd('/', '\') + '/' + $f) }
         }
-        if (-not $exactFiles -or $recursive) { Add-ProtectedChildProbe $out $dst }
+        if (-not $exactFiles -or $recursive) { Add-ProtectedChildProbe $out $dst $recursive }
         return ,@($out)
     }
     if ($null -ne $dest) {
@@ -531,20 +594,34 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
     # bez rekurze adresar neprenese - tam rozhoduje jen rekurze.
     $isMove = ($script:MoveExe -contains $Exe)
     foreach ($d in $dirs) {
-        $unknown = ($recursive -or $Exe -eq 'xcopy')
+        # A117-N23 (a N62): cil se zastupnym znakem (`cp x.json .claude/settings.js*`) - shell / PowerShell ho rozvine na
+        # existujici soubor; sonduje se adresar pred prvnim segmentem se zastupnym znakem.
+        if (([string]$d) -match $script:GlobCharPattern) {
+            $gp = Get-GlobFreeParent ([string]$d)
+            $dn = (([string]$d) -replace '\\', '/').TrimEnd('/')
+            $leafParent = $(if ($dn.Contains('/')) { $dn.Substring(0, $dn.LastIndexOf('/')) } else { '.' })
+            # zastupny znak jen v listu (`.claude/settings.js*`) = soubor v tom adresari; vys (`.cl*/x`) = i podadresar
+            Add-ProtectedChildProbe $out $gp ($recursive -or $isMove -or $gp -ne $leafParent)
+            continue
+        }
+        # A117-N23: zdroj z roury (`Get-ChildItem cfg | Copy-Item -Destination .claude`) nebo vyraz = jmena neznama.
+        # $namesUnknown = jmena toho, co v cili vznikne, nejdou urcit (obsah adresare, glob, roura, vyraz) - jen tehdy ma
+        # smysl sonda `.claude/...` pod korenem projektu / domovem (N24); `cp -r src .` vytvori `./src`, nic jineho.
+        $namesUnknown = ($Exe -eq 'xcopy' -or $exprSource -or $sources.Count -eq 0)
+        $unknown = ($recursive -or $namesUnknown)
         if ($isMove -and ((([string]$d) -replace '\\', '/').TrimEnd('/') -match '(^|/)(\.claude|hooks|config)$')) { $unknown = $true }
         foreach ($s in $sources) {
             $leaf = (([string]$s) -replace '\\', '/').TrimEnd('/')
             $leaf = $leaf.Substring($leaf.LastIndexOf('/') + 1)
             # Zdroj se zastupnym znakem se neskladani doslova (`/tmp/x/*.pem` by z dotazu `cp *.pem /tmp/x` udelal
             # `deny`, CI 37844345253); jeho jmena ale neznamo -> sonda chranenych jmen v cili (A117-N15).
-            if ($leaf -match '[\*\?]' -or $leaf -eq '.' -or $leaf -eq '') { $unknown = $true; continue }
+            if ($leaf -match $script:GlobCharPattern -or $leaf -eq '.' -or $leaf -eq '') { $unknown = $true; $namesUnknown = $true; continue }
             $composed = ([string]$d).TrimEnd('/', '\') + '/' + $leaf
             [void]$out.Add($composed)
             # rekurzivni kopie adresare `x` do `d` vytvori `d/x/...` - sonda i tam (`cp -r src/.claude .`)
             if ($recursive -or $isMove) { Add-ProtectedChildProbe $out $composed }
         }
-        if ($unknown) { Add-ProtectedChildProbe $out ([string]$d) }
+        if ($unknown) { Add-ProtectedChildProbe $out ([string]$d) ($namesUnknown -and ($recursive -or $isMove)) }
     }
     return ,@($out)
 }
@@ -601,7 +678,7 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
         $tokens = Expand-ColonParameter $argv
         # Z117-Q25 = A (Tom 2026-10-08 21:24): CIL kopie / presunu je ZAPIS. Do 0.3.0 byly argumenty `cp`/`Copy-Item`
         # jen ctenim, takze `cp x .claude/settings.json` ochranu selfProtect obesel (dira uz v 0.2.0).
-        foreach ($w in (Get-CopyWriteTarget $tokens $subExe)) {
+        foreach ($w in (Get-CopyWriteTarget $argv $subExe)) {
             [void]$out.Add(@{ Value = $w; AllowGlob = $false; IsWrite = $true })
         }
         for ($ti = 0; $ti -lt $tokens.Count; $ti++) {
