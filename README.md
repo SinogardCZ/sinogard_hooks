@@ -308,8 +308,11 @@ aby si je nikdo nemusel objevit sám.
 1. **Skript volaný souborem je pro hook neprůhledný.** Hook vidí jen příkaz, který
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
    uvnitř byl `git reset --hard`. Obal s literálem (`bash -c "…"`) se rozebere,
-   obal se souborem ne. ⚠️ Rozebírá ho jen hook `gate`; hook `secrets` obal `bash -c` / `pwsh -c` nerozbaluje
-   (změřila Amber, `A117-N16`; omezení 25). A `Start-Process git -ArgumentList 'reset','--hard'` gate nesloží (`A117-N18`).
+   obal se souborem ne. Od 0.3.0 obal rozebírají **oba** hooky touž funkcí (`Get-ShellWrapperBody` v `_common.ps1`,
+   `Z117-Q27`, `A117-N16`): `bash|sh|zsh -c`, `pwsh|powershell -Command`, `cmd /c` i za `sudo` / `env` / `&`, vnořeně;
+   `secrets` navíc dekóduje `-EncodedCommand` (nejde-li to — proměnná, vadný base64 — `ask`). Do 0.3.0 `bash -c 'cat .env'`
+   v hooku `secrets` mlčel. `Start-Process git -ArgumentList 'reset','--hard'` (pole bez závorek, druhý poziční argument,
+   zkratky `-f` / `-a`, `-Verb RunAs` před programem) gate od 0.3.0 složí (`A117-N18`).
    ➕ **A platí to i tehdy, když je ta cesta v proměnné** (0.1.11, nález Ada N49):
    `pwsh -File $p`, `bash $script` ani `Start-Process -FilePath 'pwsh' …
    -RedirectStandardOutput $log` nejsou spuštění obsahu proměnné — proměnná je tam
@@ -646,11 +649,14 @@ aby si je nikdo nemusel objevit sám.
     každým cílem by ptala i u `cp -r src dist`. Seznam sondovaných jmen je pevný (`settings*.json`, `sinogard-hooks.json`,
     `hooks.json`, `defaults.json`): jméno, které projekt přidá do `selfProtectPathPatterns` přepisem, chrání přímá kontrola,
     sonda kopie s neznámým jménem zdroje ne (`A117-N27`).
-    ⚠️ **Mez, která zůstává** (čeká na rozhodnutí Toma, `A117-N16`–`N18`, `N25`): jiné zápisové příkazy — `install`, `ln -sf`,
-    `rsync`, `dd of=`, `New-Item -ItemType SymbolicLink|HardLink`, `[IO.File]::Copy(…)`, cesta složená výrazem
-    (`Join-Path`), `cmd /c copy` (omezení 15) —, skládání příkazů (`ls cfg/* | xargs cp -t .claude`, `find … -exec cp {}
-    .claude/ \;`) a obaly `bash -c '…'` / `pwsh -c "…"`, které `secrets` (na rozdíl od `gate`) nerozbaluje: zápis i čtení
-    chráněného souboru jimi mlčí. V hooku `gate` mlčí `Start-Process git -ArgumentList 'reset','--hard'` (`A117-N18`).
+    **Zápisem jsou od 0.3.0 i** (`Z117-Q27 = B`, `A117-N17`): `install`, `ln -s`, `rsync` (zdroj `x/` = obsah adresáře),
+    `dd of=` (`dd if=` je čtení), `New-Item` / `ni` (i `-ItemType SymbolicLink|HardLink|Junction`, `-Name`), `mklink`,
+    `[IO.File]::Copy|Move|Replace` (cíl; zdroj je čtení) a `WriteAll*` / `AppendAll*` / `Create*` / `OpenWrite`, cíl
+    `(Join-Path …)` a `cmd /c copy|move` (obal se rozebere, omezení 1). Cíl, jehož adresář je proměnná nebo výraz a jméno
+    chráněné (`Copy-Item x (Join-Path $d settings.json)`), = `ask` (fail-closed).
+    ⚠️ **Mez, která zůstává:** skládání příkazů — `ls cfg/* | xargs cp -t .claude`, `find … -exec cp {} .claude/ \;`
+    (`A117-N25`; mimo `Z117-Q27`, rozhodla Amber `A117-O11`); cíl celý v proměnné bez chráněného jména (`cp x.json $T`);
+    `[IO.File]::…($p, …)` s cestou jen v proměnné.
 
 ---
 

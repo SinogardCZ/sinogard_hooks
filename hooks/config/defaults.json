@@ -216,6 +216,7 @@
       "settingsLocal": "čtení .claude/settings.local.json (nese hodnoty secrets)",
       "selfProtect": "zápis do souboru, kterým se brána vypíná ({path})",
       "wildcardPath": "cesta se zástupným znakem, která může padnout na chráněný soubor ({path})",
+      "wrapperEncoded": "příkaz zakódovaný pro PowerShell (-EncodedCommand), jehož obsah hook nepřečte",
       "envDump": "výpis proměnných prostředí",
       "envVarRead": "čtení proměnné prostředí s citlivým jménem ({name})"
     }

@@ -124,6 +124,17 @@
     {"group": "Q26", "name": "Z117-Q26 N8 InvokeScript s promennou -> ask", "tool": "PowerShell", "cmd": "$x = 'git'; $ExecutionContext.InvokeCommand.InvokeScript(\"$x reset --hard\")", "expect": "ask", "was": "allow"},
     {"group": "Q26", "name": "Z117-Q26 N8 InvokeScript literal destruktivni -> deny", "tool": "PowerShell", "cmd": "$ExecutionContext.InvokeCommand.InvokeScript('git reset --hard')", "expect": "deny", "was": "allow"},
     {"group": "Q26", "name": "Z117-Q26 N8 [scriptblock]::Create literal destruktivni -> deny", "tool": "PowerShell", "cmd": "& ([scriptblock]::Create('git reset --hard'))", "expect": "deny", "was": "allow"},
-    {"group": "Q26", "name": "Z117-Q26 N8 kontrola: InvokeScript git status -> ticho", "tool": "PowerShell", "cmd": "$ExecutionContext.InvokeCommand.InvokeScript('git status')", "expect": "allow", "was": "allow"}
+    {"group": "Q26", "name": "Z117-Q26 N8 kontrola: InvokeScript git status -> ticho", "tool": "PowerShell", "cmd": "$ExecutionContext.InvokeCommand.InvokeScript('git status')", "expect": "allow", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 Start-Process git -ArgumentList pole bez zavorek -> deny", "tool": "PowerShell", "cmd": "Start-Process git -ArgumentList 'reset','--hard'", "expect": "deny", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 pole s mezerou za carkou -> deny", "tool": "PowerShell", "cmd": "Start-Process git -ArgumentList 'reset', '--hard'", "expect": "deny", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 -FilePath + @() -> deny", "tool": "PowerShell", "cmd": "Start-Process -FilePath git -ArgumentList @('reset','--hard')", "expect": "deny", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 druhy pozicni = ArgumentList -> deny", "tool": "PowerShell", "cmd": "Start-Process git 'reset','--hard'", "expect": "deny", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 saps retezec -> deny", "tool": "PowerShell", "cmd": "saps git -ArgumentList 'reset --hard'", "expect": "deny", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 zkratky -f / -a -> deny", "tool": "PowerShell", "cmd": "Start-Process -f git -a 'reset','--hard'", "expect": "deny", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 -Verb RunAs pred programem -> deny", "tool": "PowerShell", "cmd": "Start-Process -Verb RunAs git -ArgumentList 'reset','--hard'", "expect": "deny", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 kontrola: git status -> ticho", "tool": "PowerShell", "cmd": "Start-Process git -ArgumentList 'status'", "expect": "allow", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 kontrola: notepad -> ticho", "tool": "PowerShell", "cmd": "Start-Process notepad", "expect": "allow", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 kontrola: pwsh -File s presmerovanim -> ticho", "tool": "PowerShell", "cmd": "Start-Process -FilePath 'pwsh' -ArgumentList '-File','x.ps1' -RedirectStandardOutput $log", "expect": "allow", "was": "allow"},
+    {"group": "Q27", "name": "A117-N18 zkratky v obracenem poradi -a ... -f git -> deny", "tool": "PowerShell", "cmd": "Start-Process -a 'reset','--hard' -f git", "expect": "deny", "was": "allow"}
   ]
 }

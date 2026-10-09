@@ -437,7 +437,7 @@ function Get-BraceSubcommand([string]$Text, [int]$Depth) {
     return ,@($out)
 }
 
-$script:CopyMoveExe = @('cp', 'copy', 'copy-item', 'cpi', 'mv', 'move', 'move-item', 'mi', 'xcopy')
+$script:CopyMoveExe = @('cp', 'copy', 'copy-item', 'cpi', 'mv', 'move', 'move-item', 'mi', 'xcopy', 'install', 'ln', 'rsync')
 $script:RenameExe = @('rename-item', 'ren', 'rni')
 $script:MoveExe = @('mv', 'move', 'move-item', 'mi')
 # A117-N15 (Z117-Q25, delta review Amber 2026-10-09): kdyz jmeno zdroje NEJDE urcit (glob, cely adresar, rekurze
@@ -495,8 +495,63 @@ function Get-CopyWriteTarget($Argv, [string]$Exe) {
         if ([string]$x -match '^(?i)-[a-z]+:\$false$') { [void]$Tokens.Add([string]$x); continue }
         foreach ($y in (Expand-ColonParameter @([string]$x))) { [void]$Tokens.Add([string]$y) }
     }
+    # Z117-Q27 = B (A117-N17): cil sestaveny `Join-Path` (`Copy-Item x (Join-Path .claude settings.json)`) se slozi
+    # do jednoho tokenu (`.claude/settings.json`); promenna v nem zustane textem (`$root/.claude/settings.json`).
+    $joined = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $Tokens.Count; $i++) {
+        $x = [string]$Tokens[$i]
+        if ($x -match '^(?i)\$?\(join-path\s+(.+)\)$') { $x = '(Join-Path'; $inlineRest = $Matches[1] } else { $inlineRest = $null }
+        if ($x -match '^(?i)\$?\(join-path$') {
+            $parts = New-Object System.Collections.ArrayList
+            $pieces = New-Object System.Collections.ArrayList
+            if ($null -ne $inlineRest) { foreach ($q in (Split-Arguments $inlineRest)) { [void]$pieces.Add([string]$q) }; [void]$pieces.Add(')') }
+            $k = $i + 1
+            if ($null -eq $inlineRest) { while ($k -lt $Tokens.Count) { [void]$pieces.Add([string]$Tokens[$k]); if (([string]$Tokens[$k]).EndsWith(')')) { $k++; break }; $k++ } }
+            foreach ($y in $pieces) {
+                $y = [string]$y
+                if ($y.EndsWith(')')) { $y = $y.Substring(0, $y.Length - 1) }
+                $y = $y.Trim("'").Trim('"')
+                if ($y -eq '' -or $y -match '^(?i)-(path|childpath|additionalchildpath|resolve)$') { continue }
+                [void]$parts.Add($y)
+            }
+            [void]$joined.Add((($parts | ForEach-Object { ([string]$_).TrimEnd('/', '\') }) -join '/'))
+            if ($null -eq $inlineRest) { $i = $k - 1 }
+            continue
+        }
+        [void]$joined.Add($x)
+    }
+    $Tokens = $joined
     # A117-N23: zdroj, jehoz jmeno nejde urcit - vyraz `(...)`, `$(...)`, `@(...)`, promenna `$x`.
     $exprSource = $false
+    # Z117-Q27 = B (A117-N17): `dd of=<soubor>`, `New-Item <cesta>` (i `-ItemType SymbolicLink|HardLink|Junction`),
+    # `mklink <odkaz> <cil>` (cmd) zapisuji cestu, ktera v jejich argumentech stoji.
+    if ($Exe -eq 'dd') {
+        foreach ($x in $Tokens) { if ([string]$x -match '^of=(.+)$') { [void]$out.Add($Matches[1]) } }
+        return ,@($out)
+    }
+    if ($Exe -eq 'new-item' -or $Exe -eq 'ni') {
+        $nPath = New-Object System.Collections.ArrayList
+        $nName = $null
+        for ($i = 1; $i -lt $Tokens.Count; $i++) {
+            $t = [string]$Tokens[$i]
+            if ($t -match '^(?i)-(p|pa|pat|path|literalpath|lp|pspath)$') { if (($i + 1) -lt $Tokens.Count) { [void]$nPath.Add([string]$Tokens[$i + 1]); $i++ }; continue }
+            if ($t -match '^(?i)-(n|na|nam|name)$') { if (($i + 1) -lt $Tokens.Count) { $nName = [string]$Tokens[$i + 1]; $i++ }; continue }
+            if ($t -match '^(?i)-(i|it|ite|item|itemt|itemty|itemtyp|itemtype|type|v|va|val|valu|value|target|ta|tar|targ|targe|credential|cr|cre|cred)$') { $i++; continue }
+            if ($t.StartsWith('-')) { continue }
+            [void]$nPath.Add((Remove-GroupingParen $t))
+        }
+        if ($nPath.Count -eq 0) { $nPath.Add('.') | Out-Null }
+        foreach ($np in $nPath) { [void]$out.Add($(if ($null -ne $nName) { ([string]$np).TrimEnd('/', '\') + '/' + $nName } else { [string]$np })) }
+        return ,@($out)
+    }
+    if ($Exe -eq 'mklink') {
+        for ($i = 1; $i -lt $Tokens.Count; $i++) {
+            $t = [string]$Tokens[$i]
+            if ($t -match '^/[A-Za-z]$') { continue }
+            [void]$out.Add($t); break
+        }
+        return ,@($out)
+    }
     $isRobo = ($Exe -eq 'robocopy')
     $isRename = ($script:RenameExe -contains $Exe)
     if (-not $isRobo -and -not $isRename -and $script:CopyMoveExe -notcontains $Exe) { return ,@($out) }
@@ -527,10 +582,13 @@ function Get-CopyWriteTarget($Argv, [string]$Exe) {
         if ($t -match '^(?i)-(filter|include|exclude|credential|tosession|fromsession|suffix|backup)$') { $i++; continue }
         if ($script:ToolName -eq 'PowerShell' -and $t -match '^(?i)-(fi(l(t(e(r)?)?)?)?|inc(l(u(d(e)?)?)?)?|ex(c(l(u(d(e)?)?)?)?)?)$') { $i++; continue }
         if ($t -match '^(?i)-rec[a-z]*$' -or $t -match '^(?i)--(recursive|archive)$') { $recursive = $true; continue }
+        # A117-N17: prepinace s hodnotou u `install` a `rsync` - hodnota neni zdroj ani cil.
+        if ($Exe -eq 'install' -and $t -cmatch '^(-m|-o|-g|-S|--mode|--owner|--group|--suffix)$') { $i++; continue }
+        if ($Exe -eq 'rsync' -and $t -cmatch '^(-e|-f|-T|-M|--rsh|--exclude|--include|--filter|--files-from|--exclude-from|--include-from|--chmod|--chown|--rsync-path|--temp-dir|--backup-dir|--suffix|--password-file|--port|--bwlimit|--timeout|--log-file|--compare-dest|--copy-dest|--link-dest)$') { $i++; continue }
         # A117-N22: PowerShell bere kazdou jednoznacnou zkratku parametru - `-r`, `-re`, ... `-Recurse` (zmerila Amber, 5.1 i 7.6).
         if ($script:ToolName -eq 'PowerShell' -and $t -match '^(?i)-r(e(c(u(r(s(e)?)?)?)?)?)?$') { $recursive = $true; continue }
         # GNU shluk kratkych prepinacu (`-r`, `-R`, `-a`, `-rf`) jen v Bash nastroji - v PowerShellu je `-Force` parametr.
-        if ($script:ToolName -ne 'PowerShell' -and $t -cmatch '^-[a-zA-Z]{1,4}$' -and $t -cmatch '[rRa]') { $recursive = $true; continue }
+        if ($script:ToolName -ne 'PowerShell' -and $t -cmatch '^-[a-zA-Z]{1,10}$' -and $t -cmatch '[rRa]') { $recursive = $true; continue }
         if ($t.StartsWith('-')) { continue }
         if ($winSwitch -and $t -match '^/[A-Za-z][A-Za-z0-9]{0,5}(:.*)?$') {
             if ($t -match '^(?i)/(e|s|mir)$') { $recursive = $true }
@@ -611,6 +669,8 @@ function Get-CopyWriteTarget($Argv, [string]$Exe) {
         $unknown = ($recursive -or $namesUnknown)
         if ($isMove -and ((([string]$d) -replace '\\', '/').TrimEnd('/') -match '(^|/)(\.claude|hooks|config)$')) { $unknown = $true }
         foreach ($s in $sources) {
+            # A117-N17: `rsync cfg/ .claude/` kopiruje OBSAH `cfg` - jmena neznama.
+            if ($Exe -eq 'rsync' -and ([string]$s) -match '[/\\]$') { $unknown = $true; $namesUnknown = $true; continue }
             $leaf = (([string]$s) -replace '\\', '/').TrimEnd('/')
             $leaf = $leaf.Substring($leaf.LastIndexOf('/') + 1)
             # Zdroj se zastupnym znakem se neskladani doslova (`/tmp/x/*.pem` by z dotazu `cp *.pem /tmp/x` udelal
@@ -622,6 +682,15 @@ function Get-CopyWriteTarget($Argv, [string]$Exe) {
             if ($recursive -or $isMove) { Add-ProtectedChildProbe $out $composed }
         }
         if ($unknown) { Add-ProtectedChildProbe $out ([string]$d) ($namesUnknown -and ($recursive -or $isMove)) }
+    }
+    # A117-N17 / N23: cil, jehoz adresar je promenna nebo vyraz (`Copy-Item x (Join-Path $d settings.json)`,
+    # `cp settings.json $D/`), se chranenym jmenem - adresar neznamy, fail-closed: jmeno se zkusi v chranenych adresarich.
+    foreach ($w in @($out)) {
+        $wn = ([string]$w) -replace '\\', '/'
+        if (-not ($wn.Contains('$') -or $wn.StartsWith('(') -or $wn.Contains('%'))) { continue }
+        $wl = $wn.TrimEnd('/'); $wl = $wl.Substring($wl.LastIndexOf('/') + 1).ToLowerInvariant()
+        if ($script:ProtectedChildProbe -notcontains $wl) { continue }
+        foreach ($pd in @('.claude', '.claude/plugins/_/hooks', '.claude/plugins/_/hooks/config')) { [void]$out.Add($pd + '/' + $wl) }
     }
     return ,@($out)
 }
@@ -656,6 +725,21 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
         }
     }
 
+    # Z117-Q27 = B (A117-N17): `[IO.File]::Copy|Move|Replace('<zdroj>', '<cil>')` a `WriteAll*` / `AppendAll*` /
+    # `Create*` / `OpenWrite('<cil>')` (i `[System.IO.File]`) ZAPISUJI cil - do 0.3.0 byl literal jen ctenim
+    # (pruchod (a) vyse), takze `[IO.File]::Copy('x.json', '.claude\settings.json', $true)` mlcel.
+    $q = '(?:''([^'']*)''|"([^"]*)")'
+    foreach ($m in [regex]::Matches($Command, '(?i)\[(?:system\.)?io\.file\]::(copy|move|replace)\s*\(\s*' + $q + '\s*,\s*' + $q)) {
+        $src = if ($m.Groups[2].Success) { $m.Groups[2].Value } else { $m.Groups[3].Value }
+        $dst = if ($m.Groups[4].Success) { $m.Groups[4].Value } else { $m.Groups[5].Value }
+        if ($src -ne '') { [void]$out.Add(@{ Value = $src; AllowGlob = $false; IsWrite = $false }) }
+        if ($dst -ne '') { [void]$out.Add(@{ Value = $dst; AllowGlob = $false; IsWrite = $true }) }
+    }
+    foreach ($m in [regex]::Matches($Command, '(?i)\[(?:system\.)?io\.file\]::(writeall\w*|appendall\w*|create\w*|openwrite|appendtext)\s*\(\s*' + $q)) {
+        $dst = if ($m.Groups[2].Success) { $m.Groups[2].Value } else { $m.Groups[3].Value }
+        if ($dst -ne '') { [void]$out.Add(@{ Value = $dst; AllowGlob = $false; IsWrite = $true }) }
+    }
+
     # Prikaz se rozebira po PODPRIKAZECH, aby se u tokenu vedelo, ktery program ho
     # dostane - glob u `cat` je cesta, glob u `echo` je text.
     # N-C (TASK-117, Z117-Q16 = A): obsah zavorkoveho seskupeni `( ... )` / `@( ... )` je
@@ -681,6 +765,8 @@ function Get-PathCandidate([string]$Command, $Config = $null) {
         foreach ($w in (Get-CopyWriteTarget $argv $subExe)) {
             [void]$out.Add(@{ Value = $w; AllowGlob = $false; IsWrite = $true })
         }
+        # A117-N17: `dd if=<soubor>` je cteni (`of=` vyse zapis).
+        if ($subExe -eq 'dd') { foreach ($x in $argv) { if ([string]$x -match '^if=(.+)$') { [void]$out.Add(@{ Value = $Matches[1]; AllowGlob = $false; IsWrite = $false }) } } }
         for ($ti = 0; $ti -lt $tokens.Count; $ti++) {
             # N-C (TASK-117, Z117-Q16 = A): do 0.2.0 nesl token zavorku seskupeni
             # (`Get-Content (Get-ChildItem <soubor>)` -> `<soubor>)`), zadny vzor ho nechranil
@@ -1293,7 +1379,45 @@ function Test-EnvOccurrenceText([string]$Command, $Occurrences, [string]$ToolNam
     return $true
 }
 
-function Test-SecretCommand([string]$Command, $Config) {
+# Z117-Q27 = B (A117-N16): tela obalu, ktere spousti TEXT jinym shellem (`bash -c '...'`, `pwsh -Command ...`,
+# `-EncodedCommand`, `cmd /c ...`) - i za `sudo` / `env` (`&` oddeli uz Split-CommandLine). Rozpoznani je TATAZ funkce jako v hooku gate
+# (Get-WrapperTail + Get-ShellWrapperBody v _common.ps1), ne druha kopie.
+function Get-WrapperBodies([string]$Text) {
+    $out = New-Object System.Collections.ArrayList
+    $subs = New-Object System.Collections.ArrayList
+    foreach ($x in (Split-CommandLine $Text)) { [void]$subs.Add($x) }
+    foreach ($x in (Get-GroupingSubcommand $Text 0)) { [void]$subs.Add($x) }
+    foreach ($x in @($subs)) { foreach ($b in (Get-BraceSubcommand ([string]$x) 0)) { [void]$subs.Add($b) } }
+    foreach ($sub in $subs) {
+        $argv = Split-Arguments $sub
+        if ($argv.Count -eq 0) { continue }
+        $tail = Get-WrapperTail $argv
+        if ($tail.Count -eq 0) { continue }
+        $exe = (Get-ExecutableName (Remove-GroupingParen ([string]$tail[0]))).ToLowerInvariant()
+        $rest = @(if ($tail.Count -gt 1) { $tail[1..($tail.Count - 1)] })
+        $wb = Get-ShellWrapperBody $exe $rest
+        if ($null -ne $wb) { [void]$out.Add($wb) }
+    }
+    return ,@($out)
+}
+
+# Telo obalu se rozhoduje JAKO PRIKAZ SAM (cteni, zapis do chranene cesty, jmenovani, promenne) - pravidly shellu,
+# ktery ho spusti: nastroj a escape znak se na dobu rozboru prepnou a pak vrati (i pri vyjimce).
+function Test-NestedSecretCommand([string]$Inner, [string]$ShellTool, $Config, [int]$Depth) {
+    $prevTool = $script:ToolName
+    $prevEsc = Get-ScannerEscape
+    $prevCwd = $script:CwdUncertain
+    try {
+        if ($ShellTool -ne '') { $script:ToolName = $ShellTool; Set-ScannerEscape $ShellTool }
+        return (Test-SecretCommand $Inner $Config $Depth)
+    } finally {
+        $script:ToolName = $prevTool
+        Set-ScannerEscapeChar $prevEsc
+        $script:CwdUncertain = $prevCwd
+    }
+}
+
+function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
     $sec = Get-Field $Config 'secrets'
     $shapes = Get-Field $sec 'shapes'
     $worst = $null
@@ -1343,6 +1467,29 @@ function Test-SecretCommand([string]$Command, $Config) {
         if ($null -eq $worst) {
             $worst = @{ Id = 'envVarRead'; Decision = 'ask'
                         Shape = (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name))) }
+        }
+    }
+
+    # Z117-Q27 = B (A117-N16): telo obalu (`bash -c 'cat .env'`, `pwsh -c "Get-Content .env"`) - do 0.3.0 mlcelo,
+    # protoze `cat .env` byl jeden token s mezerou. Zanoreni do ctyr urovni (`bash -c "pwsh -c '...'"`).
+    if ($Depth -lt 4) {
+        foreach ($wb in (Get-WrapperBodies $split.Rest)) {
+            $inner = [string]$wb.Text
+            if ($wb.Kind -eq 'encoded') {
+                # `-EncodedCommand <base64>` = UTF-16LE text skriptu; kdyz se dekodovat neda (promenna, vadny base64),
+                # obsah neni videt -> ask (fail-closed).
+                $decoded = ''
+                try { $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($inner.Trim().Trim("'").Trim('"'))) } catch { $decoded = '' }
+                if ([string]::IsNullOrWhiteSpace($decoded)) {
+                    if ($null -eq $worst) { $worst = @{ Id = 'wrapperEncoded'; Decision = 'ask'; Shape = (Get-Field $shapes 'wrapperEncoded' 'pwsh -EncodedCommand') } }
+                    continue
+                }
+                $inner = $decoded
+            }
+            $r = Test-NestedSecretCommand $inner ([string]$wb.ShellTool) $Config ($Depth + 1)
+            if ($null -eq $r) { continue }
+            if ($r.Decision -eq 'deny') { return $r }
+            if ($null -eq $worst) { $worst = $r }
         }
     }
 

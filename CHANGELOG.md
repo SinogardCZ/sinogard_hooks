@@ -83,9 +83,17 @@ Adresář bez přepínače rekurze taky: `mv src/.claude .`, `mv cfg .claude`, `
 zdroji, zástupné znaky `[…]` / `{a,b}`, glob v cíli (`cp x.json .claude/settings.js*`) a rekurzivní kopie s neznámými jmény do
 kořene projektu nebo domova (`cp -r ../sablona/. .`, `robocopy X . /E`) → `ask`; `cp -r src .`, `Copy-Item cfg .claude
 -Recurse:$false` mlčí. Mez: jiný předek `.claude` (README 25).
-⚠️ Mez (čeká na rozhodnutí Toma, `A117-N16`–`N18`, `N25`): `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` link, `[IO.File]::Copy`,
-`Join-Path` v cíli, `cmd /c copy`, `xargs cp -t` / `find -exec cp` a obaly `bash -c` / `pwsh -c` v hooku `secrets` — zápis i
-čtení jimi mlčí (i v 0.2.0); gate `Start-Process git -ArgumentList 'reset','--hard'`.
+➕ `Z117-Q27 = B` (Tom 2026-10-09 07:41, „opravit v 0.3.0 i obě menší díry"):
+
+| tvar | 0.2.0 | 0.3.0 | nález |
+|---|---|---|---|
+| `bash -c 'cat .env'`, `sh -c`, `zsh -c`, `pwsh -c "Get-Content .env"`, `powershell -Command`, `sudo bash -c`, vnořené, `pwsh -EncodedCommand <Get-Content .env>` | ticho | `deny` | `A117-N16` (hook `secrets`; rozpoznání obalu sdílí s `gate`, `Get-ShellWrapperBody`) |
+| `bash -c 'cp x.json .claude/settings.json'`, `pwsh -enc $e` (nejde dekódovat) | ticho | `ask` | `A117-N16` |
+| `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` (i link), `ni`, `mklink`, `[IO.File]::Copy/Move/WriteAllText`, `Copy-Item x (Join-Path .claude settings.json)`, `cmd /c copy\|move` do `.claude/settings.json` | ticho | `ask` | `A117-N17` |
+| `dd if=.env of=/tmp/x` | ticho | `deny` | `A117-N17` |
+| `Start-Process git -ArgumentList 'reset','--hard'`, `Start-Process git 'reset','--hard'`, `-f git -a …`, `-Verb RunAs git …` | ticho | `deny` | `A117-N18` (hook `gate`) |
+
+⚠️ Mez: `xargs cp -t .claude`, `find … -exec cp {} .claude/ \;` (`A117-N25`, rozhodla Amber `A117-O11`); cíl celý v proměnné.
 
 ### ⚠️ Co H-a uvolňuje i bez projektového přepisu (`A117-N9`)
 

@@ -7135,6 +7135,444 @@
       "expect": "allow",
       "since": "A117-N24 kontrola: mv x.json . -> ticho",
       "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process git -ArgumentList 'reset','--hard'",
+      "expect": "deny",
+      "since": "A117-N18 Start-Process git -ArgumentList pole bez zavorek -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process git -ArgumentList 'reset', '--hard'",
+      "expect": "deny",
+      "since": "A117-N18 pole s mezerou za carkou -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process -FilePath git -ArgumentList @('reset','--hard')",
+      "expect": "deny",
+      "since": "A117-N18 -FilePath + @() -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process git 'reset','--hard'",
+      "expect": "deny",
+      "since": "A117-N18 druhy pozicni = ArgumentList -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "saps git -ArgumentList 'reset --hard'",
+      "expect": "deny",
+      "since": "A117-N18 saps retezec -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process -f git -a 'reset','--hard'",
+      "expect": "deny",
+      "since": "A117-N18 zkratky -f / -a -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process -Verb RunAs git -ArgumentList 'reset','--hard'",
+      "expect": "deny",
+      "since": "A117-N18 -Verb RunAs pred programem -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process git -ArgumentList 'status'",
+      "expect": "allow",
+      "since": "A117-N18 kontrola: git status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process notepad",
+      "expect": "allow",
+      "since": "A117-N18 kontrola: notepad -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'cat .env'",
+      "expect": "deny",
+      "since": "A117-N16 bash -c 'cat .env' -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"cat .env\"",
+      "expect": "deny",
+      "since": "A117-N16 bash -c \"cat .env\" -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -lc 'cat .env'",
+      "expect": "deny",
+      "since": "A117-N16 bash -lc -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sh -c 'cat ~/.ssh/id_rsa'",
+      "expect": "deny",
+      "since": "A117-N16 sh -c ~/.ssh/id_rsa -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "zsh -c 'cat .env'",
+      "expect": "deny",
+      "since": "A117-N16 zsh -c -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -c \"Get-Content .env\"",
+      "expect": "deny",
+      "since": "A117-N16 pwsh -c z Bash -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "powershell -Command \"Get-Content .env\"",
+      "expect": "deny",
+      "since": "A117-N16 powershell -Command z Bash -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -c \"Get-Content .env\"",
+      "expect": "deny",
+      "since": "A117-N16 pwsh -c (PS) -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "powershell.exe -NoProfile -Command \"Get-Content .env\"",
+      "expect": "deny",
+      "since": "A117-N16 powershell.exe -NoProfile -Command (PS) -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash -c 'cat .env'",
+      "expect": "deny",
+      "since": "A117-N16 bash -c z PS -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cmd /c type .env",
+      "expect": "deny",
+      "since": "A117-N16 cmd /c type .env -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'cp x.json .claude/settings.json'",
+      "expect": "ask",
+      "since": "A117-N16 bash -c cp do .claude/settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo bash -c 'cat .env'",
+      "expect": "deny",
+      "since": "A117-N16 sudo bash -c -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"pwsh -c 'Get-Content .env'\"",
+      "expect": "deny",
+      "since": "A117-N16 vnoreny bash -c pwsh -c -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& bash -c 'cat .env'",
+      "expect": "deny",
+      "since": "A117-N16 & bash -c (PS) -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -EncodedCommand RwBlAHQALQBDAG8AbgB0AGUAbgB0ACAALgBlAG4AdgA=",
+      "expect": "deny",
+      "since": "A117-N16 pwsh -EncodedCommand dekodovany Get-Content .env -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -enc $e",
+      "expect": "ask",
+      "since": "A117-N16 pwsh -enc s promennou (nejde dekodovat) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'echo hi'",
+      "expect": "allow",
+      "since": "A117-N16 kontrola: bash -c 'echo hi' -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'git ls-files .env'",
+      "expect": "allow",
+      "since": "A117-N16 kontrola: bash -c git ls-files .env (jmenovani i uvnitr) -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash script.sh",
+      "expect": "allow",
+      "since": "A117-N16 kontrola: bash script.sh -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -File x.ps1",
+      "expect": "allow",
+      "since": "A117-N16 kontrola: pwsh -File x.ps1 -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -c \"Get-Content README.md\"",
+      "expect": "allow",
+      "since": "A117-N16 kontrola: pwsh -c README.md -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -EncodedCommand ZQBjAGgAbwAgADEA",
+      "expect": "allow",
+      "since": "A117-N16 kontrola: pwsh -EncodedCommand echo 1 -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cmd /c dir",
+      "expect": "allow",
+      "since": "A117-N16 kontrola: cmd /c dir -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "install -m 644 x.json .claude/settings.json",
+      "expect": "ask",
+      "since": "A117-N17 install do .claude/settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ln -sf /tmp/evil.json .claude/settings.json",
+      "expect": "ask",
+      "since": "A117-N17 ln -sf na .claude/settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rsync x.json .claude/settings.json",
+      "expect": "ask",
+      "since": "A117-N17 rsync do .claude/settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rsync -avzhP cfg/ .claude/",
+      "expect": "ask",
+      "since": "A117-N17 rsync -avzhP cfg/ .claude/ (obsah) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dd if=x.json of=.claude/settings.json",
+      "expect": "ask",
+      "since": "A117-N17 dd of=.claude/settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dd if=.env of=/tmp/x",
+      "expect": "deny",
+      "since": "A117-N17 dd if=.env -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "New-Item -ItemType SymbolicLink -Path .claude\\settings.json -Target C:\\tmp\\evil.json",
+      "expect": "ask",
+      "since": "A117-N17 New-Item SymbolicLink -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "New-Item -ItemType HardLink -Path .claude\\settings.json -Value C:\\tmp\\evil.json",
+      "expect": "ask",
+      "since": "A117-N17 New-Item HardLink -Value -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "New-Item -Path .claude -Name settings.json -ItemType File -Value '{}' -Force",
+      "expect": "ask",
+      "since": "A117-N17 New-Item -Path .claude -Name settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "ni .claude\\settings.json -Force",
+      "expect": "ask",
+      "since": "A117-N17 ni .claude\\settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.File]::Copy('x.json', '.claude\\settings.json', $true)",
+      "expect": "ask",
+      "since": "A117-N17 [IO.File]::Copy -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[System.IO.File]::Move(\"x.json\", \".claude/settings.json\")",
+      "expect": "ask",
+      "since": "A117-N17 [System.IO.File]::Move -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.File]::WriteAllText('.claude\\settings.json', '{}')",
+      "expect": "ask",
+      "since": "A117-N17 [IO.File]::WriteAllText -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item x.json (Join-Path .claude settings.json)",
+      "expect": "ask",
+      "since": "A117-N17 Copy-Item do (Join-Path .claude settings.json) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item x.json (Join-Path $d settings.json)",
+      "expect": "ask",
+      "since": "A117-N17 Copy-Item do (Join-Path $d settings.json) (adresar neznamy) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cmd /c copy x.json .claude\\settings.json",
+      "expect": "ask",
+      "since": "A117-N17 cmd /c copy -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cmd /c move x.json .claude\\settings.json",
+      "expect": "ask",
+      "since": "A117-N17 cmd /c move -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cmd /c mklink .claude\\settings.json C:\\tmp\\evil.json",
+      "expect": "ask",
+      "since": "A117-N17 cmd /c mklink -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "install -m 644 x.json dist/x.json",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: install do dist -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ln -sf /tmp/a.txt b.txt",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: ln -sf b.txt -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rsync -av src/ dist/",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: rsync -av src/ dist/ -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dd if=/dev/zero of=disk.img bs=1M count=1",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: dd of=disk.img -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "New-Item -ItemType Directory -Path build",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: New-Item Directory build -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "New-Item -ItemType SymbolicLink -Path link -Target C:\\tmp\\a",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: New-Item SymbolicLink link -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.File]::WriteAllText('out.txt', 'x')",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: [IO.File]::WriteAllText out.txt -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "[IO.File]::Copy('a.txt', 'b.txt')",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: [IO.File]::Copy a b -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item x.json (Join-Path dist x.json)",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: Copy-Item do (Join-Path dist x.json) -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "cmd /c copy a.txt b.txt",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: cmd /c copy a b -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Start-Process -a 'reset','--hard' -f git",
+      "expect": "deny",
+      "since": "A117-N18 zkratky v obracenem poradi -a ... -f git -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rsync -a ../sablona/ .",
+      "expect": "ask",
+      "since": "A117-N17 rsync -a ../sablona/ . (obsah do korene projektu) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "rsync -a src .",
+      "expect": "allow",
+      "since": "A117-N17 kontrola: rsync -a src . -> ticho",
+      "hook": "secrets"
     }
   ]
 }

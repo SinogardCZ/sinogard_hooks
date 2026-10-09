@@ -88,88 +88,7 @@ $script:NetDeleteTargetPattern = $script:NetDeleteCallHeads + '\(\s*[''"]([^''"]
 # nectlo jako SQL a destruktivni operace propadla na allow. Rozbaleni obalu uz umi
 # Get-CommandLeaf, takze se pouzije ono a vezme se posledni list.
 
-# Nalez Amber E4: JEDEN spolecny seznam prepinacu s hodnotou byl spatne. `-n` bere
-# hodnotu u `nice`, ale NE u `sudo` (tam je to "neinteraktivne"), takze
-# `sudo -n psql <<SQL` preskocilo rovnou psql a destruktivni operace propadla.
-# Tabulka je proto podle OBALU, ne globalni.
-#
-# Nalez Amber G2: tabulka existovala DVAKRAT - tady a jeste jednou, hur, primo ve
-# vetvich Get-CommandLeaf. Oprava E4 dosla jen do jedne kopie, takze
-# `sudo -u root rm -rf /srv` dal davalo argv[0] = `-u` a propadalo na allow.
-# Tabulka i pruchod jsou proto od kola 4 na JEDINEM miste (Get-WrapperTail)
-# a obe volajici strany se pisou nad nim.
-$script:WrapperValueFlags = @{
-    'sudo'    = '^(-u|-g|-C|-p|-r|-t|-T|-U|--user|--group)$'
-    'doas'    = '^(-u|-C)$'
-    'nice'    = '^(-n|--adjustment)$'
-    # `-S` je tu ZAMERNE ne: jeho hodnota neni parametr, ale prikazova radka.
-    # Preskocit ji znamenalo propustit `env -S "rm -rf src"` (nalez Metis 3).
-    'env'     = '^(-u|-C|--unset|--chdir)$'
-    'timeout' = '^(-s|--signal|-k|--kill-after)$'
-    # GNU /usr/bin/time bere prepinace s hodnotou; `time -o log rm -rf src` davalo
-    # jako prikaz `log` (nalez Metis 3).
-    'time'    = '^(-o|-f|--output|--format)$'
-    'docker'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
-    'podman'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
-    'stdbuf'  = '^(-i|-o|-e|--input|--output|--error)$'
-}
-$script:PlainWrappers = '^(nohup|command|builtin|exec)$'
-$script:ContainerWrappers = '^(docker|podman)$'
-
-# Odloupne z ARGV vsechny obaly a vrati zbytek - tedy skutecny prikaz vcetne jmena.
-# Kdyz zadny obal nesedi, vraci vstup nedotceny.
-function Get-WrapperTail($Argv, [int]$Depth = 0) {
-    $arr = @($Argv)
-    $i = 0
-    $guard = 0
-    while ($i -lt $arr.Count -and $guard -lt 64) {
-        $guard++
-        $tok = [string]$arr[$i]
-
-        # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
-        if ($tok -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
-        if ($tok -match '^-') { $i++; continue }   # osamely prepinac bez znameho obalu
-
-        $name = Get-ExecutableName $tok
-        if ($name -match $script:PlainWrappers) { $i++; continue }
-        if (-not $script:WrapperValueFlags.ContainsKey($name)) { break }
-
-        $flagPattern = [string]$script:WrapperValueFlags[$name]
-        $i++
-        if ($name -match $script:ContainerWrappers) {
-            if ($i -lt $arr.Count -and $arr[$i] -match '^(exec|run)$') { $i++ }
-        }
-        while ($i -lt $arr.Count -and $arr[$i] -match '^-') {
-            $t = [string]$arr[$i]
-            # Nalez Metis 3: `env -S "rm -rf src"` (a `--split-string`) nese v hodnote
-            # celou PRIKAZOVOU RADKU, ne parametr. Preskocit ji znamenalo, ze prikaz
-            # zmizel a zbyl obal bez cile -> allow. Hodnota se proto rozlozi na tokeny
-            # a pokracuje se v ni.
-            if ($name -eq 'env' -and $Depth -lt 4) {
-                $split = $null
-                $skip = 0
-                if (($t -eq '-S' -or $t -eq '--split-string') -and ($i + 1) -lt $arr.Count) {
-                    $split = [string]$arr[$i + 1]; $skip = 2
-                } elseif ($t -match '^(-S|--split-string)=(.*)$') {
-                    $split = $Matches[2]; $skip = 1
-                }
-                if ($null -ne $split) {
-                    $tail = @(Split-Arguments $split)
-                    if (($i + $skip) -lt $arr.Count) { $tail += @($arr[($i + $skip)..($arr.Count - 1)]) }
-                    return (Get-WrapperTail $tail ($Depth + 1))
-                }
-            }
-            if ($t -cmatch $flagPattern) { $i += 2 } else { $i++ }
-        }
-        if ($name -match $script:ContainerWrappers -and $i -lt $arr.Count) {
-            $i++   # jmeno kontejneru nebo obrazu
-        }
-        # `timeout 30 psql ...` - po prepinacich stoji CISLO, ktere se preskakuje.
-        if ($name -eq 'timeout' -and $i -lt $arr.Count -and $arr[$i] -match '^\d+(\.\d+)?[smhd]?$') { $i++ }
-    }
-    if ($i -ge $arr.Count) { return ,@() }
-    return ,@($arr[$i..($arr.Count - 1)])
-}
+# Get-WrapperTail a jeho tabulka obalu ziji od 0.3.0 v _common.ps1 - sdili je secrets.ps1 (Z117-Q27, A117-N16).
 
 # Jmeno spustitelneho souboru PO rozbaleni obalu.
 #
@@ -183,24 +102,7 @@ function Get-UnwrappedExe([string]$Command) {
     return (Get-ExecutableName ([string]$tail[0]))
 }
 
-# Je token zkratkou daneho parametru PowerShellu? Prijima se kazda jednoznacna
-# predpona, takze `-c`, `-co`, `-com` ... `-command` (nalez Metis 4, kolo 2).
-function Test-ParameterPrefix([string]$Token, [string]$Full) {
-    if ([string]::IsNullOrEmpty($Token)) { return $false }
-    if (-not $Token.StartsWith('-')) { return $false }
-    $body = $Token.Substring(1).ToLowerInvariant()
-    if ($body -eq '') { return $false }
-    return $Full.StartsWith($body)
-}
-
-# -EncodedCommand ma navic ZKRATKY, ktere predponou nejsou: `-ec` (a `-e`). `ec` neni
-# predpona slova `encodedcommand` (to zacina na `en`), takze samotny predponovy test
-# ho minul a `pwsh -ec <base64>` propadlo na allow (nalez Amber G5).
-function Test-EncodedCommandFlag([string]$Token) {
-    if ([string]::IsNullOrEmpty($Token)) { return $false }
-    if ($Token.ToLowerInvariant() -eq '-ec') { return $true }
-    return (Test-ParameterPrefix $Token 'encodedcommand')
-}
+# Test-ParameterPrefix a Test-EncodedCommandFlag ziji od 0.3.0 v _common.ps1 (Z117-Q27, A117-N16).
 
 # Test-HeredocOutsideQuotes a $script:HeredocPattern ziji od 0.2.0 v _common.ps1 (sdili je secrets.ps1).
 
@@ -814,8 +716,18 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             $argList = ''
             for ($i = 0; $i -lt $rest.Count; $i++) {
                 $t = $rest[$i].ToLowerInvariant()
-                if (($t -eq '-filepath' -or $t -eq '-path') -and ($i + 1) -lt $rest.Count) { $file = $rest[$i + 1]; $i++; continue }
-                if (($t -eq '-argumentlist' -or $t -eq '-args') -and ($i + 1) -lt $rest.Count) {
+                # Z117-Q27 = B (A117-N18): PowerShell bere kazdou jednoznacnou zkratku (`-f`, `-a`, `-Arg` ...); hodnota
+                # parametru, ktery FilePath neni (`-Verb RunAs`, `-WorkingDirectory x`), se do 0.3.0 brala jako program.
+                if (((Test-ParameterPrefix $t 'filepath') -or $t -eq '-path') -and ($i + 1) -lt $rest.Count) { $file = $rest[$i + 1]; $i++; continue }
+                $isValueParam = $false
+                if ($t.Length -ge 3) {
+                    foreach ($vp in @('credential', 'workingdirectory', 'redirectstandarderror', 'redirectstandardinput',
+                                      'redirectstandardoutput', 'verb', 'windowstyle', 'environment')) {
+                        if (Test-ParameterPrefix $t $vp) { $isValueParam = $true; break }
+                    }
+                }
+                if ($isValueParam) { $i++; continue }
+                if (((Test-ParameterPrefix $t 'argumentlist') -or $t -eq '-args') -and ($i + 1) -lt $rest.Count) {
                     # Nalez Metis 7 (kolo 2): `-ArgumentList @('-enc','...')` je POLE.
                     # Bralo se to jako jeden token vcetne `@(`, `)` a apostrofu, takze
                     # se `-enc` uvnitr nikdy nenaslo. Pole se rozlozi na tokeny.
@@ -831,6 +743,14 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                         }
                         $i = $k - 1
                     }
+                    # A117-N18: pole bez zavorek (`-ArgumentList 'reset','--hard'`, i s mezerou za carkou) - do 0.3.0
+                    # zbylo `reset,--hard` jako jeden argument a `git reset --hard` se nesestavilo.
+                    if ($val -notmatch '^@?\(') {
+                        $k = $i + 2
+                        while ($val.EndsWith(',') -and $k -lt $rest.Count) { $val = $val + [string]$rest[$k]; $k++ }
+                        $i = $k - 2
+                        if ($val.Contains(',')) { $val = '(' + $val + ')' }
+                    }
                     $arr = [regex]::Match($val, '^@?\(\s*(.*?)\s*\)$')
                     if ($arr.Success) {
                         $items = New-Object System.Collections.ArrayList
@@ -841,7 +761,21 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                     }
                     $argList = $val; $i++; continue
                 }
-                if (-not $rest[$i].StartsWith('-') -and $file -eq '') { $file = $rest[$i] }
+                if (-not $rest[$i].StartsWith('-') -and $file -eq '') { $file = $rest[$i]; continue }
+                # A117-N18: druhy pozicni argument Start-Process je -ArgumentList (`Start-Process git 'reset','--hard'`).
+                if (-not $rest[$i].StartsWith('-') -and $argList -eq '') {
+                    $val = [string]$rest[$i]
+                    $k = $i + 1
+                    while ($val.EndsWith(',') -and $k -lt $rest.Count) { $val = $val + [string]$rest[$k]; $k++ }
+                    $i = $k - 1
+                    $pa = [regex]::Match($(if ($val.Contains(',') -and $val -notmatch '^@?\(') { '(' + $val + ')' } else { $val }), '^@?\(\s*(.*?)\s*\)$')
+                    if ($pa.Success) {
+                        $items = New-Object System.Collections.ArrayList
+                        foreach ($piece in (Split-Unquoted $pa.Groups[1].Value @(','))) { [void]$items.Add(($piece.Trim().Trim("'").Trim('"'))) }
+                        $val = (Join-Argument $items)
+                    }
+                    $argList = $val
+                }
             }
             if ($file -eq '') { return $out }
             $inner = ($file + ' ' + $argList).Trim()
@@ -859,13 +793,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         '^(bash|sh|zsh|dash|ksh)$' {
             # Nalez Metis 4: `bash -lc '...'` - shell prijima slouceny kratky prepinac,
             # takze se hleda kterykoli tvar koncici `c`, ne presny token `-c`.
-            $idx = -1
-            for ($i = 0; $i -lt $rest.Count; $i++) { if ($rest[$i] -cmatch '^-[a-z]*c$') { $idx = $i; break } }
-            if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) {
+            # Telo obalu od 0.3.0 rozpoznava Get-ShellWrapperBody (_common.ps1) - tataz funkce jako v hooku secrets.
+            $wb = Get-ShellWrapperBody $exe $rest
+            if ($null -eq $wb) {
                 # bash script.sh - skript souborem je pro hook nepruhledny, propousti se
                 return $out
             }
-            $inner = $rest[$idx + 1]
+            $inner = [string]$wb.Text
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): do 0.1.11 tu stal `Test-Unexpandable $inner` nad CELYM
             # vnitrkem; ted se vnitrek rozebira a `invoked` je jen statement s promennou
@@ -877,25 +811,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             return $out
         }
         '^(pwsh|powershell)$' {
-            $idx = -1
-            $isFile = $false
-            for ($i = 0; $i -lt $rest.Count; $i++) {
-                $t = $rest[$i].ToLowerInvariant()
-                # Nalez Metis 4 (kolo 2): PowerShell bere KAZDOU jednoznacnou zkratku
-                # parametru, takze `-enc`, `-enco`, `-encod` ... fungujou stejne jako
-                # `-encodedcommand`. Vyjmenovat tri z nich nestacilo.
-                if (Test-EncodedCommandFlag $t) {
-                    [void]$out.Add((New-OpaqueLeaf $raw 'encoded')); return $out
-                }
-                # Nalez Amber G5: `-c`/`-command` se porovnavaly PRESNE, takze
-                # `pwsh -com "git reset --hard"` prosel bez rozboru -> allow.
-                if (Test-ParameterPrefix $t 'file') { $isFile = $true; break }
-                if (Test-ParameterPrefix $t 'command') { $idx = $i; break }
-            }
+            # Nalez Metis 4 (kolo 2): PowerShell bere KAZDOU jednoznacnou zkratku parametru (`-enc`, `-enco` ...);
+            # nalez Amber G5: `-c`/`-command` se porovnavaly PRESNE. Obe pravidla drzi od 0.3.0 Get-ShellWrapperBody.
+            $wb = Get-ShellWrapperBody $exe $rest
             # skript souborem je pro hook nepruhledny -> propousti se (dokumentovano)
-            if ($isFile) { return $out }
-            if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
-            $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
+            if ($null -eq $wb) { return $out }
+            if ($wb.Kind -eq 'encoded') { [void]$out.Add((New-OpaqueLeaf $raw 'encoded')); return $out }
+            $inner = [string]$wb.Text
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): 41 ze 44 dotazu `invoked` ve vzorku faze 1 mel PRAVE
             # tenhle tvar s literalni hlavou (`pwsh -Command ". 'x.ps1'; ...; $env:X = 1"`).
@@ -905,12 +827,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             return $out
         }
         '^(cmd)$' {
-            $idx = -1
-            for ($i = 0; $i -lt $rest.Count; $i++) {
-                if ($rest[$i].ToLowerInvariant() -eq '/c' -or $rest[$i].ToLowerInvariant() -eq '/k') { $idx = $i; break }
-            }
-            if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
-            $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
+            $wb = Get-ShellWrapperBody $exe $rest
+            if ($null -eq $wb) { return $out }
+            $inner = [string]$wb.Text
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni (`cmd /c %X%` zustava ask,
             # `cmd /c "echo %PATH% && dir"` uz ne). Nalez Ada N19: cely retez pruchodu.
