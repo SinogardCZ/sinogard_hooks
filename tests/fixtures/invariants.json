@@ -6650,6 +6650,148 @@
       "expect": "allow",
       "since": "Z117-Q26 N7 kontrola: e-mail v --data-urlencode -> ticho",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp cfg/* .claude/",
+      "expect": "ask",
+      "since": "A117-N15 cp cfg/* do .claude/ -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp *.json .claude/",
+      "expect": "ask",
+      "since": "A117-N15 cp *.json do .claude/ -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp settings.* .claude/",
+      "expect": "ask",
+      "since": "A117-N15 cp settings.* do .claude/ -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r cfg/. .claude",
+      "expect": "ask",
+      "since": "A117-N15 cp -r cfg/. .claude -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r src/.claude .",
+      "expect": "ask",
+      "since": "A117-N15 cp -r src/.claude . -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item -Path cfg\\* -Destination .claude -Recurse",
+      "expect": "ask",
+      "since": "A117-N15 Copy-Item cfg\\* -Destination .claude -Recurse -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "xcopy cfg .claude /E /Y",
+      "expect": "ask",
+      "since": "A117-N15 xcopy cfg .claude /E -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "robocopy cfg .claude /MIR",
+      "expect": "ask",
+      "since": "A117-N15 robocopy cfg .claude /MIR -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "robocopy cfg .claude *.json",
+      "expect": "ask",
+      "since": "A117-N15 robocopy cfg .claude *.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r cfg/* C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/",
+      "expect": "ask",
+      "since": "A117-N15 cp -r do configu nainstalovane kopie -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Rename-Item .claude\\x.json settings.json",
+      "expect": "ask",
+      "since": "A117-N15 Rename-Item na settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "ren .claude\\x.json settings.json",
+      "expect": "ask",
+      "since": "A117-N15 ren na settings.json -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Rename-Item -Path .claude\\x.json -NewName settings.json",
+      "expect": "ask",
+      "since": "A117-N15 Rename-Item -NewName -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp -r src dist",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: cp -r src dist -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cp *.md docs/",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: cp *.md docs/ -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item x.json -Destination .claude -Force",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: Copy-Item x.json -Destination .claude -Force -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "robocopy src dist /MIR",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: robocopy src dist /MIR -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Rename-Item docs\\a.md b.md",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: Rename-Item docs\\a.md b.md -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Read",
+      "cmd": "\\??\\C:\\proj\\.env",
+      "expect": "deny",
+      "since": "A117-N19 Read \\??\\ .env -> deny",
+      "hook": "secrets",
+      "kind": "path"
+    },
+    {
+      "tool": "Read",
+      "cmd": "\\??\\C:\\proj\\readme.md",
+      "expect": "allow",
+      "since": "A117-N19 kontrola: Read \\??\\ bezny soubor -> ticho",
+      "hook": "secrets",
+      "kind": "path"
     }
   ]
 }

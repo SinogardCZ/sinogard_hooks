@@ -333,6 +333,8 @@ function ConvertTo-NormalPath([string]$Path) {
     # zustal `?` v ceste, brala se jako glob a `\\?\...\.claude\settings.json` zapis mlcel, `\\?\...\.env` cteni bylo jen ask.
     $p = [regex]::Replace($p, '^//[?.]/unc/', '//', 'IgnoreCase')
     $p = [regex]::Replace($p, '^//[?.]/', '')
+    # A117-N19: NT prefix objektu `\??\C:\...` tataz trida.
+    $p = [regex]::Replace($p, '^/\?\?/', '')
     $p = [regex]::Replace($p, '%([A-Za-z_][A-Za-z0-9_]*)%', {
         param($m)
         $v = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)

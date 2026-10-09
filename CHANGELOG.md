@@ -71,7 +71,13 @@ verze (`A117-O3`). Doklady: `docs/logs/mutants/task-117/` v repu GSD (výčet `0
 | `curl --data-urlencode name@.env`, `'name@.env'`, `--data-urlencode=name@.env`, `--variable name@.env` | ticho | `deny` | `Z117-Q26` (`A117-N7`) |
 | `$ExecutionContext.InvokeCommand.InvokeScript("$x reset --hard")`, `& ([scriptblock]::Create('git reset --hard'))` | ticho | `ask` (proměnná) / `deny` (literál se rozebere) | `Z117-Q26` (`A117-N8`) |
 
-Mimo pokrytí `Z117-Q25`: glob v cíli kopie (`robocopy x .claude *.json`) — kandidát nese `*` a vzory chráněných cest na něm nesednou.
+➕ `A117-N15` (delta review Amber, v rámci `Z117-Q25`): kopie / přesun do chráněného adresáře, když jméno zdroje určit
+nejde (glob `cp cfg/* .claude/`, `cp *.json .claude/`, rekurze `cp -r cfg/. .claude`, `cp -r src/.claude .`,
+`Copy-Item -Path cfg\* -Destination .claude -Recurse`, `xcopy cfg .claude /E`, `robocopy cfg .claude /MIR` / `*.json`), a
+`Rename-Item` / `ren` na chráněné jméno → `ask` (do cíle se dosadí každé chráněné jméno); `cp -r src dist` dál mlčí.
+`\??\` (NT prefix) se strhne jako `\\?\` (`A117-N19`).
+⚠️ Mez (čeká na rozhodnutí Toma, `A117-N16`–`N17`): `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` link, `[IO.File]::Copy`,
+`Join-Path` v cíli, `cmd /c copy` a obaly `bash -c` / `pwsh -c` v hooku `secrets` — zápis i čtení jimi mlčí (i v 0.2.0).
 
 ### ⚠️ Co H-a uvolňuje i bez projektového přepisu (`A117-N9`)
 

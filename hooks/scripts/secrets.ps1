@@ -438,34 +438,77 @@ function Get-BraceSubcommand([string]$Text, [int]$Depth) {
 }
 
 $script:CopyMoveExe = @('cp', 'copy', 'copy-item', 'cpi', 'mv', 'move', 'move-item', 'mi', 'xcopy')
+$script:RenameExe = @('rename-item', 'ren', 'rni')
+# A117-N15 (Z117-Q25, delta review Amber 2026-10-09): kdyz jmeno zdroje NEJDE urcit (glob, cely adresar, rekurze
+# `-r`/`-R`/`-a`/`--recursive`/`-Recurse`/`/E`/`/S`/`/MIR`, zdroj `x/.` nebo `x/*`), kopie do adresare, ktery chraneny
+# soubor obsahuje (`.claude/`, kopie pluginu, `hooks/`, `hooks/config/`), ho muze prepsat - `cp cfg/* .claude/` mlcelo.
+# Za cil se proto dosadi i kazde chranene jmeno, ktere v takovem adresari muze byt; rozhodne Test-SecretPath (ask jen
+# tam, kde vzor chranene cesty opravdu sedne - `cp -r src dist` zustava ticho).
+$script:ProtectedChildProbe = @('settings.json', 'settings.local.json', 'sinogard-hooks.json', 'hooks.json', 'defaults.json',
+                                'config/defaults.json', 'hooks/hooks.json', 'hooks/config/defaults.json')
+function Add-ProtectedChildProbe($Out, [string]$Dir) {
+    $d = ([string]$Dir).TrimEnd('/', '\')
+    if ($d -eq '') { $d = '.' }
+    foreach ($p in $script:ProtectedChildProbe) { [void]$Out.Add($d + '/' + $p) }
+}
+
 function Get-CopyWriteTarget($Tokens, [string]$Exe) {
     $out = New-Object System.Collections.ArrayList
     $isRobo = ($Exe -eq 'robocopy')
-    if (-not $isRobo -and $script:CopyMoveExe -notcontains $Exe) { return ,@($out) }
-    $winSwitch = ($isRobo -or $Exe -eq 'xcopy' -or $Exe -eq 'copy' -or $Exe -eq 'move')
+    $isRename = ($script:RenameExe -contains $Exe)
+    if (-not $isRobo -and -not $isRename -and $script:CopyMoveExe -notcontains $Exe) { return ,@($out) }
+    $winSwitch = ($isRobo -or $Exe -eq 'xcopy' -or $Exe -eq 'copy' -or $Exe -eq 'move' -or $Exe -eq 'ren')
     $positional = New-Object System.Collections.ArrayList
     $sources = New-Object System.Collections.ArrayList
     $targetDirs = New-Object System.Collections.ArrayList
     $dest = $null
+    $newName = $null
+    $recursive = $false
     $n = $Tokens.Count
     for ($i = 1; $i -lt $n; $i++) {
         $t = Remove-GroupingParen ([string]$Tokens[$i])
         if ($t -eq '') { continue }
         if ($t -match '^(?i)-des[a-z]*$') { if (($i + 1) -lt $n) { $dest = Remove-GroupingParen ([string]$Tokens[$i + 1]); $i++ }; continue }
+        if ($isRename -and $t -match '^(?i)-new[a-z]*$') { if (($i + 1) -lt $n) { $newName = [string]$Tokens[$i + 1]; $i++ }; continue }
         if ($t -ceq '-t' -or $t -match '^(?i)--target-directory$') { if (($i + 1) -lt $n) { [void]$targetDirs.Add([string]$Tokens[$i + 1]); $i++ }; continue }
         if ($t -match '^(?i)--target-directory=(.+)$') { [void]$targetDirs.Add($Matches[1]); continue }
         if ($t -match '^(?i)-(path|literalpath|lp|pspath)$') { if (($i + 1) -lt $n) { [void]$sources.Add([string]$Tokens[$i + 1]); $i++ }; continue }
         if ($t -match '^(?i)-(filter|include|exclude|credential|tosession|fromsession|suffix|backup)$') { $i++; continue }
+        if ($t -match '^(?i)-rec[a-z]*$' -or $t -match '^(?i)--(recursive|archive)$') { $recursive = $true; continue }
+        # GNU shluk kratkych prepinacu (`-r`, `-R`, `-a`, `-rf`) jen v Bash nastroji - v PowerShellu je `-Force` parametr.
+        if ($script:ToolName -ne 'PowerShell' -and $t -cmatch '^-[a-zA-Z]{1,4}$' -and $t -cmatch '[rRa]') { $recursive = $true; continue }
         if ($t.StartsWith('-')) { continue }
-        if ($winSwitch -and $t -match '^/[A-Za-z][A-Za-z0-9]{0,5}(:.*)?$') { continue }
+        if ($winSwitch -and $t -match '^/[A-Za-z][A-Za-z0-9]{0,5}(:.*)?$') {
+            if ($t -match '^(?i)/(e|s|mir)$') { $recursive = $true }
+            continue
+        }
         [void]$positional.Add($t)
+    }
+    if ($isRename) {
+        # Rename-Item <cesta> <nove jmeno>: cil = adresar zdroje + nove jmeno (nove jmeno je jen jmeno, ne cesta).
+        $src = if ($sources.Count -gt 0) { [string]$sources[0] } elseif ($positional.Count -gt 0) { [string]$positional[0] } else { '' }
+        if ($null -eq $newName) {
+            $rest = @(if ($sources.Count -gt 0) { $positional } else { $positional | Select-Object -Skip 1 })
+            if ($rest.Count -gt 0) { $newName = [string]$rest[0] }
+        }
+        if ($src -eq '' -or $null -eq $newName) { return ,@($out) }
+        $s2 = ($src -replace '\\', '/').TrimEnd('/')
+        $dir = if ($s2.Contains('/')) { $s2.Substring(0, $s2.LastIndexOf('/')) } else { '' }
+        [void]$out.Add($(if ($dir -ne '') { $dir + '/' + $newName } else { $newName }))
+        return ,@($out)
     }
     $targets = New-Object System.Collections.ArrayList
     if ($isRobo) {
         if ($positional.Count -lt 2) { return ,@($out) }
         $dst = [string]$positional[1]
         [void]$out.Add($dst)
-        for ($k = 2; $k -lt $positional.Count; $k++) { [void]$out.Add($dst.TrimEnd('/', '\') + '/' + [string]$positional[$k]) }
+        $exactFiles = $true
+        if ($positional.Count -lt 3) { $exactFiles = $false }
+        for ($k = 2; $k -lt $positional.Count; $k++) {
+            $f = [string]$positional[$k]
+            if ($f -match '[\*\?]') { $exactFiles = $false } else { [void]$out.Add($dst.TrimEnd('/', '\') + '/' + $f) }
+        }
+        if (-not $exactFiles -or $recursive) { Add-ProtectedChildProbe $out $dst }
         return ,@($out)
     }
     if ($null -ne $dest) {
@@ -480,13 +523,19 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
     foreach ($tg in $targets) { [void]$out.Add([string]$tg) }
     $dirs = @($targets) + @($targetDirs)
     foreach ($d in $dirs) {
+        $unknown = $recursive
         foreach ($s in $sources) {
             $leaf = (([string]$s) -replace '\\', '/').TrimEnd('/')
             $leaf = $leaf.Substring($leaf.LastIndexOf('/') + 1)
-            # Zdroj se zastupnym znakem (`cp *.pem /tmp/x`) se neskladani: rozhoduje jeho cteni (glob, `ask`) jako
-            # v 0.2.0 - slozeny `/tmp/x/*.pem` by z dotazu udelal `deny` (zachytila sada N26, CI 37844345253).
-            if ($leaf -ne '' -and $leaf -notmatch '[\*\?]') { [void]$out.Add(([string]$d).TrimEnd('/', '\') + '/' + $leaf) }
+            # Zdroj se zastupnym znakem se neskladani doslova (`/tmp/x/*.pem` by z dotazu `cp *.pem /tmp/x` udelal
+            # `deny`, CI 37844345253); jeho jmena ale neznamo -> sonda chranenych jmen v cili (A117-N15).
+            if ($leaf -match '[\*\?]' -or $leaf -eq '.' -or $leaf -eq '') { $unknown = $true; continue }
+            $composed = ([string]$d).TrimEnd('/', '\') + '/' + $leaf
+            [void]$out.Add($composed)
+            # rekurzivni kopie adresare `x` do `d` vytvori `d/x/...` - sonda i tam (`cp -r src/.claude .`)
+            if ($recursive) { Add-ProtectedChildProbe $out $composed }
         }
+        if ($unknown) { Add-ProtectedChildProbe $out ([string]$d) }
     }
     return ,@($out)
 }

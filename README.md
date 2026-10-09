@@ -308,7 +308,8 @@ aby si je nikdo nemusel objevit sám.
 1. **Skript volaný souborem je pro hook neprůhledný.** Hook vidí jen příkaz, který
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
    uvnitř byl `git reset --hard`. Obal s literálem (`bash -c "…"`) se rozebere,
-   obal se souborem ne.
+   obal se souborem ne. ⚠️ Rozebírá ho jen hook `gate`; hook `secrets` obal `bash -c` / `pwsh -c` nerozbaluje
+   (změřila Amber, `A117-N16`; omezení 25).
    ➕ **A platí to i tehdy, když je ta cesta v proměnné** (0.1.11, nález Ada N49):
    `pwsh -File $p`, `bash $script` ani `Start-Process -FilePath 'pwsh' …
    -RedirectStandardOutput $log` nejsou spuštění obsahu proměnné — proměnná je tam
@@ -626,9 +627,15 @@ aby si je nikdo nemusel objevit sám.
     (`.claude/plugins/` v absolutní cestě, nebo `hooks/` právě běžícího pluginu), ne disk: junction ani symlink hook
     nerozpozná; existující jméno 8.3 (`CLAUDE~1`) rozvine `GetFullPath`, takže se pozná (změřila Amber, `A117-N11`).
     Zápis do vývojového klonu, který neběží, se neptá — chrání ho sady, review a tag.
-    ✔️ **Cíl kopie / přesunu je od 0.3.0 zápis** (`Z117-Q25`; do 0.3.0 díra — `cp x .claude/settings.json` mlčel):
-    `-Destination` (i zkratky a `-Destination:`), `-t` / `--target-directory`, jinak poslední poziční argument; adresářový
-    cíl se skládá se jménem zdroje; `xcopy` a `robocopy <zdroj> <cíl> <soubor>` taky. Mez: glob v cíli (`robocopy x .claude *.json`).
+    **Cíl kopie / přesunu / přejmenování je od 0.3.0 zápis** (`Z117-Q25`; do 0.3.0 díra — `cp x .claude/settings.json`
+    mlčel): `-Destination` (i zkratky a `-Destination:`), `-t` / `--target-directory`, jinak poslední poziční argument;
+    adresářový cíl se skládá se jménem zdroje; když jméno zdroje určit nejde (glob, celý adresář, rekurze `-r`/`-a`/
+    `-Recurse`/`/E`/`/S`/`/MIR`, `x/.`), dosadí se do cílového adresáře každé chráněné jméno (`cp cfg/* .claude/` = `ask`,
+    `cp -r src dist` mlčí); `xcopy`, `robocopy` a `Rename-Item`/`ren` (adresář zdroje + nové jméno) taky (`A117-N15`).
+    ⚠️ **Mez, která zůstává** (čeká na rozhodnutí Toma, `A117-N16`–`N17`): jiné zápisové příkazy — `install`, `ln -sf`,
+    `rsync`, `dd of=`, `New-Item -ItemType SymbolicLink|HardLink`, `[IO.File]::Copy(…)`, cesta složená výrazem
+    (`Join-Path`), `cmd /c copy` (omezení 15) — a obaly `bash -c '…'` / `pwsh -c "…"`, které `secrets` (na rozdíl od `gate`)
+    nerozbaluje: zápis i čtení chráněného souboru jimi mlčí.
 
 ---
 
