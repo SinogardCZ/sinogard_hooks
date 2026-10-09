@@ -87,13 +87,29 @@ kořene projektu nebo domova (`cp -r ../sablona/. .`, `robocopy X . /E`) → `as
 
 | tvar | 0.2.0 | 0.3.0 | nález |
 |---|---|---|---|
-| `bash -c 'cat .env'`, `sh -c`, `zsh -c`, `pwsh -c "Get-Content .env"`, `powershell -Command`, `sudo bash -c`, vnořené, `pwsh -EncodedCommand <Get-Content .env>` | ticho | `deny` | `A117-N16` (hook `secrets`; rozpoznání obalu sdílí s `gate`, `Get-ShellWrapperBody`) |
+| `bash -c 'cat .env'`, `sh -c`, `zsh -c`, `pwsh -c "Get-Content .env"`, `powershell -Command`, `sudo bash -c`, vnořené, `pwsh -EncodedCommand <Get-Content .env>` | ticho | `deny` | `A117-N16` (hook `secrets`; rozpoznání obalu sdílí s `gate`, `Get-ShellWrapperBody`) — jen vyjmenované tvary, **ne úplné** (meze `A117-N29`–`N31` níž) |
 | `bash -c 'cp x.json .claude/settings.json'`, `pwsh -enc $e` (nejde dekódovat) | ticho | `ask` | `A117-N16` |
 | `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` (i link), `ni`, `mklink`, `[IO.File]::Copy/Move/WriteAllText`, `Copy-Item x (Join-Path .claude settings.json)`, `cmd /c copy\|move` do `.claude/settings.json` | ticho | `ask` | `A117-N17` |
 | `dd if=.env of=/tmp/x` | ticho | `deny` | `A117-N17` |
 | `Start-Process git -ArgumentList 'reset','--hard'`, `Start-Process git 'reset','--hard'`, `-f git -a …`, `-Verb RunAs git …` | ticho | `deny` | `A117-N18` (hook `gate`) |
 
 ⚠️ Mez: `xargs cp -t .claude`, `find … -exec cp {} .claude/ \;` (`A117-N25`, rozhodla Amber `A117-O11`); cíl celý v proměnné.
+
+### ⚠️ Známé meze vydání 0.3.0 — oprava ve verzi 0.3.1 (`Z117-Q29 = A`)
+
+Rozhodnutí Toma 2026-10-09 18:50: 0.3.0 se vydá a nasadí bez dalších oprav kódu; nálezy delta review Amber 05
+(`2026-10-09-review-amber-117-delta-05.md`) se zapisují jako známé meze a opraví se v samostatné verzi **po jednom nálezu
+na session** (GSD TASK-161). Mění `Z117-Q28` („opravit vše") pro 0.3.0. Popis třídou — tvary drží review.
+
+- `A117-N29` — rozbor obalu (`Get-ShellWrapperBody`, oba hooky) nezná část zápisů obalu, které shell skutečně spustí;
+  řádek `A117-N16` výš proto neznamená „každý obal" (README omezení 1).
+- `A117-N30` — hook `secrets` nerozebírá literál předaný příkazům, které text spouštějí; gate ano.
+- `A117-N31` — nad stropem zanoření se tělo obalu nerozhoduje a hook mlčí (fail-open; má být `ask`).
+- `A117-N32` — odkaz / junction na místě chráněného adresáře, kopie metodou souborového objektu, složená cesta u jiných
+  zápisových příkazů než rodiny kopie.
+- `A117-N33` — zápis chráněného souboru stahovacím, rozbalovacím nebo verzovacím příkazem; shell čtoucí příkazy ze vstupu
+  (i v gate); další obalové programy; alias gitu spouštějící shell; nepřímý zápis přes dříve založený odkaz.
+- `A117-N25`, `A117-N27` — skládání příkazů a pevný seznam sondovaných jmen (README omezení 25).
 
 ### ⚠️ Co H-a uvolňuje i bez projektového přepisu (`A117-N9`)
 

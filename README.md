@@ -313,6 +313,11 @@ aby si je nikdo nemusel objevit sám.
    `secrets` navíc dekóduje `-EncodedCommand` (nejde-li to — proměnná, vadný base64 — `ask`). Do 0.3.0 `bash -c 'cat .env'`
    v hooku `secrets` mlčel. `Start-Process git -ArgumentList 'reset','--hard'` (pole bez závorek, druhý poziční argument,
    zkratky `-f` / `-a`, `-Verb RunAs` před programem) gate od 0.3.0 složí (`A117-N18`).
+   ⚠️ **Mez 0.3.0 — rozbor obalu NENÍ úplný** (`Z117-Q29 = A`, Tom 2026-10-09: vydat bez dalších oprav, zbytek po jednom
+   nálezu ve verzi 0.3.1; review `2026-10-09-review-amber-117-delta-05.md`). Výčet výše jmenuje tvary, které se rozeberou;
+   neplatí „každý obal": část zápisů obalu, které shell skutečně spustí, sdílená funkce nerozpozná a oba hooky mlčí
+   (`A117-N29`); hook `secrets` nerozebírá literál předaný příkazům, které text spouštějí — gate ano (`A117-N30`); nad
+   stropem zanoření se tělo obalu nerozhoduje a nic se neptá (`A117-N31`).
    ➕ **A platí to i tehdy, když je ta cesta v proměnné** (0.1.11, nález Ada N49):
    `pwsh -File $p`, `bash $script` ani `Start-Process -FilePath 'pwsh' …
    -RedirectStandardOutput $log` nejsou spuštění obsahu proměnné — proměnná je tam
@@ -657,6 +662,12 @@ aby si je nikdo nemusel objevit sám.
     ⚠️ **Mez, která zůstává:** skládání příkazů — `ls cfg/* | xargs cp -t .claude`, `find … -exec cp {} .claude/ \;`
     (`A117-N25`; mimo `Z117-Q27`, rozhodla Amber `A117-O11`); cíl celý v proměnné bez chráněného jména (`cp x.json $T`);
     `[IO.File]::…($p, …)` s cestou jen v proměnné.
+    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.3.1** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`):
+    odkaz nebo junction vytvořený **na místě** chráněného adresáře, kopie metodou souborového objektu a složená cesta
+    (`Join-Path`) u jiných zápisových příkazů než rodiny kopie (`A117-N32`); zápis chráněného souboru stahovacím,
+    rozbalovacím nebo verzovacím příkazem, shell, který čte příkazy ze vstupu, další obalové programy, alias gitu, který
+    spouští shell, a nepřímý zápis přes dříve založený odkaz (`A117-N33`); skládání příkazů výše (`A117-N25`) a pevný
+    seznam sondovaných jmen (`A117-N27`).
 
 ---
 
