@@ -3,6 +3,160 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.3.0] — 2026-10-08
+
+**TASK-117 (GSD): `secrets` jen u čtení obsahu, tři díry 0.2.0 zavřené, H-a–H-g.** Zadání
+Amber v6 (`2026-10-01-zadani-task-117.md`, revize Grace `T117-N1`–`N22`), fáze 1 (krok 0, výčet
+tvarů posunutých k mlčení, návrh H-a/H-c/H-f/H-g, červené testy, council Codex + Poolside)
+a rozhodnutí Toma `Z117-Q1`–`Q22` + Amber `A117-O1`–`O8`. Mění se rozhodnutí brány → minor
+verze (`A117-O3`). Doklady: `docs/logs/mutants/task-117/` v repu GSD (výčet `00-…`, návrh
+`01-…`, sondy `02-…`, červená fáze `03-…`, council `05-…`, mutanti, H-d návnada `10-…`).
+
+### Zpřísněno — díry 0.2.0 (všechny projekty na stroji)
+
+| tvar | 0.2.0 | 0.3.0 | rozhodnutí |
+|---|---|---|---|
+| `Get-Content (Get-ChildItem .env)`, `cat (ls .env)`, `-Body (Get-Content -Raw .env)` — seskupení | ticho | `deny` | `Z117-Q16`, nález N-C |
+| `curl -d @.env`, `--data-binary @.env`, `-F f=@.env`, `ls <(curl --data-binary @.env …)` | ticho | `deny` | `Z117-Q16`, nález N-D (council Codex) |
+| `$x = 'git'; & $x reset --hard` (pod zúžením projektu `gate.opaque.invoked = audit`) | ticho + audit | `deny` | `Z117-Q17`, nález N-B |
+| `dotnet ef database update --connection "Addr=…"` / `Address=` / `Network Address=` vzdálený | ticho | `deny` | `Z117-Q16`, `T117-N13` |
+| `ef database drop` s `Addr=` vzdáleným, `sqlcmd -S "vzdálený"`, `-Svzdálený`, `dropdb -h "…"`, `psql -h '…'`, URI bez uživatele, návnada `Server=localhost;Addr=db.firma.cz` | `ask` | `deny` | `Z117-Q16` |
+| přepis `localDbHosts` se vzdáleným hostitelem | `ask` | `deny` (klíč odmítnut) | `Z117-Q21`, `T117-N12` |
+| `sqllocaldb delete <instance>`, `SqlLocalDB.exe delete …`, `sqllocaldb d …` | ticho | `ask` | `Z117-Q20`, nález Amber A117-N4 |
+| `openssl rsa -in private.pem`, `ssh-keygen -y -f key.pem`, `keytool -keystore app.jks`, `certutil -dump cert.pfx`, `gpg --decrypt x.gpg` | ticho | `deny` | `Z117-Q6` (položka 4) |
+| `printenv API_KEY`, `Get-Content Env:\API_KEY`, `Env:/…`, `gc Env:\…`, `(Get-Item Env:\…).Value` | ticho | `ask` | `Z117-Q15`, `A117-O5` |
+| projektový přepis, který bránu uvolňuje (`denyPatterns: []`, kratší `protectedBranches`, delší `allowedRemoveRoots`, prázdné `askPathPatterns`, `opaque.encoded: audit`, `shapes`, neznámý klíč) | platil | odmítnut (výchozí hodnota) | `Z117-Q21` (H-c) |
+
+### Uvolněno — rozhodnutá ticha
+
+| tvar | 0.2.0 | 0.3.0 | rozhodnutí |
+|---|---|---|---|
+| jmenující tvar bez toku výstupu: `git ls-files X`, `git check-ignore [-v] X`, `git ls-tree --name-only <tree> X`, `Test-Path X`, `ls`/`dir`/`Get-ChildItem X` (i `ls ~/.ssh/*`, A131-N5 doslova) — pro **všechny** chráněné soubory | `deny`/`ask` | ticho + audit `secrets:nameOnly` | `Z117-Q1/Q2/Q3/Q5` (položka 7) |
+| jméno citlivé proměnné jen jako text ve vzoru `grep`/`rg`/`git grep`/`Select-String` (vzorový `grep -n "^\$env:GSD_E2E_PASSWORD" …` v Bash nástroji) | `ask` | ticho + audit `secrets:nameOnly:envVarText` | `Z117-Q14/Q22` (H-g, varianta A) |
+| `& $m` / `& "$sp\x.ps1"` / `. $m` po jediném literálním přiřazení v témže příkazu (PowerShell) | `ask` (`invoked`) | podle rozbaleného literálu (skript souborem = ticho) | `Z117-Q17` (H-a, varianta 1) |
+| LocalDB `(localdb)\<instance>` v `--connection` | `deny` | `ask` | `Z117-Q18` |
+| lokální destruktivní DB operace s přepisem `gate.dbDestroyLocal = allow` přesně pokrytým tvarem (`sqlcmd -S … -Q "DROP DATABASE [X]"`, `ef database drop --connection …`) | `ask` | ticho + audit `gate:dbDestroyLocal` | `Z117-Q13/Q19` (H-f); výchozí `ask` beze změny |
+| zápis do `hooks/hooks.json` / `hooks/config/*` mimo nainstalovanou kopii (`.claude/plugins/`) | `ask` (`selfProtect`) | ticho | `Z117-Q23` (a), Tom 2026-10-08 18:43 |
+| výpis prostředí filtrovaný podle jména s projekcí na jméno / počet (`Get-ChildItem Env: \| Where-Object Name -like 'X*' \| Select-Object -ExpandProperty Name`) | `ask` (`envDump`) | ticho | `Z117-Q23` (c) |
+| `{"gate":{"opaque":{"variable":"maybe"}}}` (neznámá hodnota) | `ask` (fail-closed v kódu) | klíč odmítnut → výchozí `variable = audit` | `Z117-Q21` — test `politika/neznama` překlopen |
+
+### Opraveno po `/code-review` fáze 2 (CR-P1–P10)
+
+- CR-P1: hostitelé DB se slili do jednoho řetězce (dvojí obal pole) — dva místní hostitelé vyšli jako vzdálený `deny`.
+- CR-P2: rozbalení H-a vypne i `${x} = …`, `Set-Item variable:x`, `(Get-Variable x).Value = …`, `PSVariable.Set`,
+  vícenásobné přiřazení (`$a, $x = …`) — do opravy rozbalilo starou hodnotu a `git reset --hard` prošel tiše.
+- CR-P4: hodnota přepínače začínající pomlčkou není hostitel (`sqlcmd -h -1`, `psql -H -c`).
+- CR-P5: N-D i se slepeným krátkým přepínačem (`curl -d@.env`, `-Ff=@.env`).
+- CR-P6: H-c porovnává pravidlo `denyPatterns`/`askPatterns` podle `id` + `pattern`, ne celým JSON.
+- CR-P7: H-a rozhoduje první výskyt použití mimo přiřazení (ne poslední); náhrada proměnné s hranicí jména.
+- CR-P8: posun začátku výskytu u `GetEnvironmentVariable`. CR-P9: sdílené vzory LocalDB a synonym serveru.
+- CR-P10: audit odmítnutého klíče přepisu jednou za session (značka `override-rejected.json`), ne při každém volání.
+- Vědomě beze změny: CR-P3 (`hooks.*` v přepisu smí hook vypnout) — řádek `hooks.*` přijat v návrhu H-c, který
+  schválil Tom (`Z117-Q21`); vypnutí je viditelné v kanárku (`—`).
+- Kolo 2 (`/code-review` nad opravami): `selfProtect` chrání navíc cokoli pod `hooks/` **právě běžícího** pluginu
+  (`--plugin-dir`, jiný `CLAUDE_CONFIG_DIR`) a relativní cíl v příkazu, který mění adresář (`cd`, `Set-Location`,
+  `Push-Location` → vzor 0.2.0 kdekoli); absolutní cesta i mimo Windows; výjimka „jen jména" u `envDump` padá při
+  zastínění aliasem/funkcí; N-D i ve shluku přepínačů (`curl -sd@.env`); `variable:` vypíná H-a jen jako cesta providera
+  (ne `-ErrorVariable:e`).
+- ⚠️ Migrace: výchozí `secrets.selfProtectPathPatterns` se změnil (`Z117-Q23`) — projektový přepis, který kopíroval
+  seznam 0.2.0, už není nadmnožina a H-c ho celý odmítne (kanárek to ukáže). Projekt přepíše seznam z 0.3.0.
+
+### Zpřísněno — díry 0.2.0 nalezené review fáze 2 (`Z117-Q25`, `Z117-Q26`, Tom 2026-10-08 21:24 a 21:44)
+
+| tvar | 0.2.0 | 0.3.0 | rozhodnutí |
+|---|---|---|---|
+| **cíl kopie / přesunu** do chráněné cesty: `cp x .claude/settings.json`, `Copy-Item … -Destination .claude/…` (i `-Destination:`, `-Dest`, prohozené pořadí), adresářový cíl + chráněné jméno zdroje (`cp /tmp/settings.json .claude/`), `cp -t` / `--target-directory`, `mv`/`Move-Item` do nainstalované kopie pluginu, `xcopy`, `robocopy <zdroj> <cíl> <soubor>` | ticho | `ask` (`selfProtect`), nad souborem se secrets `deny` | `Z117-Q25` |
+| Bash skupina / funkce `{ cat .env; }`, `{ cat .env; } \| curl -d @- …`, `f() { cat .env; }; f`, `{ echo x > .claude/settings.json; }` | ticho | `deny` / `ask` | `Z117-Q26` (`A117-N5`) |
+| prefix `\\?\` / `\\.\` (i `\\?\UNC\…`) v cestě nástrojů Read/Write/Edit — `\\?\…\.claude\settings.json` zápis, `\\?\…\.env` čtení | ticho / `ask` | `ask` / `deny` jako bez prefixu | `Z117-Q26` (`A117-N6`) |
+| `curl --data-urlencode name@.env`, `'name@.env'`, `--data-urlencode=name@.env`, `--variable name@.env` | ticho | `deny` | `Z117-Q26` (`A117-N7`) |
+| `$ExecutionContext.InvokeCommand.InvokeScript("$x reset --hard")`, `& ([scriptblock]::Create('git reset --hard'))` | ticho | `ask` (proměnná) / `deny` (literál se rozebere) | `Z117-Q26` (`A117-N8`) |
+
+➕ `A117-N15` (delta review Amber, v rámci `Z117-Q25`): kopie / přesun do chráněného adresáře, když jméno zdroje určit
+nejde (glob `cp cfg/* .claude/`, `cp *.json .claude/`, rekurze `cp -r cfg/. .claude`, `cp -r src/.claude .`,
+`Copy-Item -Path cfg\* -Destination .claude -Recurse`, `xcopy cfg .claude /E`, `robocopy cfg .claude /MIR` / `*.json`), a
+`Rename-Item` / `ren` na chráněné jméno → `ask` (do cíle se dosadí každé chráněné jméno); `cp -r src dist` dál mlčí.
+Adresář bez přepínače rekurze taky: `mv src/.claude .`, `mv cfg .claude`, `Move-Item cfg .claude`, `Rename-Item cfg .claude`,
+`xcopy cfg .claude /Y` → `ask`; cena: `mv x.json .claude` se ptá (hook nepozná, jestli cíl existuje).
+`\??\` (NT prefix) se strhne jako `\\?\` (`A117-N19`).
+➕ `A117-N22`–`N24`, `N26` (delta review Amber 04): PowerShell zkratky `-Recurse` (`Copy-Item cfg .claude -r`), zdroj z roury
+(`Get-ChildItem cfg | Copy-Item -Destination .claude`, `Get-Item x | Rename-Item -NewName settings.json`), výraz / proměnná ve
+zdroji, zástupné znaky `[…]` / `{a,b}`, glob v cíli (`cp x.json .claude/settings.js*`) a rekurzivní kopie s neznámými jmény do
+kořene projektu nebo domova (`cp -r ../sablona/. .`, `robocopy X . /E`) → `ask`; `cp -r src .`, `Copy-Item cfg .claude
+-Recurse:$false` mlčí. Mez: jiný předek `.claude` (README 25).
+➕ `Z117-Q27 = B` (Tom 2026-10-09 07:41, „opravit v 0.3.0 i obě menší díry"):
+
+| tvar | 0.2.0 | 0.3.0 | nález |
+|---|---|---|---|
+| `bash -c 'cat .env'`, `sh -c`, `zsh -c`, `pwsh -c "Get-Content .env"`, `powershell -Command`, `sudo bash -c`, vnořené, `pwsh -EncodedCommand <Get-Content .env>` | ticho | `deny` | `A117-N16` (hook `secrets`; rozpoznání obalu sdílí s `gate`, `Get-ShellWrapperBody`) — jen vyjmenované tvary, **ne úplné** (meze `A117-N29`–`N31` níž) |
+| `bash -c 'cp x.json .claude/settings.json'`, `pwsh -enc $e` (nejde dekódovat) | ticho | `ask` | `A117-N16` |
+| `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` (i link), `ni`, `mklink`, `[IO.File]::Copy/Move/WriteAllText`, `Copy-Item x (Join-Path .claude settings.json)`, `cmd /c copy\|move` do `.claude/settings.json` | ticho | `ask` | `A117-N17` |
+| `dd if=.env of=/tmp/x` | ticho | `deny` | `A117-N17` |
+| `Start-Process git -ArgumentList 'reset','--hard'`, `Start-Process git 'reset','--hard'`, `-f git -a …`, `-Verb RunAs git …` | ticho | `deny` | `A117-N18` (hook `gate`) |
+
+⚠️ Mez: `xargs cp -t .claude`, `find … -exec cp {} .claude/ \;` (`A117-N25`, rozhodla Amber `A117-O11`); cíl celý v proměnné.
+
+### ⚠️ Známé meze vydání 0.3.0 — oprava ve verzi 0.3.1 (`Z117-Q29 = A`)
+
+Rozhodnutí Toma 2026-10-09 18:50: 0.3.0 se vydá a nasadí bez dalších oprav kódu; nálezy delta review Amber 05
+(`2026-10-09-review-amber-117-delta-05.md`) se zapisují jako známé meze a opraví se v samostatné verzi **po jednom nálezu
+na session** (GSD TASK-161). Mění `Z117-Q28` („opravit vše") pro 0.3.0. Popis třídou — tvary drží review.
+
+- `A117-N29` — rozbor obalu (`Get-ShellWrapperBody`, oba hooky) nezná část zápisů obalu, které shell skutečně spustí;
+  řádek `A117-N16` výš proto neznamená „každý obal" (README omezení 1).
+- `A117-N30` — hook `secrets` nerozebírá literál předaný příkazům, které text spouštějí; gate ano.
+- `A117-N31` — nad stropem zanoření se tělo obalu nerozhoduje a hook mlčí (fail-open; má být `ask`).
+- `A117-N32` — odkaz / junction na místě chráněného adresáře, kopie metodou souborového objektu, složená cesta u jiných
+  zápisových příkazů než rodiny kopie.
+- `A117-N33` — zápis chráněného souboru stahovacím, rozbalovacím nebo verzovacím příkazem; shell čtoucí příkazy ze vstupu
+  (i v gate); další obalové programy; alias gitu spouštějící shell; nepřímý zápis přes dříve založený odkaz.
+- `A117-N25`, `A117-N27` — skládání příkazů a pevný seznam sondovaných jmen (README omezení 25).
+
+### ⚠️ Co H-a uvolňuje i bez projektového přepisu (`A117-N9`)
+
+Rozbalení literální hlavy (`Z117-Q17`) posuzuje **rozbalený** příkaz jako literální — a literální `git @('reset','--hard')`
+nebo `git $y --hard` mlčely už v 0.2.0 (proměnná v argumentu = `opaque:variable`, audit). Proto `$x = 'git'; & $x $y --hard`,
+`& $x @('reset','--hard')`, `& $x @a` (destruktivní ocas v proměnné) od 0.3.0 **mlčí ve všech projektech bez přepisu**
+(HRMS, Útraty) — v 0.2.0 se ptaly jako `invoked`. `$x = 'git'; & $x reset --hard` (ocas viditelný) je `deny`.
+
+### Přidáno
+
+- **H-b — audit i `ask`/`deny`** (`Z117-Q8 = B`): řádek nese id tvaru (`gate:<id pravidla>`,
+  `gate:opaque:<příčina>`, `secrets:<tvar>`) a vydané rozhodnutí; `ask` v bypassu = `ask-bypass`.
+  Nikdy text příkazu, cestu ani jméno proměnné. Kontrolní testy *„ask nezapíše řádek"* (gate
+  `opaque-ask`, secrets `audit/kontrola …`) překlopeny na *„řádek nese skutečné rozhodnutí, ne
+  allow"*.
+- **H-c — `_overridePolicy`** ve výchozí konfiguraci; odmítnutý klíč = výchozí hodnota, kanárek
+  `· přepis: odmítnuto N klíčů (…)`, audit `config:overrideRejected:<klíč>`. Testy
+  `K2-1 prazdne denyPatterns` a `N43 prazdne askPathPatterns` překlopeny (`allow` → `deny`/`ask`)
+  s novou kontrolní skupinou *„zpřísňující přepis platí"*.
+- **H-f — `gate.dbDestroyLocal`** (`decision`, `databases`, `hosts`), tvar `dbDestroyLocalDenied`.
+- Sbírají se **všechny** hodnoty hostitele DB (`Get-DbHosts`), kterýkoli vzdálený = `deny`.
+
+### Opraveno textem
+
+- `defaults.json` `_comment`: „MĚLKÉ sloučení" → jednoúrovňové od 0.1.11 (H-e, `A117-O1`).
+- `_common.ps1`: poznámka o dvojím obalení pole u `Expand-ColonParameter` (N-H10, `A117-O1`).
+- `_generate-invariants.ps1`: popis doby běhu režimu sběru podle měření (N-H8, `A117-O1`).
+- README omezení 9 (H-d, `Z117-Q9`): přeměřeno návnadou — `Read` deny Claude Code 2.1.286 kryje
+  v PowerShell nástroji přímé `cat`/`Get-Content <soubor>`, ne glob, `head`, `sed` ani seskupení;
+  omezení 1 (H-a), 22 (položka 4, N-C, N-D), nová 23 (H-g) a 24 (jmenující výjimka).
+
+### Testy
+
+- `tests/fixtures/task117-{secrets,gate}.json` (případy v datovém souboru, ne v příkazové řádce),
+  harness: výchozí **prázdný projekt** a **žádný audit** pro každý běh hooku (sada na stroji
+  s repem GSD měřila jeho skutečný přepis), fáze řádku se kontroluje **před** sběrem do invariantu,
+  řádky s přepisem nebo režimem do invariantu nejdou, mimo-ASCII v sběru jako `\uXXXX` (typografická
+  uvozovka rozbila JSON v konzoli `powershell.exe`).
+- Invariant: nové řádky generátorem; `ls ~/.ssh/*` `ask` → `allow` přijato `-Prijmout "Z117-Q5"`.
+
+### Neopraveno (rozhodnuto)
+
+- Refaktor `Get-CommandLeaf` + N-H11 (`Z117-Q7 = A`) — spouštěč *„první změna seznamu interpretů,
+  nebo první oprava v `Split-Heredoc` / `Remove-DataHeredocBody`"*.
+- `cmd /c` (README 15) a kontejner (README 11) — spouštěče přeměřeny v kroku 0, nesepnuty.
+- Doba hooku (položka 6, `A117-O2`) — změřena, beze změny výkonu.
+
 ## [0.2.0] — 2026-09-13
 
 **TASK-106 (GSD): deset bodů nad měřením, ne nad dojmem.** Fáze 1 (2026-09-12) změřila

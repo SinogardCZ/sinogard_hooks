@@ -1027,7 +1027,30 @@ $auditPathI = Join-Path $auditDirI 'gate-audit.jsonl'
 $jsonI = New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = '& $cmd' }
 $rI = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonI -Environment @{ 'CLAUDE_PLUGIN_DATA' = $auditDirI }
 Assert-Equal 'ask' (Get-Decision $rI) '[opaque-ask] rozhodnuti je ask'
-Assert-True (-not [System.IO.File]::Exists($auditPathI)) '[opaque-ask] radek auditu NEVZNIKL'
+# TASK-117 H-b (Z117-Q8 = B): od 0.3.0 se zapisuje i `ask` - radek ale nese SKUTECNE rozhodnuti
+# (`ask`), takze dal netvrdi, ze se neco pustilo. Do 0.2.0 tu stalo "radek NEVZNIKL".
+$lineI = if ([System.IO.File]::Exists($auditPathI)) { [System.IO.File]::ReadAllText($auditPathI, ([System.Text.UTF8Encoding]::new($false))) } else { '' }
+Assert-True ($lineI -match '"shape":"gate:opaque:invoked"' -and $lineI -match '"decision":"ask"') '[opaque-ask] radek auditu nese ask s pricinou'
+Assert-True ($lineI -notmatch '"decision":"allow"') '[opaque-ask] zadny radek allow'
+Assert-True (-not $lineI.Contains('cmd')) '[opaque-ask] radek NEOBSAHUJE text prikazu'
+
+# TASK-117 CR-P10 (A117-N12): odmitnuty klic prepisu se do auditu zapise JEDNOU za session (znacka
+# `override-rejected.json`), ne pri kazdem volani - a v NOVE session znovu.
+Start-Case 'CR-P10: audit odmitnuteho klice jednou za session'
+$hcDir = Join-Path $script:TempDir ('cr-p10-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+[void][System.IO.Directory]::CreateDirectory((Join-Path $hcDir '.claude'))
+[System.IO.File]::WriteAllText((Join-Path $hcDir '.claude/sinogard-hooks.json'), '{"gate":{"foo":1}}', ([System.Text.UTF8Encoding]::new($false)))
+$hcData = Join-Path $script:TempDir ('cr-p10-data-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+function Get-RejectLineCount {
+    $p = Join-Path $hcData 'gate-audit.jsonl'
+    if (-not [System.IO.File]::Exists($p)) { return 0 }
+    return @([System.IO.File]::ReadAllLines($p) | Where-Object { $_ -match 'config:overrideRejected:gate\.foo' }).Count
+}
+foreach ($sid in @('sess-A', 'sess-A', 'sess-B')) {
+    $jsonHc = New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'git status'; 'session_id' = $sid }
+    [void](Invoke-Hook -Script 'gate.ps1' -InputJson $jsonHc -Environment @{ CLAUDE_PROJECT_DIR = $hcDir; CLAUDE_PLUGIN_DATA = $hcData })
+}
+Assert-Equal 2 (Get-RejectLineCount) '[CR-P10] 3 volani (A, A, B) = 2 radky odmitnuti (jednou za session)'
 
 # ================================================================================
 #  v0.1.11 - nalezy Ady N28, N33-N35, N39, N40, N49, N50
@@ -1370,8 +1393,11 @@ function Test-OpaquePolicy([string]$Name, [string]$Value, [string]$Expect) {
 Start-Case 'gate.opaque je konfigurace (a neznama hodnota je fail-closed)'
 Test-OpaquePolicy 'audit' 'audit' 'allow'
 Test-OpaquePolicy 'ask'   'ask'   'ask'
-# 🔴 Neznama hodnota NESMI znamenat audit: preklep v override by branu tise otevrel.
-Test-OpaquePolicy 'neznama' 'maybe' 'ask'
+# 🔴 Neznama hodnota NESMI branu tise otevrit. Do 0.2.0 ji Resolve-OpaqueDecision cetl jako
+# `ask`; od 0.3.0 (H-c, Z117-Q21 = A) se klic `gate.opaque` s neznamou hodnotou ODMITNE cely a plati
+# vychozi `opaque` - pro `variable` je vychozi `audit`, tedy ticho. Neotevira to nic, co vychozi
+# konfigurace neotevira; fail-closed nad neznamou hodnotou v kodu zustava (kontrola `unknown`).
+Test-OpaquePolicy 'neznama (H-c: klic odmitnut, plati vychozi)' 'maybe' 'allow'
 
 # -------------------------- JEDNOUROVNOVE slucovani top-level objektu (K2-1) ---
 #
@@ -1420,7 +1446,26 @@ Test-PartialGateOverride 'invoked drzi'       'PowerShell' '& $cmd' 'ask' $ovVar
 #    Bez tohohle radku by se nedalo poznat, jestli se neslucuje i dovnitr poli, a
 #    duvod melkeho slucovani (polozku seznamu jde jen pridat, nikdy odebrat) by padl.
 Start-Case 'K2-1: pole se nahrazuje CELE (slouceni je jednourovnove, ne hluboke)'
-Test-PartialGateOverride 'prazdne denyPatterns' 'Bash' 'git reset --hard' 'allow' '{"gate":{"denyPatterns":[]}}'
+# TASK-117 H-c (Z117-Q21 = A, Tom 2026-10-08): do 0.2.0 tu stalo ocekavani `allow` - prazdne
+# `denyPatterns` PLATILO a `git reset --hard` prestal byt deny. To je prave uvolneni, ktere H-c
+# odmita: kratsi pole nez vychozi se zahodi a plati vychozi hodnota. "Pole se nahrazuje cele"
+# dal dokladaji radky nize (zprisneni) a task117-gate.json skupina 12.
+Test-PartialGateOverride 'prazdne denyPatterns odmitnuto (H-c)' 'Bash' 'git reset --hard' 'deny' '{"gate":{"denyPatterns":[]}}'
+# Pole se porad nahrazuje CELE: zprisnujici pole (vychozi + jedna polozka) plati i se svou polozkou.
+$ovDenyPlus = '{"gate":{"denyPatterns":[' +
+    '{"id":"git-reset-hard","pattern":"^git\\s+reset\\b.*\\s--hard(\\s|$)","shape":"git reset --hard"},' +
+    '{"_pozn_checkout_restore":"x"},' +
+    '{"id":"git-branch-delete","pattern":"^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)","shape":"git branch -d/-D"},' +
+    '{"id":"git-update-ref-del","pattern":"^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)","shape":"git update-ref -d"},' +
+    '{"id":"git-push-delete","pattern":"^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)","shape":"git push --delete"},' +
+    '{"id":"git-stash-destroy","pattern":"^git\\s+stash\\s+(drop|clear)(\\s|$)","shape":"git stash drop/clear"},' +
+    '{"id":"git-filter-branch","pattern":"^git\\s+filter-branch(\\s|$)","shape":"git filter-branch"},' +
+    '{"id":"git-filter-repo","pattern":"^git\\s+filter-repo(\\s|$)","shape":"git filter-repo"},' +
+    '{"id":"git-reflog-expire","pattern":"^git\\s+reflog\\s+expire(\\s|$)","shape":"git reflog expire"},' +
+    '{"id":"git-gc-prune","pattern":"^git\\s+gc\\b.*\\s--prune(\\s|=|$)","shape":"git gc --prune"},' +
+    '{"id":"git-replace","pattern":"^git\\s+replace\\b","shape":"git replace"}]}}'
+Test-PartialGateOverride 'zprisnujici denyPatterns plati (H-c)' 'Bash' 'git replace HEAD x' 'deny' $ovDenyPlus
+Test-PartialGateOverride 'zprisnujici denyPatterns drzi vychozi' 'Bash' 'git reset --hard' 'deny' $ovDenyPlus
 # kontrolni skupina k temuz override: co nezije v `denyPatterns`, drzi dal
 Test-PartialGateOverride 'kod drzi i pri prazdnem poli' 'Bash' 'rm -rf src' 'deny' '{"gate":{"denyPatterns":[]}}'
 
@@ -1798,6 +1843,11 @@ if (-not (Test-CollectOnly)) {
         Set-HookCeilingMs $ceiling
     }
 }
+
+# --- TASK-117 (0.3.0): H-f dbDestroyLocal (13), H-a invoked (11), H-b audit ask/deny (8).
+#     Pripady v tests/fixtures/task117-gate.json; vycet a mutanti v repu GSD docs/logs/mutants/task-117/.
+Start-Case 'TASK-117 (fixtures/task117-gate.json)'
+Invoke-Task117Rows 'gate'
 
 Write-CollectedCases
 Assert-TimingBudget

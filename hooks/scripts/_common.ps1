@@ -99,6 +99,47 @@ function Get-HookConfig([string]$PluginRoot, [string]$ProjectDir) {
     # Hloub nez o jednu uroven se vedome nejde (TASK-106 bod 10; N42: rozhodnuto
     # v 0.1.11, ne odlozeno do v0.2).
     $override = ConvertFrom-Json (Read-Utf8File $overridePath)
+
+    # TASK-117 H-c (0.3.0, Z117-Q21 = A, Tom 2026-10-08): do 0.2.0 se OBSAH prepisu
+    # nekontroloval vubec - `{"gate":{"denyPatterns":[]}}` vypnulo `git reset --hard`
+    # a `localDbHosts` s `db.firma.cz` udelalo ze vzdaleneho hostitele "lokalni" (deny ->
+    # ask, sonda F21). Pravidlo: prepis smi branu jen ZPRISNIT, s pojmenovanymi vyjimkami.
+    # Mnozina pravidel se cte z VYCHOZI konfigurace PRED sloucenim - prepis ji sam zmenit
+    # nemuze (vstup bezpecnostni brany nikdy hodnota, kterou si jeji adresat prepise).
+    # Rezim selhani: odmitne se JEN vadny klic (spadne na vychozi hodnotu), zbytek prepisu
+    # plati - zahodit cely prepis by tise zrusilo i jeho zprisneni, zakazat vse by zamklo
+    # i session, ktera ma prepis opravit. Odmitnute klice nese $script:OverrideRejected
+    # (jen jmena, nikdy hodnoty) - cte je kanarek a audit `config:overrideRejected`.
+    $policy = Get-Field $config '_overridePolicy'
+    $script:OverrideRejected = New-Object System.Collections.ArrayList
+    foreach ($prop in @($override.PSObject.Properties)) {
+        if ($prop.Name.StartsWith('_')) { continue }
+        $rules = Get-Field $policy $prop.Name
+        if ($null -eq $rules) {
+            if (@(Get-Field $policy 'acceptTopLevel' @()) -notcontains $prop.Name) {
+                [void]$script:OverrideRejected.Add($prop.Name)
+                $override.PSObject.Properties.Remove($prop.Name)
+            }
+            continue
+        }
+        $value = $prop.Value
+        if (-not (Test-MergeableObject $value)) {
+            [void]$script:OverrideRejected.Add($prop.Name)
+            $override.PSObject.Properties.Remove($prop.Name)
+            continue
+        }
+        $defaultsSection = Get-Field $config $prop.Name
+        foreach ($inner in @($value.PSObject.Properties)) {
+            if ($inner.Name.StartsWith('_')) { continue }
+            $rule = [string](Get-Field $rules $inner.Name '')
+            $ok = Test-OverrideValue $rule $inner.Value (Get-Field $defaultsSection $inner.Name)
+            if (-not $ok) {
+                [void]$script:OverrideRejected.Add($prop.Name + '.' + $inner.Name)
+                $value.PSObject.Properties.Remove($inner.Name)
+            }
+        }
+    }
+
     foreach ($prop in $override.PSObject.Properties) {
         $current = $null
         if ($config.PSObject.Properties[$prop.Name]) {
@@ -120,6 +161,117 @@ function Get-HookConfig([string]$PluginRoot, [string]$ProjectDir) {
         $config | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $value
     }
     return $config
+}
+
+$script:OverrideRejected = New-Object System.Collections.ArrayList
+
+# CR-P9 (/code-review): jedna definice pro H-c, H-f i rozhodnuti o vzdalenosti.
+$script:LocalDbInstancePattern = '^\(localdb\)\\[A-Za-z0-9_][A-Za-z0-9_ .\-]*$'
+$script:DbServerKeys = @('host', 'server', 'data source', 'address', 'addr', 'network address')
+
+# Polozka seznamu jako ordinalni klic porovnani. Objekt (radek `denyPatterns`) se porovnava
+# kompaktnim JSON; objekt, ktery nese jen komentarove klice (`_...`), neni pravidlo a do
+# porovnani nevstupuje.
+function Get-ListItemKey($Item) {
+    if ($Item -is [System.Management.Automation.PSCustomObject]) {
+        $real = @($Item.PSObject.Properties | Where-Object { -not $_.Name.StartsWith('_') })
+        if ($real.Count -eq 0) { return $null }
+        # CR-P6 (/code-review): pravidlo (`denyPatterns`, `askPatterns`) urcuje jeho id a VZOR - poradi klicu ani
+        # lidsky text `shape` ho nemeni; porovnani celeho JSON by kvuli nim odmitlo zprisnujici prepis.
+        if ($Item.PSObject.Properties['pattern']) { return ([string](Get-Field $Item 'id' '') + [char]1 + [string]$Item.pattern) }
+        return ($Item | ConvertTo-Json -Depth 6 -Compress)
+    }
+    return [string]$Item
+}
+
+function Test-ListRelation($Value, $Default, [string]$Relation) {
+    if ($null -eq $Value -or -not ($Value -is [System.Array])) { return $false }
+    $have = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($v in $Value) { $k = Get-ListItemKey $v; if ($null -ne $k) { [void]$have.Add($k) } }
+    $base = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($d in @($Default)) { $k = Get-ListItemKey $d; if ($null -ne $k) { [void]$base.Add($k) } }
+    if ($Relation -eq 'superset') { foreach ($k in $base) { if (-not $have.Contains($k)) { return $false } }; return $true }
+    foreach ($k in $have) { if (-not $base.Contains($k)) { return $false } }
+    return $true
+}
+
+# TASK-117 H-f (Z117-Q18 = A, Tom 2026-10-08): MISTNI server je PEVNA mnozina v kodu, ne
+# hodnota, kterou si projekt prepise - `gate.localDbHosts` i `gate.dbDestroyLocal.hosts`
+# z ni smi jen VYBIRAT (H-c), a cesta `allow` rozhoduje "mistni" jen podle ni (M17, T117-N12).
+# LocalDB je funkce SQL Server Express pro vyvojare, bezi pod uzivatelem (MS Learn, overeno
+# Amber 2026-10-08) - je mistni. Prefixy protokolu (`tcp:`, `np:`, `lpc:`) a pojmenovana roura
+# nejsou v mnozine: jmeno roury se meni s kazdym startem instance a `tcp:` muze mirit kamkoli.
+function Test-FixedLocalDbHost([string]$HostName) {
+    $h = ([string]$HostName).Trim()
+    if ($h -eq '') { return $false }
+    if ($h -match $script:LocalDbInstancePattern) { return $true }
+    if ($h -match '^(localhost|127\.0\.0\.1)(,[0-9]{1,5})?$') { return $true }
+    if ($h -match '^(localhost|127\.0\.0\.1|::1|\(local\)|\.)(\\[A-Za-z0-9_$\-]+)?$') { return $true }
+    return $false
+}
+
+# Pravidlo H-c pro jeden klic prepisu. Neznamy klic (prazdne pravidlo) = odmitnout: preklep
+# nebo budouci povrch se nesmi tise uplatnit.
+function Test-OverrideValue([string]$Rule, $Value, $Default) {
+    switch ($Rule) {
+        'accept'   { return $true }
+        'superset' { return (Test-ListRelation $Value $Default 'superset') }
+        'subset'   { return (Test-ListRelation $Value $Default 'subset') }
+        'localHosts' {
+            if ($null -eq $Value -or -not ($Value -is [System.Array])) { return $false }
+            foreach ($h in $Value) { if (-not (Test-FixedLocalDbHost ([string]$h))) { return $false } }
+            return $true
+        }
+        'opaque' {
+            if (-not (Test-MergeableObject $Value)) { return $false }
+            $known = @('variable', 'interpreter', 'heredocUnterminated', 'depth', 'invoked', 'encoded')
+            foreach ($p in $Value.PSObject.Properties) {
+                if ($p.Name.StartsWith('_')) { continue }
+                if ($known -cnotcontains $p.Name) { return $false }
+                $v = [string]$p.Value
+                # `encoded` = umyslne zakryti obsahu (`-EncodedCommand`), ne selhani parseru (A117-O4).
+                if ($p.Name -eq 'encoded') { if ($v -cne 'ask') { return $false }; continue }
+                if ($v -cne 'audit' -and $v -cne 'ask') { return $false }
+            }
+            return $true
+        }
+        'envFile' {
+            if (-not (Test-MergeableObject $Value)) { return $false }
+            foreach ($p in $Value.PSObject.Properties) {
+                if ($p.Name.StartsWith('_')) { continue }
+                if (@('denyNames', 'allowNames', 'otherPolicy') -cnotcontains $p.Name) { return $false }
+            }
+            # Objekt se slucovanim nahrazuje CELY - chybejici `denyNames` = prazdny seznam = uvolneni.
+            if (-not (Test-ListRelation (Get-Field $Value 'denyNames' @()) (Get-Field $Default 'denyNames' @()) 'superset')) { return $false }
+            $allow = Get-Field $Value 'allowNames' $null
+            if ($null -ne $allow -and -not (Test-ListRelation $allow (Get-Field $Default 'allowNames' @()) 'subset')) { return $false }
+            $other = Get-Field $Value 'otherPolicy' $null
+            if ($null -ne $other -and [string]$other -cne [string](Get-Field $Default 'otherPolicy' '')) { return $false }
+            return $true
+        }
+        'dbDestroyLocal' {
+            if (-not (Test-MergeableObject $Value)) { return $false }
+            foreach ($p in $Value.PSObject.Properties) {
+                if ($p.Name.StartsWith('_')) { continue }
+                if (@('decision', 'databases', 'hosts') -cnotcontains $p.Name) { return $false }
+            }
+            # T117-N14: chybejici `decision` NIKDY allow - objekt se nahrazuje cely, takze by
+            # jinak rozhodl vychozi kod; odmitnuti vrati vychozi `ask` explicitne.
+            $decision = Get-Field $Value 'decision' $null
+            if ($null -eq $decision -or @('ask', 'allow', 'deny') -cnotcontains [string]$decision) { return $false }
+            $dbs = Get-Field $Value 'databases' @()
+            if (-not ($dbs -is [System.Array]) -and $null -ne $dbs) { $dbs = @($dbs) }
+            foreach ($d in @($dbs)) {
+                $s = [string]$d
+                # Vzor jen ze zastupnych znaku (`*`) by povolil kazdou databazi.
+                if ($s -notmatch '^[A-Za-z0-9_*?\-]+$' -or $s -notmatch '[A-Za-z0-9_\-]') { return $false }
+            }
+            $hosts = Get-Field $Value 'hosts' @()
+            foreach ($h in @($hosts)) { if (-not (Test-FixedLocalDbHost ([string]$h))) { return $false } }
+            return $true
+        }
+    }
+    return $false
 }
 
 # Objekt z ConvertFrom-Json je PSCustomObject. Pole ani skalar se neslucuji - pole by
@@ -177,6 +329,12 @@ function ConvertTo-NormalPath([string]$Path) {
     $p = $Path.Trim()
     $p = $p.Trim('"').Trim("'")
     $p = $p -replace '\\', '/'
+    # Z117-Q26 = A (A117-N6): prefix Win32 cest `\\?\` / `\\.\` (a `\\?\UNC\server\share`) je jen zpusob zapisu - do 0.3.0
+    # zustal `?` v ceste, brala se jako glob a `\\?\...\.claude\settings.json` zapis mlcel, `\\?\...\.env` cteni bylo jen ask.
+    $p = [regex]::Replace($p, '^//[?.]/unc/', '//', 'IgnoreCase')
+    $p = [regex]::Replace($p, '^//[?.]/', '')
+    # A117-N19: NT prefix objektu `\??\C:\...` tataz trida.
+    $p = [regex]::Replace($p, '^/\?\?/', '')
     $p = [regex]::Replace($p, '%([A-Za-z_][A-Za-z0-9_]*)%', {
         param($m)
         $v = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
@@ -658,6 +816,9 @@ function Split-Arguments([string]$Command) {
 # kazde pravidlo preskocilo jako prepinac a HODNOTA by zmizela i s cestou.
 # Rozpad na jmeno a hodnotu tuhle diru zavira. (Nalez councilu Metis, 2026-09-05.)
 # Hodnota `$true`/`$false` se zahazuje - je to argument prepinace, ne cesta.
+# !! POZOR (N-H10, TASK-117): funkce vraci `,@(...)`, takze na volajicim miste se vysledek
+# do `@( )` NEBALI - `@(Expand-ColonParameter $x)` zabali pole JESTE JEDNOU, Count je 1
+# a prvni "token" je cele argv. Tataz past jako u Split-UnquotedCore (viz poznamka tam).
 function Expand-ColonParameter($Tokens) {
     $out = New-Object System.Collections.ArrayList
     foreach ($t in $Tokens) {
@@ -725,6 +886,31 @@ function Test-ExpressionStatement([string]$Text) {
 
 # ------------------------------------------------------------- audit (T-10 A) ---
 #
+# TASK-117 H-b (0.3.0, Z117-Q8 = B): radek auditu nese i kazde `ask` a `deny` - s ID tvaru
+# (`gate:git-reset-hard`, `secrets:secretFile`), nikdy s textem prikazu, cestou ani jmenem
+# promenne. Odmitnute klice prepisu (H-c) se zapisuji jednou za session (CR-P10; znacka bez zamku -
+# soubezne volani gate + secrets radek muze zdvojit a dve soubezne session nad tymz CLAUDE_PLUGIN_DATA si znacku
+# prepisuji, takze se radek opakuje - nikdy se neztrati):
+# `config:overrideRejected:<klic>`, rozhodnuti `reject`.
+function Write-OverrideRejectedAudit([string]$ToolName, $Config, [string]$SessionId = '') {
+    if (@($script:OverrideRejected).Count -eq 0) { return }
+    # CR-P10 (/code-review): radek pri KAZDEM volani obou hooku by audit zaplavil (2 radky na tool call) a prehlusil
+    # kanarek. Zapisuje se proto jednou za session a sadu klicu: znacka `override-rejected.json` vedle auditu.
+    try {
+        $dir = $env:CLAUDE_PLUGIN_DATA
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and $SessionId -ne '') {
+            $mark = Join-SafePath $dir 'override-rejected.json'
+            $sig = $SessionId + '|' + (@($script:OverrideRejected) -join ',')
+            if ($null -ne $mark -and (Test-SafePath $mark) -and ([System.IO.File]::ReadAllText($mark)).Trim() -eq $sig) { return }
+            [void][System.IO.Directory]::CreateDirectory($dir)
+            if ($null -ne $mark) { [System.IO.File]::WriteAllText($mark, $sig) }
+        }
+    } catch { }
+    foreach ($k in @($script:OverrideRejected)) {
+        Write-GateAudit $ToolName ('config:overrideRejected:' + [string]$k) 'reject' $Config
+    }
+}
+
 # Do 0.1.11 zila funkce v gate.ps1; od 0.2.0 je sdilena - secrets.ps1 zapisuje audit u tridy
 # chranene jmenem (TASK-106 bod 11, vyrok 7 Amber 2026-09-12). Cte $script:PermissionMode a
 # $script:ToolName ze scope volajiciho skriptu - oba je nastavuji PRED prvnim rozhodnutim.
@@ -742,6 +928,10 @@ function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision,
         # Mapuje se TADY, ne na volajicich mistech, aby na to neslo u jednoho zapomenout.
         if ($Decision -eq 'allow' -and $script:PermissionMode -eq 'bypassPermissions') {
             $Decision = 'allow-bypass'
+        }
+        # TASK-117 H-b: `ask` se v bypassu vydava jako `deny` (T36-Q7) - radek rekne obe veci.
+        if ($Decision -eq 'ask' -and $script:PermissionMode -eq 'bypassPermissions') {
+            $Decision = 'ask-bypass'
         }
         $dir = $env:CLAUDE_PLUGIN_DATA
         if ([string]::IsNullOrWhiteSpace($dir)) { return }
@@ -763,6 +953,157 @@ function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision,
     } catch {
         # Evidence je fail-OPEN: kdyz se zapsat nepodari, brana se tim nesmi zastavit.
     }
+}
+
+# ------------------------------------------------- obaly prikazu (sdilene, 0.3.0) ---
+# Z117-Q27 = B (Tom 2026-10-09, A117-N16): do 0.3.0 zily v gate.ps1 a hook secrets obal `bash -c 'cat .env'`
+# nerozbaloval - jednim krokem obesel kazde cteni tajemstvi. Tabulka obalu, pruchod a rozpoznani tela obalu, ktery
+# spousti TEXT jinym shellem, maji proto JEDINY zdroj pravdy tady a volaji je oba hooky.
+
+# Nalez Amber E4: JEDEN spolecny seznam prepinacu s hodnotou byl spatne. `-n` bere
+# hodnotu u `nice`, ale NE u `sudo` (tam je to "neinteraktivne"), takze
+# `sudo -n psql <<SQL` preskocilo rovnou psql a destruktivni operace propadla.
+# Tabulka je proto podle OBALU, ne globalni.
+#
+# Nalez Amber G2: tabulka existovala DVAKRAT - tady a jeste jednou, hur, primo ve
+# vetvich Get-CommandLeaf. Oprava E4 dosla jen do jedne kopie, takze
+# `sudo -u root rm -rf /srv` dal davalo argv[0] = `-u` a propadalo na allow.
+# Tabulka i pruchod jsou proto od kola 4 na JEDINEM miste (Get-WrapperTail)
+# a obe volajici strany se pisou nad nim.
+$script:WrapperValueFlags = @{
+    'sudo'    = '^(-u|-g|-C|-p|-r|-t|-T|-U|--user|--group)$'
+    'doas'    = '^(-u|-C)$'
+    'nice'    = '^(-n|--adjustment)$'
+    # `-S` je tu ZAMERNE ne: jeho hodnota neni parametr, ale prikazova radka.
+    # Preskocit ji znamenalo propustit `env -S "rm -rf src"` (nalez Metis 3).
+    'env'     = '^(-u|-C|--unset|--chdir)$'
+    'timeout' = '^(-s|--signal|-k|--kill-after)$'
+    # GNU /usr/bin/time bere prepinace s hodnotou; `time -o log rm -rf src` davalo
+    # jako prikaz `log` (nalez Metis 3).
+    'time'    = '^(-o|-f|--output|--format)$'
+    'docker'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
+    'podman'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
+    'stdbuf'  = '^(-i|-o|-e|--input|--output|--error)$'
+}
+$script:PlainWrappers = '^(nohup|command|builtin|exec)$'
+$script:ContainerWrappers = '^(docker|podman)$'
+
+# Odloupne z ARGV vsechny obaly a vrati zbytek - tedy skutecny prikaz vcetne jmena.
+# Kdyz zadny obal nesedi, vraci vstup nedotceny.
+function Get-WrapperTail($Argv, [int]$Depth = 0) {
+    $arr = @($Argv)
+    $i = 0
+    $guard = 0
+    while ($i -lt $arr.Count -and $guard -lt 64) {
+        $guard++
+        $tok = [string]$arr[$i]
+
+        # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
+        if ($tok -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
+        if ($tok -match '^-') { $i++; continue }   # osamely prepinac bez znameho obalu
+
+        $name = Get-ExecutableName $tok
+        if ($name -match $script:PlainWrappers) { $i++; continue }
+        if (-not $script:WrapperValueFlags.ContainsKey($name)) { break }
+
+        $flagPattern = [string]$script:WrapperValueFlags[$name]
+        $i++
+        if ($name -match $script:ContainerWrappers) {
+            if ($i -lt $arr.Count -and $arr[$i] -match '^(exec|run)$') { $i++ }
+        }
+        while ($i -lt $arr.Count -and $arr[$i] -match '^-') {
+            $t = [string]$arr[$i]
+            # Nalez Metis 3: `env -S "rm -rf src"` (a `--split-string`) nese v hodnote
+            # celou PRIKAZOVOU RADKU, ne parametr. Preskocit ji znamenalo, ze prikaz
+            # zmizel a zbyl obal bez cile -> allow. Hodnota se proto rozlozi na tokeny
+            # a pokracuje se v ni.
+            if ($name -eq 'env' -and $Depth -lt 4) {
+                $split = $null
+                $skip = 0
+                if (($t -eq '-S' -or $t -eq '--split-string') -and ($i + 1) -lt $arr.Count) {
+                    $split = [string]$arr[$i + 1]; $skip = 2
+                } elseif ($t -match '^(-S|--split-string)=(.*)$') {
+                    $split = $Matches[2]; $skip = 1
+                }
+                if ($null -ne $split) {
+                    $tail = @(Split-Arguments $split)
+                    if (($i + $skip) -lt $arr.Count) { $tail += @($arr[($i + $skip)..($arr.Count - 1)]) }
+                    return (Get-WrapperTail $tail ($Depth + 1))
+                }
+            }
+            if ($t -cmatch $flagPattern) { $i += 2 } else { $i++ }
+        }
+        if ($name -match $script:ContainerWrappers -and $i -lt $arr.Count) {
+            $i++   # jmeno kontejneru nebo obrazu
+        }
+        # `timeout 30 psql ...` - po prepinacich stoji CISLO, ktere se preskakuje.
+        if ($name -eq 'timeout' -and $i -lt $arr.Count -and $arr[$i] -match '^\d+(\.\d+)?[smhd]?$') { $i++ }
+    }
+    if ($i -ge $arr.Count) { return ,@() }
+    return ,@($arr[$i..($arr.Count - 1)])
+}
+
+# Je token zkratkou daneho parametru PowerShellu? Prijima se kazda jednoznacna
+# predpona, takze `-c`, `-co`, `-com` ... `-command` (nalez Metis 4, kolo 2).
+function Test-ParameterPrefix([string]$Token, [string]$Full) {
+    if ([string]::IsNullOrEmpty($Token)) { return $false }
+    if (-not $Token.StartsWith('-')) { return $false }
+    $body = $Token.Substring(1).ToLowerInvariant()
+    if ($body -eq '') { return $false }
+    return $Full.StartsWith($body)
+}
+
+# -EncodedCommand ma navic ZKRATKY, ktere predponou nejsou: `-ec` (a `-e`). `ec` neni
+# predpona slova `encodedcommand` (to zacina na `en`), takze samotny predponovy test
+# ho minul a `pwsh -ec <base64>` propadlo na allow (nalez Amber G5).
+function Test-EncodedCommandFlag([string]$Token) {
+    if ([string]::IsNullOrEmpty($Token)) { return $false }
+    if ($Token.ToLowerInvariant() -eq '-ec') { return $true }
+    return (Test-ParameterPrefix $Token 'encodedcommand')
+}
+
+# Telo obalu, ktery spousti TEXT jinym shellem: `bash|sh|zsh|dash|ksh -c '...'` (i slouceny `-lc`), `pwsh|powershell
+# -Command ...` (kazda zkratka), `-EncodedCommand` (Kind = 'encoded', Text = hodnota), `cmd /c|/k ...`.
+# $null = neni obal, skript souborem (`bash x.sh`, `pwsh -File x.ps1` - README omezeni 1) nebo obal bez tela.
+# ShellTool rika, cimi pravidly se telo cte ('' = tyz shell jako hostitel, cmd).
+function Get-ShellWrapperBody([string]$Exe, $Rest) {
+    $r = @($Rest)
+    if ($Exe -match '^(bash|sh|zsh|dash|ksh)$') {
+        # Nalez Metis 4: `bash -lc '...'` - shell prijima slouceny kratky prepinac.
+        for ($i = 0; $i -lt $r.Count; $i++) {
+            if ([string]$r[$i] -cmatch '^-[a-z]*c$') {
+                if (($i + 1) -ge $r.Count) { return $null }
+                return @{ Kind = 'body'; Text = [string]$r[$i + 1]; ShellTool = 'Bash' }
+            }
+        }
+        return $null
+    }
+    if ($Exe -match '^(pwsh|powershell)$') {
+        for ($i = 0; $i -lt $r.Count; $i++) {
+            $t = ([string]$r[$i]).ToLowerInvariant()
+            if (Test-EncodedCommandFlag $t) {
+                $v = if (($i + 1) -lt $r.Count) { [string]$r[$i + 1] } else { '' }
+                return @{ Kind = 'encoded'; Text = $v; ShellTool = 'PowerShell' }
+            }
+            if (Test-ParameterPrefix $t 'file') { return $null }
+            if (Test-ParameterPrefix $t 'command') {
+                if (($i + 1) -ge $r.Count) { return $null }
+                return @{ Kind = 'body'; Text = (Join-CommandString ($r | Select-Object -Skip ($i + 1))); ShellTool = 'PowerShell' }
+            }
+        }
+        return $null
+    }
+    if ($Exe -eq 'cmd') {
+        for ($i = 0; $i -lt $r.Count; $i++) {
+            $t = ([string]$r[$i]).ToLowerInvariant()
+            if ($t -eq '/c' -or $t -eq '/k') {
+                if (($i + 1) -ge $r.Count) { return $null }
+                return @{ Kind = 'body'; Text = (Join-CommandString ($r | Select-Object -Skip ($i + 1))); ShellTool = '' }
+            }
+        }
+        return $null
+    }
+    return $null
 }
 
 # ------------------------------------------------------ uvod heredocu (sdileny) ---

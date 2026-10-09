@@ -88,88 +88,7 @@ $script:NetDeleteTargetPattern = $script:NetDeleteCallHeads + '\(\s*[''"]([^''"]
 # nectlo jako SQL a destruktivni operace propadla na allow. Rozbaleni obalu uz umi
 # Get-CommandLeaf, takze se pouzije ono a vezme se posledni list.
 
-# Nalez Amber E4: JEDEN spolecny seznam prepinacu s hodnotou byl spatne. `-n` bere
-# hodnotu u `nice`, ale NE u `sudo` (tam je to "neinteraktivne"), takze
-# `sudo -n psql <<SQL` preskocilo rovnou psql a destruktivni operace propadla.
-# Tabulka je proto podle OBALU, ne globalni.
-#
-# Nalez Amber G2: tabulka existovala DVAKRAT - tady a jeste jednou, hur, primo ve
-# vetvich Get-CommandLeaf. Oprava E4 dosla jen do jedne kopie, takze
-# `sudo -u root rm -rf /srv` dal davalo argv[0] = `-u` a propadalo na allow.
-# Tabulka i pruchod jsou proto od kola 4 na JEDINEM miste (Get-WrapperTail)
-# a obe volajici strany se pisou nad nim.
-$script:WrapperValueFlags = @{
-    'sudo'    = '^(-u|-g|-C|-p|-r|-t|-T|-U|--user|--group)$'
-    'doas'    = '^(-u|-C)$'
-    'nice'    = '^(-n|--adjustment)$'
-    # `-S` je tu ZAMERNE ne: jeho hodnota neni parametr, ale prikazova radka.
-    # Preskocit ji znamenalo propustit `env -S "rm -rf src"` (nalez Metis 3).
-    'env'     = '^(-u|-C|--unset|--chdir)$'
-    'timeout' = '^(-s|--signal|-k|--kill-after)$'
-    # GNU /usr/bin/time bere prepinace s hodnotou; `time -o log rm -rf src` davalo
-    # jako prikaz `log` (nalez Metis 3).
-    'time'    = '^(-o|-f|--output|--format)$'
-    'docker'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
-    'podman'  = '^(-e|-v|-w|-u|-p|--name|--env|--user|--workdir|--volume)$'
-    'stdbuf'  = '^(-i|-o|-e|--input|--output|--error)$'
-}
-$script:PlainWrappers = '^(nohup|command|builtin|exec)$'
-$script:ContainerWrappers = '^(docker|podman)$'
-
-# Odloupne z ARGV vsechny obaly a vrati zbytek - tedy skutecny prikaz vcetne jmena.
-# Kdyz zadny obal nesedi, vraci vstup nedotceny.
-function Get-WrapperTail($Argv, [int]$Depth = 0) {
-    $arr = @($Argv)
-    $i = 0
-    $guard = 0
-    while ($i -lt $arr.Count -and $guard -lt 64) {
-        $guard++
-        $tok = [string]$arr[$i]
-
-        # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
-        if ($tok -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
-        if ($tok -match '^-') { $i++; continue }   # osamely prepinac bez znameho obalu
-
-        $name = Get-ExecutableName $tok
-        if ($name -match $script:PlainWrappers) { $i++; continue }
-        if (-not $script:WrapperValueFlags.ContainsKey($name)) { break }
-
-        $flagPattern = [string]$script:WrapperValueFlags[$name]
-        $i++
-        if ($name -match $script:ContainerWrappers) {
-            if ($i -lt $arr.Count -and $arr[$i] -match '^(exec|run)$') { $i++ }
-        }
-        while ($i -lt $arr.Count -and $arr[$i] -match '^-') {
-            $t = [string]$arr[$i]
-            # Nalez Metis 3: `env -S "rm -rf src"` (a `--split-string`) nese v hodnote
-            # celou PRIKAZOVOU RADKU, ne parametr. Preskocit ji znamenalo, ze prikaz
-            # zmizel a zbyl obal bez cile -> allow. Hodnota se proto rozlozi na tokeny
-            # a pokracuje se v ni.
-            if ($name -eq 'env' -and $Depth -lt 4) {
-                $split = $null
-                $skip = 0
-                if (($t -eq '-S' -or $t -eq '--split-string') -and ($i + 1) -lt $arr.Count) {
-                    $split = [string]$arr[$i + 1]; $skip = 2
-                } elseif ($t -match '^(-S|--split-string)=(.*)$') {
-                    $split = $Matches[2]; $skip = 1
-                }
-                if ($null -ne $split) {
-                    $tail = @(Split-Arguments $split)
-                    if (($i + $skip) -lt $arr.Count) { $tail += @($arr[($i + $skip)..($arr.Count - 1)]) }
-                    return (Get-WrapperTail $tail ($Depth + 1))
-                }
-            }
-            if ($t -cmatch $flagPattern) { $i += 2 } else { $i++ }
-        }
-        if ($name -match $script:ContainerWrappers -and $i -lt $arr.Count) {
-            $i++   # jmeno kontejneru nebo obrazu
-        }
-        # `timeout 30 psql ...` - po prepinacich stoji CISLO, ktere se preskakuje.
-        if ($name -eq 'timeout' -and $i -lt $arr.Count -and $arr[$i] -match '^\d+(\.\d+)?[smhd]?$') { $i++ }
-    }
-    if ($i -ge $arr.Count) { return ,@() }
-    return ,@($arr[$i..($arr.Count - 1)])
-}
+# Get-WrapperTail a jeho tabulka obalu ziji od 0.3.0 v _common.ps1 - sdili je secrets.ps1 (Z117-Q27, A117-N16).
 
 # Jmeno spustitelneho souboru PO rozbaleni obalu.
 #
@@ -183,24 +102,7 @@ function Get-UnwrappedExe([string]$Command) {
     return (Get-ExecutableName ([string]$tail[0]))
 }
 
-# Je token zkratkou daneho parametru PowerShellu? Prijima se kazda jednoznacna
-# predpona, takze `-c`, `-co`, `-com` ... `-command` (nalez Metis 4, kolo 2).
-function Test-ParameterPrefix([string]$Token, [string]$Full) {
-    if ([string]::IsNullOrEmpty($Token)) { return $false }
-    if (-not $Token.StartsWith('-')) { return $false }
-    $body = $Token.Substring(1).ToLowerInvariant()
-    if ($body -eq '') { return $false }
-    return $Full.StartsWith($body)
-}
-
-# -EncodedCommand ma navic ZKRATKY, ktere predponou nejsou: `-ec` (a `-e`). `ec` neni
-# predpona slova `encodedcommand` (to zacina na `en`), takze samotny predponovy test
-# ho minul a `pwsh -ec <base64>` propadlo na allow (nalez Amber G5).
-function Test-EncodedCommandFlag([string]$Token) {
-    if ([string]::IsNullOrEmpty($Token)) { return $false }
-    if ($Token.ToLowerInvariant() -eq '-ec') { return $true }
-    return (Test-ParameterPrefix $Token 'encodedcommand')
-}
+# Test-ParameterPrefix a Test-EncodedCommandFlag ziji od 0.3.0 v _common.ps1 (Z117-Q27, A117-N16).
 
 # Test-HeredocOutsideQuotes a $script:HeredocPattern ziji od 0.2.0 v _common.ps1 (sdili je secrets.ps1).
 
@@ -502,6 +404,114 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     return $out
 }
 
+# TASK-117 H-a (0.3.0, Z117-Q17 = A, Tom 2026-10-08 = varianta 1 navrhu `01-navrh-allow-list.md`
+# par. 2): `invoked` vznikal JEN tim, ze hlava byla promenna - `$m = "C:\...\mutant.ps1"; & $m`
+# se ptalo, kdezto tentyz skript volany literalne (`& "C:\...\mutant.ps1"`) mlcel uz v 0.2.0
+# (README omezeni 1). Allow-list cest by proto nepokryl nic (N-A). Hlava, jejiz KAZDA promenna
+# ma v TEMZE prikazu DRIV prirazeni LITERALEM, se nahradi tim literalem a statement se rozebere
+# znovu - presne tak, jako by ho autor napsal bez promenne. Zaroven to zavira N-B:
+# `$x = 'git'; & $x reset --hard` je rozbalene `git reset --hard` -> deny (pod zuzenim GSD bylo
+# ticho). Literal = retezec bez promenne; jedina vyjimka je `$env:` z pevne mnoziny neutajenych
+# adresaru (LOCALAPPDATA, TEMP, TMP, USERPROFILE, APPDATA, HOME). Nerozbaluje se:
+#   - promenna prirazena vic nez jednou KDEKOLI v prikazu (i v bloku, `[ref]`, `-OutVariable`,
+#     `foreach`), nebo kdyz prikaz pouziva Set-Variable / New-Variable,
+#   - prirazeni uvnitr bloku nebo podminky (jen statement nejvyssi urovne),
+#   - kdyz prikaz v temze statementu, ktery promennou nebo literal jmenuje, ZAPISUJE (TOCTOU:
+#     `Set-Content $p ...; & $p` by zmenil soubor po kontrole),
+#   - uvnitr obalu, ktery text spousti (`bash -c`, `pwsh -c`, `iex`, `Start-Process`).
+# Jen PowerShell nastroj - tvar `invoked` se ve vzorku vyskytl jen tam.
+$script:LiteralAssign = @{}
+$script:FullCommand = ''
+$script:EnvLiteralNames = '(?:LOCALAPPDATA|TEMP|TMP|USERPROFILE|APPDATA|HOME)'
+
+function Get-LiteralAssignment([string]$Command) {
+    $result = @{}
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $result }
+    # CR-P2 (/code-review): promennou meni i `Set-Item variable:x`, `(Get-Variable x).Value = ...`, `Clear-Variable`,
+    # `$ExecutionContext.SessionState.PSVariable.Set(...)` a vicenasobne prirazeni `$a, $x = ...` - kterykoli z nich
+    # v prikazu rozbaleni vypne CELE (zustava `invoked` = ask). Kolo 2: `variable:` jen jako cesta providera, ne
+    # konec spolecneho parametru `-ErrorVariable:e` / `-OutVariable:x`.
+    if ([regex]::IsMatch($Command, '(?i)\b(set-variable|new-variable|sv|nv|get-variable|gv|clear-variable|clv|remove-variable|rv)\b|(^|[^\w-])variable:|psvariable|sessionstate')) { return $result }
+    if ([regex]::IsMatch($Command, '(\$\{?[\w:]+\}?\s*,\s*)+\$\{?[\w:]+\}?\s*=(?!=)')) { return $result }
+    $counts = @{}
+    $assignPatterns = @(
+        '\$\{?(?:script:|global:|local:|private:)?([A-Za-z_][A-Za-z0-9_]*)\}?\s*(?:[+\-*/%]|\?\?)?=(?!=)',
+        '\[ref\]\s*\$([A-Za-z_][A-Za-z0-9_]*)',
+        '(?i)-(?:outvariable|ov|pipelinevariable|pv|errorvariable|ev|warningvariable|wv|informationvariable|iv)\s*[:\s]\s*[''"]?\+?([A-Za-z_][A-Za-z0-9_]*)',
+        '(?i)foreach\s*\(\s*\$([A-Za-z_][A-Za-z0-9_]*)\s+in\b'
+    )
+    foreach ($p in $assignPatterns) {
+        foreach ($m in [regex]::Matches($Command, $p)) {
+            $k = $m.Groups[1].Value.ToLowerInvariant()
+            $counts[$k] = 1 + [int]$(if ($counts.ContainsKey($k)) { $counts[$k] } else { 0 })
+        }
+    }
+    $literalRx = '^\s*\$(?:script:|global:|local:)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"((?:[^"`$]|\$env:' + $script:EnvLiteralNames + '(?![A-Za-z0-9_]))*)"|''([^'']*)'')\s*$'
+    $writeRx = '(?i)(^|[\s;|&({])(set-content|sc|add-content|ac|out-file|tee-object|tee|copy-item|cp|copy|cpi|move-item|mv|move|mi|new-item|ni|rename-item|ren|rni|remove-item|ri|del|rm)(\s|$)|\[(system\.)?io\.file\]::(write|append|copy|move|create|open|replace|delete)|>'
+    $statements = @(Split-Statement $Command)
+    $pos = 0
+    foreach ($st in $statements) {
+        $at = $Command.IndexOf($st, $pos)
+        if ($at -ge 0) { $pos = $at + $st.Length }
+        $m = [regex]::Match($st, $literalRx)
+        if (-not $m.Success) { continue }
+        $name = $m.Groups[1].Value
+        if ([int]$counts[$name.ToLowerInvariant()] -ne 1) { continue }
+        $value = if ($m.Groups[2].Success) { $m.Groups[2].Value } else { $m.Groups[3].Value }
+        $result[$name.ToLowerInvariant()] = @{ Value = $value; End = $pos; Start = $at }
+    }
+    # TOCTOU: statement, ktery ZAPISUJE a jmenuje promennou nebo jeji literal, rozbaleni rusi.
+    foreach ($st in $statements) {
+        $clean = [regex]::Replace($st, '[0-9*]?>{1,2}\s*(?:&[0-9]|\$null|nul)\b', ' ')
+        # Zapis se hleda MIMO retezce - `-Expect 'NFD->lower'` ani `-Old '... -> ...'` nic nezapisuji
+        # (zmereno nad populaci: 4 z 16 zbylych dotazu byly `->` v textu argumentu).
+        $unquoted = [regex]::Replace($clean, '"(?:[^"`]|`.)*"|''[^'']*''', '""')
+        if (-not [regex]::IsMatch($unquoted, $writeRx)) { continue }
+        foreach ($k in @($result.Keys)) {
+            $v = [string]$result[$k].Value
+            $leaf = ($v -replace '\\', '/').Split('/')[-1]
+            if ([regex]::IsMatch($clean, ('(?i)\$\{?' + [regex]::Escape($k) + '(?![A-Za-z0-9_])')) -or
+                ($v -ne '' -and $clean.IndexOf($v, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                ($leaf -ne '' -and $clean.IndexOf($leaf, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                $result.Remove($k)
+            }
+        }
+    }
+    return $result
+}
+
+# Rozbali promenne v hlave (`$m`, `${m}`, `"$sp\x.ps1"`) literalem; $null = neslo.
+function Expand-LiteralHead([string]$Head, [string]$Raw) {
+    if ($Head -match '\$\(' -or $Head -match '%') { return $null }
+    $refs = [regex]::Matches($Head, '\$\{?([A-Za-z_][A-Za-z0-9_]*)(:[A-Za-z_])?\}?')
+    if ($refs.Count -eq 0) { return $null }
+    # CR-P7 (/code-review): rozhoduje PRVNI vyskyt pouziti - stejny text pred prirazenim i po nem by s LastIndexOf
+    # rozbalil i pouziti, ktere bezi s jinou hodnotou (`. .\init.ps1; & $m; $m = '...'; & $m`).
+    # Vyskyt textu pouziti, ktery lezi uvnitr prirazeni nektere promenne hlavy (`$m = ...` obsahuje `$m`), pouzitim neni.
+    $use = -1
+    $from = 0
+    while ($true) {
+        $p = $script:FullCommand.IndexOf($Raw, $from)
+        if ($p -lt 0) { break }
+        $inside = $false
+        foreach ($a0 in $script:LiteralAssign.Values) { if ($p -ge [int]$a0.Start -and $p -lt [int]$a0.End) { $inside = $true; break } }
+        if (-not $inside) { $use = $p; break }
+        $from = $p + 1
+    }
+    $out = $Head
+    foreach ($r in $refs) {
+        if ($r.Groups[2].Success) { return $null }   # `$env:X` primo v hlave - neprirazena promenna
+        $k = $r.Groups[1].Value.ToLowerInvariant()
+        if (-not $script:LiteralAssign.ContainsKey($k)) { return $null }
+        $a = $script:LiteralAssign[$k]
+        if ($use -lt 0 -or [int]$a.End -gt $use) { return $null }
+        $lit = [regex]::Replace([string]$a.Value, ('(?i)\$env:(' + $script:EnvLiteralNames + ')'), 'ENV_$1')
+        $out = [regex]::Replace($out, ([regex]::Escape($r.Value) + '(?![A-Za-z0-9_])'), $lit.Replace('$', '$$'))
+    }
+    if ($out -match '\$') { return $null }
+    return $out
+}
+
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.
 # Obal s literalem -> rozebrat vnitrek. Obal s promennou -> 'opaque' (= ask).
 function Get-CommandLeaf([string]$Sub, [int]$Depth) {
@@ -513,6 +523,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # `&` je operator SPUSTENI. Rozdil je podstatny az u hole promenne: `$sql | psql`
     # posila HODNOTU, kdezto `& $cmd` obsah promenne SPUSTI. Priznak se proto nese dal.
     $invoked = $false
+    $trimmedHadDot = $false
     if ($trimmed.StartsWith('&') -and -not $trimmed.StartsWith('&&')) {
         $invoked = $true
         $trimmed = $trimmed.Substring(1).Trim()
@@ -524,6 +535,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # Bila znaka za teckou je podminka - `./script.sh` ani `cd ..` dot-source nejsou.
     elseif ($trimmed -match '^\.\s') {
         $invoked = $true
+        $trimmedHadDot = $true
         $trimmed = $trimmed.Substring(1).Trim()
         if ($trimmed -eq '') { return $out }
     }
@@ -542,6 +554,20 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # `SendToRecycleBin` se nerozlisuje - brana zni "mazani", ne "nevratne mazani".
     if ([regex]::IsMatch($trimmed, $script:NetDeleteCallPattern, 'IgnoreCase')) {
         [void]$out.Add(@{ Kind = 'leaf'; Exe = 'net-delete'; Args = @(); Raw = $raw; Text = $trimmed; GitConfig = @() })
+        return $out
+    }
+
+    # Z117-Q26 = A (A117-N8): `$ExecutionContext.InvokeCommand.InvokeScript(<text>)` a `[scriptblock]::Create(<text>)`
+    # spousti TEXT stejne jako `iex` - do 0.3.0 hlava `$ExecutionContext...` nebo `[scriptblock]::Create('` nesedla na zadne
+    # pravidlo a `InvokeScript("$x reset --hard")` mlcel. Literal (bez promenne) se rozebere jako prikaz, jinak `invoked`.
+    $runner = [regex]::Match($trimmed, '(?i)(?:\.InvokeScript|\[scriptblock\]::create)\s*\(\s*(?:''([^'']*)''|"([^"]*)")?')
+    if ($runner.Success) {
+        $lit = if ($runner.Groups[1].Success) { $runner.Groups[1].Value } elseif ($runner.Groups[2].Success) { $runner.Groups[2].Value } else { $null }
+        if ($null -ne $lit -and -not (Test-Unexpandable $lit) -and ($runner.Groups[1].Success -or $lit -notmatch '[`$]')) {
+            foreach ($l in (Get-InvokedLeaves $lit '' $Depth)) { [void]$out.Add($l) }
+        } else {
+            [void]$out.Add((New-OpaqueLeaf $trimmed 'invoked'))
+        }
         return $out
     }
 
@@ -627,6 +653,17 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         # zustavaji `variable` (zmereno nad vzorkem: 19 ze 44 dotazu bylo presne tohle).
         $head = [string]$argv[0]
         $headIsVariable = $head -match '^[$%]'
+        # H-a varianta 1 (Z117-Q17): hlava po literalnim prirazeni v temze prikazu se rozbali.
+        if ($invoked -and -not $script:InvokedContext -and (Get-ScannerEscape) -eq '`' -and $script:LiteralAssign.Count -gt 0) {
+            $expanded = Expand-LiteralHead $head $raw
+            if ($null -ne $expanded) {
+                $restArgs = @()
+                if ($argv.Count -gt 1) { $restArgs = @($argv[1..($argv.Count - 1)]) }
+                $op = if ($trimmedHadDot) { '. ' } else { '& ' }
+                foreach ($l in (Get-CommandLeaf ($op + (Join-Argument (@($expanded) + $restArgs))) ($Depth + 1))) { [void]$out.Add($l) }
+                return $out
+            }
+        }
         if ($headIsVariable -and $null -ne $script:InvokedAssigned -and $head -match '^\$\{?([A-Za-z_][A-Za-z0-9_]*)') {
             if ($script:InvokedAssigned.Contains($Matches[1])) { $headIsVariable = $false }
         }
@@ -679,8 +716,18 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             $argList = ''
             for ($i = 0; $i -lt $rest.Count; $i++) {
                 $t = $rest[$i].ToLowerInvariant()
-                if (($t -eq '-filepath' -or $t -eq '-path') -and ($i + 1) -lt $rest.Count) { $file = $rest[$i + 1]; $i++; continue }
-                if (($t -eq '-argumentlist' -or $t -eq '-args') -and ($i + 1) -lt $rest.Count) {
+                # Z117-Q27 = B (A117-N18): PowerShell bere kazdou jednoznacnou zkratku (`-f`, `-a`, `-Arg` ...); hodnota
+                # parametru, ktery FilePath neni (`-Verb RunAs`, `-WorkingDirectory x`), se do 0.3.0 brala jako program.
+                if (((Test-ParameterPrefix $t 'filepath') -or $t -eq '-path') -and ($i + 1) -lt $rest.Count) { $file = $rest[$i + 1]; $i++; continue }
+                $isValueParam = $false
+                if ($t.Length -ge 3) {
+                    foreach ($vp in @('credential', 'workingdirectory', 'redirectstandarderror', 'redirectstandardinput',
+                                      'redirectstandardoutput', 'verb', 'windowstyle', 'environment')) {
+                        if (Test-ParameterPrefix $t $vp) { $isValueParam = $true; break }
+                    }
+                }
+                if ($isValueParam) { $i++; continue }
+                if (((Test-ParameterPrefix $t 'argumentlist') -or $t -eq '-args') -and ($i + 1) -lt $rest.Count) {
                     # Nalez Metis 7 (kolo 2): `-ArgumentList @('-enc','...')` je POLE.
                     # Bralo se to jako jeden token vcetne `@(`, `)` a apostrofu, takze
                     # se `-enc` uvnitr nikdy nenaslo. Pole se rozlozi na tokeny.
@@ -696,6 +743,14 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                         }
                         $i = $k - 1
                     }
+                    # A117-N18: pole bez zavorek (`-ArgumentList 'reset','--hard'`, i s mezerou za carkou) - do 0.3.0
+                    # zbylo `reset,--hard` jako jeden argument a `git reset --hard` se nesestavilo.
+                    if ($val -notmatch '^@?\(') {
+                        $k = $i + 2
+                        while ($val.EndsWith(',') -and $k -lt $rest.Count) { $val = $val + [string]$rest[$k]; $k++ }
+                        $i = $k - 2
+                        if ($val.Contains(',')) { $val = '(' + $val + ')' }
+                    }
                     $arr = [regex]::Match($val, '^@?\(\s*(.*?)\s*\)$')
                     if ($arr.Success) {
                         $items = New-Object System.Collections.ArrayList
@@ -706,7 +761,21 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                     }
                     $argList = $val; $i++; continue
                 }
-                if (-not $rest[$i].StartsWith('-') -and $file -eq '') { $file = $rest[$i] }
+                if (-not $rest[$i].StartsWith('-') -and $file -eq '') { $file = $rest[$i]; continue }
+                # A117-N18: druhy pozicni argument Start-Process je -ArgumentList (`Start-Process git 'reset','--hard'`).
+                if (-not $rest[$i].StartsWith('-') -and $argList -eq '') {
+                    $val = [string]$rest[$i]
+                    $k = $i + 1
+                    while ($val.EndsWith(',') -and $k -lt $rest.Count) { $val = $val + [string]$rest[$k]; $k++ }
+                    $i = $k - 1
+                    $pa = [regex]::Match($(if ($val.Contains(',') -and $val -notmatch '^@?\(') { '(' + $val + ')' } else { $val }), '^@?\(\s*(.*?)\s*\)$')
+                    if ($pa.Success) {
+                        $items = New-Object System.Collections.ArrayList
+                        foreach ($piece in (Split-Unquoted $pa.Groups[1].Value @(','))) { [void]$items.Add(($piece.Trim().Trim("'").Trim('"'))) }
+                        $val = (Join-Argument $items)
+                    }
+                    $argList = $val
+                }
             }
             if ($file -eq '') { return $out }
             $inner = ($file + ' ' + $argList).Trim()
@@ -724,13 +793,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         '^(bash|sh|zsh|dash|ksh)$' {
             # Nalez Metis 4: `bash -lc '...'` - shell prijima slouceny kratky prepinac,
             # takze se hleda kterykoli tvar koncici `c`, ne presny token `-c`.
-            $idx = -1
-            for ($i = 0; $i -lt $rest.Count; $i++) { if ($rest[$i] -cmatch '^-[a-z]*c$') { $idx = $i; break } }
-            if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) {
+            # Telo obalu od 0.3.0 rozpoznava Get-ShellWrapperBody (_common.ps1) - tataz funkce jako v hooku secrets.
+            $wb = Get-ShellWrapperBody $exe $rest
+            if ($null -eq $wb) {
                 # bash script.sh - skript souborem je pro hook nepruhledny, propousti se
                 return $out
             }
-            $inner = $rest[$idx + 1]
+            $inner = [string]$wb.Text
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): do 0.1.11 tu stal `Test-Unexpandable $inner` nad CELYM
             # vnitrkem; ted se vnitrek rozebira a `invoked` je jen statement s promennou
@@ -742,25 +811,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             return $out
         }
         '^(pwsh|powershell)$' {
-            $idx = -1
-            $isFile = $false
-            for ($i = 0; $i -lt $rest.Count; $i++) {
-                $t = $rest[$i].ToLowerInvariant()
-                # Nalez Metis 4 (kolo 2): PowerShell bere KAZDOU jednoznacnou zkratku
-                # parametru, takze `-enc`, `-enco`, `-encod` ... fungujou stejne jako
-                # `-encodedcommand`. Vyjmenovat tri z nich nestacilo.
-                if (Test-EncodedCommandFlag $t) {
-                    [void]$out.Add((New-OpaqueLeaf $raw 'encoded')); return $out
-                }
-                # Nalez Amber G5: `-c`/`-command` se porovnavaly PRESNE, takze
-                # `pwsh -com "git reset --hard"` prosel bez rozboru -> allow.
-                if (Test-ParameterPrefix $t 'file') { $isFile = $true; break }
-                if (Test-ParameterPrefix $t 'command') { $idx = $i; break }
-            }
+            # Nalez Metis 4 (kolo 2): PowerShell bere KAZDOU jednoznacnou zkratku parametru (`-enc`, `-enco` ...);
+            # nalez Amber G5: `-c`/`-command` se porovnavaly PRESNE. Obe pravidla drzi od 0.3.0 Get-ShellWrapperBody.
+            $wb = Get-ShellWrapperBody $exe $rest
             # skript souborem je pro hook nepruhledny -> propousti se (dokumentovano)
-            if ($isFile) { return $out }
-            if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
-            $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
+            if ($null -eq $wb) { return $out }
+            if ($wb.Kind -eq 'encoded') { [void]$out.Add((New-OpaqueLeaf $raw 'encoded')); return $out }
+            $inner = [string]$wb.Text
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): 41 ze 44 dotazu `invoked` ve vzorku faze 1 mel PRAVE
             # tenhle tvar s literalni hlavou (`pwsh -Command ". 'x.ps1'; ...; $env:X = 1"`).
@@ -770,12 +827,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             return $out
         }
         '^(cmd)$' {
-            $idx = -1
-            for ($i = 0; $i -lt $rest.Count; $i++) {
-                if ($rest[$i].ToLowerInvariant() -eq '/c' -or $rest[$i].ToLowerInvariant() -eq '/k') { $idx = $i; break }
-            }
-            if ($idx -lt 0 -or ($idx + 1) -ge $rest.Count) { return $out }
-            $inner = (Join-CommandString ($rest | Select-Object -Skip ($idx + 1)))
+            $wb = Get-ShellWrapperBody $exe $rest
+            if ($null -eq $wb) { return $out }
+            $inner = [string]$wb.Text
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni (`cmd /c %X%` zustava ask,
             # `cmd /c "echo %PATH% && dir"` uz ne). Nalez Ada N19: cely retez pruchodu.
@@ -877,35 +931,163 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
 # ---------------------------------------------------- strukturalni pravidla ---
 
-function Get-DbHost([string]$Raw, $LocalHosts, [string]$Exe = '') {
+# Vsechny hostitele DB, ktere prikaz jmenuje (TASK-117, Z117-Q16 = A). Do 0.2.0 vracela funkce
+# PRVNI shodu (Get-DbHost) - navnada `Server=localhost;Addr=db.firma.cz` cetla jen `localhost`.
+# Synonyma serveru SqlClient: Server, Data Source, Address, Addr, Network Address
+# (https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlconnection.connectionstring);
+# Npgsql: Host, Server. Hodnota prepinace smi byt v uvozovkach i slepena (`-S"x"`, `-Sx`).
+function Get-DbHosts([string]$Raw, [string]$Exe = '') {
+    $q = '(?:"([^"]*)"|''([^'']*)''|([^\s"'';]+))'
     $patterns = @(
         'host\s*=\s*([^;"''\s]+)',
         # Nalez Amber B5: Npgsql bere `Server=` i `Data Source=` jako synonymum `Host=`.
-        # Bez nich se `--connection "Server=db.firma.cz;..."` cetlo jako lokalni.
         '(?:^|[;\s"''])server\s*=\s*([^;"''\s]+)',
         '(?:^|[;\s"''])data\s+source\s*=\s*([^;"''\s]+)',
-        '(?:^|\s)-h\s+([^\s"'']+)',
-        '--host[= ]([^\s"'']+)',
-        'postgres(?:ql)?://[^@/\s]*@([^:/\s]+)'
+        '(?:^|[;\s"''])(?:network\s+)?addr(?:ess)?\s*=\s*([^;"''\s]+)',
+        ('(?:^|\s)-h(?:\s+|(?=["'']))' + $q),
+        '(?:^|\s)-h([^\s"'';\-][^\s"'';]*)',
+        ('--host(?:=|\s+)' + $q),
+        'postgres(?:ql)?://(?:[^@/\s"'']*@)?([^:/\s?"'']+)'
     )
     # Nalez Amber F1: `-S` je hostitel JEN u sqlcmd. U psql je `-S` single-line bez
     # hodnoty, takze `psql -S -c "TRUNCATE x"` cetlo jako hostitele `-c` a skoncilo
     # deny misto ask. Vzor se proto pridava jen podle jmena nastroje.
     if ($Exe -eq 'sqlcmd') {
-        $patterns = @('(?:^|\s)-S\s+([^\s"'']+)') + $patterns
+        $patterns = @(('(?:^|\s)-S(?:\s+|(?=["'']))' + $q), '(?:^|\s)-S([^\s"'';\-][^\s"'';]*)') + $patterns
     }
-
+    $out = New-Object System.Collections.ArrayList
     foreach ($p in $patterns) {
-        $m = [regex]::Match($Raw, $p, 'IgnoreCase')
-        if ($m.Success) { return $m.Groups[$m.Groups.Count - 1].Value }
+        foreach ($m in [regex]::Matches($Raw, $p, 'IgnoreCase')) {
+            for ($g = 1; $g -lt $m.Groups.Count; $g++) {
+                if ($m.Groups[$g].Success) {
+                    $v = $m.Groups[$g].Value.Trim()
+                    # CR-P4 (/code-review): sber VSECH shod udelal z `sqlcmd -h -1` (hlavicky) a `psql -H -c` hostitele
+                    # `-1` / `-c`. Hodnota, ktera sama zacina pomlckou, je dalsi prepinac, ne hostitel.
+                    if ($v.StartsWith('-')) { break }
+                    if ($out -notcontains $v) { [void]$out.Add($v) }
+                    break
+                }
+            }
+        }
     }
-    return ''
+    return ,@($out)
 }
 
+# Z117-Q18 = A (Tom 2026-10-08): LocalDB (`(localdb)\<instance>`) je MISTNI - pevna mnozina
+# v kodu (Test-FixedLocalDbHost v _common.ps1), ne polozka prepisovatelneho `localDbHosts`.
+# Do 0.2.0 byla LocalDB v `--connection` "vzdalena" (deny), v `sqlcmd -S "(localdb)\..."`
+# se hodnota v uvozovkach neprecetla vubec (ask) - obe cesty jsou od 0.3.0 `ask`.
 function Test-LocalHost([string]$HostName, $LocalHosts) {
     if ([string]::IsNullOrWhiteSpace($HostName)) { return $true }   # bez hostu = default local
     foreach ($h in $LocalHosts) {
         if ($HostName.ToLowerInvariant() -eq ([string]$h).ToLowerInvariant()) { return $true }
+    }
+    if ($HostName -match $script:LocalDbInstancePattern) { return $true }
+    return $false
+}
+
+# H-f (Z117-Q19 = A, Tom 2026-10-08 = navrh `01-navrh-allow-list.md` par. 4): `allow` jen
+# pro prikaz, ktery jmeno serveru i databaze NESE SAM - konfigurace projektu se necte (soubor
+# muze nest tajemstvi a mezi kontrolou a behem se muze zmenit). Pokryte tvary:
+#   sqlcmd -S <server> -Q "[ALTER DATABASE [X] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;] DROP DATABASE [X]"
+#          (prepinace jen -S, -Q, -E, -b; jedno jmeno; nalez councilu Codex K5: `EXEC`, dynamicke
+#          SQL, `GO`, `USE`, komentare ani druhy prikaz nikdy allow)
+#   dotnet ef database drop --connection "<server>;<databaze>"   (EF Core 11+, T117-N11)
+# Server = prave jedna hodnota ze synonym, v PEVNE mistni mnozine (M17) i v `hosts` prepisu;
+# databaze = prave jedna hodnota (`Database` / `Initial Catalog`), shoda se vzorem `databases`
+# ukotvena na cele jmeno, bez ohledu na velikost pismen (M14). Dve hodnoty, promenna, roura,
+# presmerovani, prefix promenne prostredi, argument za `--` = nikdy allow (T117-N13, M13, M18).
+function Test-DbDestroyLocalAllowed($Leaf, $DbDestroyLocal) {
+    if ([string](Get-LeafField $Leaf 'Kind' '') -ne 'leaf') { return $false }
+    $raw = [string]$Leaf.Raw
+    if (Test-Unexpandable $raw) { return $false }
+    if ($raw -match '[|<>`]') { return $false }
+    if ($raw -match '^\s*[A-Za-z_][A-Za-z0-9_]*=') { return $false }
+    # List musi byt CELY statement nejvyssi urovne - ne clanek roury, telo bloku ani vnitrek
+    # `bash -c` (skener roury a obaly zplostuje, takze se to overuje nad celym prikazem).
+    $whole = $false
+    foreach ($st in @(Split-Statement $script:FullCommand)) {
+        if (([string]$st).Trim() -ceq $raw.Trim()) { $whole = $true; break }
+    }
+    if (-not $whole) { return $false }
+    $hosts = @(Get-Field $DbDestroyLocal 'hosts' @())
+    $patterns = @(Get-Field $DbDestroyLocal 'databases' @())
+    if ($hosts.Count -eq 0 -or $patterns.Count -eq 0) { return $false }
+
+    $exe = [string]$Leaf.Exe
+    $a = @(Get-LeafField $Leaf 'Args' @())
+    $server = $null
+    $db = $null
+    if ($exe -eq 'sqlcmd') {
+        $sql = $null
+        for ($i = 0; $i -lt $a.Count; $i++) {
+            $t = [string]$a[$i]
+            if ($t -ceq '-S' -or $t -ceq '-Q') {
+                if (($i + 1) -ge $a.Count) { return $false }
+                if ($t -ceq '-S') { if ($null -ne $server) { return $false }; $server = [string]$a[$i + 1] }
+                else { if ($null -ne $sql) { return $false }; $sql = [string]$a[$i + 1] }
+                $i++; continue
+            }
+            if ($t -ceq '-E' -or $t -ceq '-b') { continue }
+            return $false
+        }
+        if ($null -eq $server -or $null -eq $sql) { return $false }
+        $m = [regex]::Match($sql, '^\s*(?:ALTER\s+DATABASE\s+\[([A-Za-z0-9_]+)\]\s+SET\s+SINGLE_USER\s+WITH\s+ROLLBACK\s+IMMEDIATE\s*;\s*)?DROP\s+DATABASE\s+\[([A-Za-z0-9_]+)\]\s*;?\s*$', 'IgnoreCase')
+        if (-not $m.Success) { return $false }
+        if ($m.Groups[1].Success -and $m.Groups[1].Value -ne $m.Groups[2].Value) { return $false }
+        $db = $m.Groups[2].Value
+    } else {
+        $i = 0
+        if ($exe -eq 'dotnet') {
+            if ($a.Count -lt 3 -or [string]$a[0] -cne 'ef') { return $false }
+            $i = 1
+        } elseif ($exe -ne 'dotnet-ef') { return $false }
+        if (($i + 1) -ge $a.Count -or [string]$a[$i] -cne 'database' -or [string]$a[$i + 1] -cne 'drop') { return $false }
+        $i += 2
+        $cs = $null
+        $noValue = @('--force', '-f', '--no-build', '--verbose', '-v', '--no-color', '--prefix-output')
+        $withValue = @('--project', '-p', '--startup-project', '-s', '--context', '-c', '--configuration', '--framework')
+        for (; $i -lt $a.Count; $i++) {
+            $t = [string]$a[$i]
+            if ($t -ceq '--connection') {
+                if (($i + 1) -ge $a.Count -or $null -ne $cs) { return $false }
+                $cs = [string]$a[$i + 1]; $i++; continue
+            }
+            if ($t.StartsWith('--connection=')) {
+                if ($null -ne $cs) { return $false }
+                $cs = $t.Substring(13); continue
+            }
+            if ($noValue -ccontains $t) { continue }
+            if ($withValue -ccontains $t) { if (($i + 1) -ge $a.Count) { return $false }; $i++; continue }
+            return $false
+        }
+        if ([string]::IsNullOrWhiteSpace($cs)) { return $false }
+        if ($cs -match '["'']') { return $false }
+        $servers = New-Object System.Collections.ArrayList
+        $dbs = New-Object System.Collections.ArrayList
+        foreach ($part in $cs.Split(';')) {
+            if ($part.Trim() -eq '') { continue }
+            $eq = $part.IndexOf('=')
+            if ($eq -lt 1) { return $false }
+            $key = (($part.Substring(0, $eq).Trim()) -replace '\s+', ' ').ToLowerInvariant()
+            $val = $part.Substring($eq + 1).Trim()
+            if ($val -eq '') { return $false }
+            if ($script:DbServerKeys -contains $key) { [void]$servers.Add($val) }
+            elseif (@('database', 'initial catalog') -contains $key) { [void]$dbs.Add($val) }
+        }
+        if ($servers.Count -ne 1 -or $dbs.Count -ne 1) { return $false }
+        $server = [string]$servers[0]
+        $db = [string]$dbs[0]
+        if ($db -notmatch '^[A-Za-z0-9_]+$') { return $false }
+    }
+
+    if (-not (Test-FixedLocalDbHost $server)) { return $false }
+    $hostOk = $false
+    foreach ($h in $hosts) { if ($server.ToLowerInvariant() -eq ([string]$h).ToLowerInvariant()) { $hostOk = $true; break } }
+    if (-not $hostOk) { return $false }
+    foreach ($pat in $patterns) {
+        $rx = '^' + ([regex]::Escape([string]$pat)).Replace('\*', '.*').Replace('\?', '.') + '$'
+        if ([regex]::IsMatch($db, $rx, 'IgnoreCase')) { return $true }
     }
     return $false
 }
@@ -948,7 +1130,7 @@ function Test-GitPushRule($Leaf, $Config) {
         [void]$positional.Add($a)
     }
     if ($mirror) {
-        return @{ Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
+        return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
     }
 
     # prvni pozicni token je remote, zbytek jsou refspecy
@@ -977,23 +1159,23 @@ function Test-GitPushRule($Leaf, $Config) {
     }
 
     if ($deletesRef) {
-        return @{ Decision = 'deny'; Shape = (Get-Field $shapes 'pushDeleteRefspec' 'git push :vetev') }
+        return @{ Id = 'pushDeleteRefspec'; Decision = 'deny'; Shape = (Get-Field $shapes 'pushDeleteRefspec' 'git push :vetev') }
     }
     if ($wildcardTarget -and ($plusForce -or $force)) {
-        return @{ Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
+        return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
     }
 
     if ($plusForce -and $hitsProtected) {
-        return @{ Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
+        return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
     }
     if (-not $force) { return $null }
     if ($hitsProtected) {
-        return @{ Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
+        return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
     }
     if ($refspecs.Count -eq 0) {
-        return @{ Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushUnknown' 'force push') }
+        return @{ Id = 'forcePushUnknown'; Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushUnknown' 'force push') }
     }
-    return @{ Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushOther' 'force push') }
+    return @{ Id = 'forcePushOther'; Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushOther' 'force push') }
 }
 
 function Test-GitCleanRule($Leaf, $Config) {
@@ -1022,7 +1204,7 @@ function Test-GitCleanRule($Leaf, $Config) {
     if (($letters -ccontains 'X') -and -not ($letters -ccontains 'x')) {
         return $null
     }
-    return @{ Decision = 'deny'; Shape = (Get-Field $shapes 'gitClean' 'git clean -f') }
+    return @{ Id = 'gitClean'; Decision = 'deny'; Shape = (Get-Field $shapes 'gitClean' 'git clean -f') }
 }
 
 $script:RecursiveShortExe = @('rm')
@@ -1044,7 +1226,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
     # literalem v uvozovkach ji nenajde a bez teto vetve by cely tvar skoncil jako
     # allow. Zadani par. 2.3: obal s promennou -> ask. Cil nezname, tak se pta.
     if ($Leaf.Exe -eq 'net-delete' -and $targets.Count -eq 0) {
-        return @{ Decision = 'ask'
+        return @{ Id = 'netDeleteVariable'; Decision = 'ask'
                   Shape = (([string](Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})')).Replace('{text}', [string]($Leaf.Text))) }
     }
 
@@ -1077,7 +1259,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         # videt. Rozhodnuti `ask` se nemeni, meni se veta; tvar `deleteFromPipeline` zustava
         # tomu, co roura opravdu je (kontrolni skupina: Metis 8).
         if ($targets.Count -eq 0 -and $shortAbsolute.Count -gt 0) {
-            return @{ Decision = 'ask'
+            return @{ Id = 'shortAbsolutePath'; Decision = 'ask'
                       Shape = (([string](Get-Field $shapes 'shortAbsolutePath' 'mazani s kratkou absolutni cestou ({target})')).Replace('{target}', [string]([string]$shortAbsolute[0]))) }
         }
 
@@ -1087,7 +1269,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         # plati Z3 (nerozebratelne -> ask). Mazani konkretniho souboru bez -Recurse
         # zustava bezna prace (`Remove-Item -LiteralPath x -Force` ve skriptech GSD).
         if ($targets.Count -eq 0) {
-            return @{ Decision = 'ask'; Shape = (Get-Field $shapes 'deleteFromPipeline' 'mazani z roury') }
+            return @{ Id = 'deleteFromPipeline'; Decision = 'ask'; Shape = (Get-Field $shapes 'deleteFromPipeline' 'mazani z roury') }
         }
         if (-not $recursive) { return $null }
     }
@@ -1110,13 +1292,13 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         if ($isAbsolute) {
             $bare = ($norm -replace '[\*\?]', '').TrimEnd('/')
             if ($bare -eq '' -or $bare -match '^[a-z]:$' -or $bare -eq $homeNorm) {
-                return @{ Decision = 'deny'
+                return @{ Id = 'recursiveDelete'; Decision = 'deny'
                           Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
             if ($norm.StartsWith($cwdNorm + '/')) {
                 $rel = $norm.Substring($cwdNorm.Length + 1)
             } else {
-                return @{ Decision = 'deny'
+                return @{ Id = 'recursiveDelete'; Decision = 'deny'
                           Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
         }
@@ -1134,18 +1316,18 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         if (-not $allowed) {
             if ($hasVar) {
                 if ($null -eq $worst) {
-                    $worst = @{ Decision = 'ask'
+                    $worst = @{ Id = 'recursiveDeleteWildcard'; Decision = 'ask'
                                 Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
                 }
                 continue
             }
-            return @{ Decision = 'deny'
+            return @{ Id = 'recursiveDelete'; Decision = 'deny'
                       Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
         }
 
         if ($hasStar -or $hasDotDot -or $hasVar) {
             if ($null -eq $worst) {
-                $worst = @{ Decision = 'ask'
+                $worst = @{ Id = 'recursiveDeleteWildcard'; Decision = 'ask'
                             Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
         }
@@ -1331,7 +1513,7 @@ function Test-GitRestoreRule($Leaf, $Config) {
     foreach ($p in $positional) {
         if (Test-WholeTreeTarget $p) {
             $shapeKey = if ($sub -eq 'checkout') { 'gitCheckoutDot' } else { 'gitRestoreDot' }
-            return @{ Decision = 'deny'
+            return @{ Id = $shapeKey; Decision = 'deny'
                       Shape = (Get-Field $shapes $shapeKey ('git ' + $sub + ' .')) }
         }
     }
@@ -1391,7 +1573,16 @@ function Test-DatabaseRule($Leaf, $Config) {
     # tehdy, kdyz nestrili ANI JEDEN z nich.
     # (`dotnet ef` v `sqlClients` neni, takze marker nikdy nedostane - overeno mericim
     # behem; je tu pro uplnost podminky, ne kvuli znamemu tvaru.)
-    $destructive = $sqlDestructive -or
+    # Z117-Q20 = A (Tom 2026-10-08, nalez Amber A117-N4): `sqllocaldb delete <instance>` smaze
+    # instanci LocalDB a s ni VSECHNY jeji databaze (MS Learn: "Deleting an instance removes all
+    # databases associated with that instance") - do 0.2.0 ticho. Od 0.3.0 `ask` jako `dropdb`;
+    # H-f to nikdy nepovoli. `sqllocaldb stop` je beze zmeny (nic nemaze).
+    $localDbDelete = $false
+    if ([string]$Leaf.Exe -eq 'sqllocaldb') {
+        $la = @(Get-LeafField $Leaf 'Args' @())
+        if ($la.Count -ge 1 -and ([string]$la[0]) -match '^(delete|d)$') { $localDbDelete = $true }
+    }
+    $destructive = $sqlDestructive -or $localDbDelete -or
                    ($Leaf.Exe -eq 'dropdb') -or
                    ([regex]::IsMatch($raw, ('\bdotnet[- ]ef' + $gap + 'database' + $gap + 'drop\b'), 'IgnoreCase'))
 
@@ -1410,19 +1601,46 @@ function Test-DatabaseRule($Leaf, $Config) {
     # U tela heredocu i roury je nastrojem uvozujici prikaz, ne 'heredoc'.
     $hostExe = [string](Get-LeafField $Leaf 'OuterExe' '')
     if ($hostExe -eq '') { $hostExe = [string](Get-LeafField $Leaf 'Exe' '') }
-    $dbHost = Get-DbHost $hostText $localHosts $hostExe.ToLowerInvariant()
-    $isLocal = Test-LocalHost $dbHost $localHosts
+    # Z117-Q16 = A (Tom 2026-10-08, T117-N13): do 0.2.0 rozhodovala PRVNI shoda vzoru kdekoli
+    # v textu - `Addr=` / `Address=` / `Network Address=` (synonyma SqlClient) nenasla nic,
+    # hostitel vysel prazdny = "lokalni" a `dotnet ef database update` proti vzdalenemu serveru
+    # proslo BEZ dotazu; hodnota v uvozovkach (`-S "db.firma.cz"`), slepena (`-Sdb.firma.cz`)
+    # a URI bez uzivatele koncily `ask` misto `deny`. Od 0.3.0 se sbiraji VSECHNY hodnoty
+    # vsech synonym a rozhoduje nejprisnejsi: kterykoli vzdaleny hostitel = vzdaleny prikaz.
+    # CR-P1 (/code-review): Get-DbHosts vraci `,@(...)` - dalsi `@()` by pole zabalil podruhe (N-H10) a vsechny
+    # hostitele slil do JEDNOHO retezce, takze dva mistni hostitele vysli jako jeden vzdaleny.
+    $dbHosts = Get-DbHosts $hostText $hostExe.ToLowerInvariant()
+    $dbHost = ''
+    $isLocal = $true
+    foreach ($h in $dbHosts) {
+        if (-not (Test-LocalHost $h $localHosts)) { $dbHost = $h; $isLocal = $false; break }
+    }
 
     if ($destructive) {
         if (-not $isLocal) {
-            return @{ Decision = 'deny'
+            return @{ Id = 'dbDestroyRemote'; Decision = 'deny'
                       Shape = (([string](Get-Field $shapes 'dbDestroyRemote' 'DB {host}')).Replace('{host}', [string]($dbHost))) }
         }
-        return @{ Decision = 'ask'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }
+        # H-f (Z117-Q13 = A, tvar Z117-Q19 = A): rozhodnuti o LOKALNI destruktivni operaci je
+        # nastavitelne projektovym prepisem `gate.dbDestroyLocal`; vychozi `ask` = 0.2.0.
+        # Obsah prepisu uz zkontrolovalo H-c (neplatny klic = vychozi hodnota, nikdy allow).
+        $dl = Get-Field $gate 'dbDestroyLocal'
+        $dlDecision = [string](Get-Field $dl 'decision' 'ask')
+        if ($dlDecision -eq 'deny') {
+            return @{ Id = 'dbDestroyLocalDenied'; Decision = 'deny'
+                      Shape = (Get-Field $shapes 'dbDestroyLocalDenied' 'DB (gate.dbDestroyLocal = deny)') }
+        }
+        if ($dlDecision -eq 'allow' -and -not $localDbDelete -and (Test-DbDestroyLocalAllowed $Leaf $dl)) {
+            # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
+            # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
+            Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
+            return $null
+        }
+        return @{ Id = 'dbDestroyLocal'; Decision = 'ask'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }
     }
 
     if ($update -and -not $isLocal) {
-        return @{ Decision = 'deny'
+        return @{ Id = 'efUpdateRemote'; Decision = 'deny'
                   Shape = (([string](Get-Field $shapes 'efUpdateRemote' 'ef update {host}')).Replace('{host}', [string]($dbHost))) }
     }
     return $null
@@ -1433,7 +1651,8 @@ function Test-ConfiguredPattern($Leaf, $Patterns) {
         $pattern = Get-Field $p 'pattern' ''
         if ($pattern -eq '') { continue }
         if ([regex]::IsMatch($Leaf.Text, $pattern, 'IgnoreCase')) {
-            return (Get-Field $p 'shape' (Get-Field $p 'id' 'pravidlo'))
+            # H-b (TASK-117): ID pravidla jde do auditu, text tvaru do duvodu.
+            return @{ Shape = (Get-Field $p 'shape' (Get-Field $p 'id' 'pravidlo')); Id = [string](Get-Field $p 'id' 'pravidlo') }
         }
     }
     return $null
@@ -1483,7 +1702,7 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
             $token = [string]$t
             if ($token -eq '') { continue }
             if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-                return @{ Decision = 'ask'
+                return @{ Id = 'interpreterDestructive'; Decision = 'ask'
                           Shape = (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))) }
             }
         }
@@ -1505,7 +1724,7 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
             $token = [string]$t
             if ($token -eq '') { continue }
             if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-                return @{ Decision = 'ask'
+                return @{ Id = 'opaqueDestructive'; Decision = 'ask'
                           Shape = (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))) }
             }
         }
@@ -1518,7 +1737,7 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
 
     $text = [string]$Raw
     if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-    return @{ Decision = 'ask'
+    return @{ Id = ('opaque:' + $Why); Decision = 'ask'
               Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
 }
 
@@ -1550,7 +1769,7 @@ function Test-Leaf($Leaf, $Config) {
             if ($positional.Count -ge 2) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-                return @{ Decision = 'ask'
+                return @{ Id = 'remoteShell'; Decision = 'ask'
                           Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
             }
         }
@@ -1610,7 +1829,7 @@ function Test-Leaf($Leaf, $Config) {
         if (@(Get-Field $gate 'remoteShells' @()) -ccontains $oe) {
             $text = [string]$Leaf.Raw
             if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-            return @{ Decision = 'ask'
+            return @{ Id = 'remoteShell'; Decision = 'ask'
                       Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
         }
 
@@ -1623,14 +1842,14 @@ function Test-Leaf($Leaf, $Config) {
     if ($Leaf.Exe -eq 'git') {
         foreach ($cfg in $Leaf.GitConfig) {
             if ($cfg -match '(?i)^alias\.') {
-                return @{ Decision = 'ask'
+                return @{ Id = 'gitAlias'; Decision = 'ask'
                           Shape = (([string](Get-Field $shapes 'opaque' '{text}')).Replace('{text}', [string]($cfg))) }
             }
         }
     }
 
     $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'denyPatterns' @())
-    if ($shape) { return @{ Decision = 'deny'; Shape = $shape } }
+    if ($shape) { return @{ Id = $shape.Id; Decision = 'deny'; Shape = $shape.Shape } }
 
     foreach ($rule in @('Test-GitPushRule', 'Test-GitCleanRule', 'Test-GitRestoreRule', 'Test-RecursiveDeleteRule', 'Test-DatabaseRule')) {
         $r = & $rule $Leaf $Config
@@ -1639,7 +1858,7 @@ function Test-Leaf($Leaf, $Config) {
     }
 
     $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'askPatterns' @())
-    if ($shape) { return @{ Decision = 'ask'; Shape = $shape } }
+    if ($shape) { return @{ Id = $shape.Id; Decision = 'ask'; Shape = $shape.Shape } }
 
     if ($script:PendingAsk) { $r = $script:PendingAsk; $script:PendingAsk = $null; return $r }
     return $null
@@ -1691,6 +1910,8 @@ $script:ToolName = $toolName
 $script:PermissionMode = $mode
 
 if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
+# H-c: odmitnuty klic prepisu je videt v auditu jednou za session (CR-P10) a v kanarku (jen jmeno klice).
+Write-OverrideRejectedAudit $toolName $config ([string](Get-Field $payload 'session_id' ''))
 
 $script:PendingAsk = $null
 $decision = $null
@@ -1699,6 +1920,9 @@ $decision = $null
 # zije v Get-CommandLineLeaves a volaji ho i vsechny rekurze. Drive stal rozepsany
 # tady a zanoreni znalo jen posledni clanek.
 $script:SqlClients = @(Get-Field (Get-Field $config 'gate') 'sqlClients' @('psql', 'pgcli', 'dropdb', 'sqlcmd'))
+# H-a (TASK-117): literalni prirazeni prikazu - jen PowerShell nastroj (viz Get-LiteralAssignment).
+$script:FullCommand = $command
+if ($toolName -eq 'PowerShell') { $script:LiteralAssign = Get-LiteralAssignment $command }
 $leaves = Get-CommandLineLeaves $command 0
 
 foreach ($leaf in $leaves) {
@@ -1709,6 +1933,9 @@ foreach ($leaf in $leaves) {
 }
 
 if ($null -eq $decision) { exit 0 }
+
+# H-b (TASK-117, Z117-Q8 = B): kazde `ask` a `deny` jde do auditu s ID tvaru, nikdy s textem prikazu.
+Write-GateAudit $toolName ('gate:' + [string](Get-LeafField $decision 'Id' 'unknown')) ([string]$decision.Decision) $config
 
 $reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
 

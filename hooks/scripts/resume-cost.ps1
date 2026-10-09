@@ -53,6 +53,12 @@ function Get-CanaryMessage($Config, [string]$Root) {
     if ($env:SINOGARD_HOOKS_DRYRUN -eq '1') {
         $text = $text + (Get-Text $Config 'canaryDryRun' ' (notify: dry-run)')
     }
+    # TASK-117 H-c: odmitnute klice projektoveho prepisu - jen jmena, nikdy hodnoty.
+    $rejected = @($script:OverrideRejected)
+    if ($rejected.Count -gt 0) {
+        $t = Get-Text $Config 'canaryOverrideRejected' ' | override rejected {count} ({keys})'
+        $text = $text + $t.Replace('{count}', [string]$rejected.Count).Replace('{keys}', ($rejected -join ', '))
+    }
     return $text
 }
 

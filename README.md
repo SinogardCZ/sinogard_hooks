@@ -112,6 +112,37 @@ a rozhodnutí (`-Since <ISO čas>` = přírůstek za session, `-Json` pro stroje
 uzávěry v GSD. Nový tvar `secrets:wildcardName` zapisuje `secrets.ps1` (glob nad chráněným
 jménem, viz omezení 9).
 
+➕ **0.3.0 (TASK-117, 2026-10) — `secrets` jen u čtení obsahu, tři díry 0.2.0 zavřené,
+přepis projektu smí bránu jen zpřísnit (výjimky `opaque` a `dbDestroyLocal`).** Rozhodnutí Toma `Z117-Q1`–`Q22`
+(zadání a hlášení TASK-117 v GSD); měření fáze 1 a 2 v `docs/logs/mutants/task-117/` repa GSD.
+Změna verdiktu má u sebe vždy tag rozhodnutí:
+
+| tvar | do 0.2.0 | od 0.3.0 | proč |
+|---|---|---|---|
+| příkaz, který chráněný soubor **jen jmenuje** a jehož výstup **nikam neteče** (`git ls-files X`, `git check-ignore -v X`, `git ls-tree --name-only <tree> X`, `Test-Path X`, `ls`/`dir`/`Get-ChildItem X`, i `ls ~/.ssh/*`) | `deny` / `ask` | **mlčí** + audit `secrets:nameOnly` (bez cesty) | `Z117-Q1/Q2/Q3/Q5`: obsah souboru nikdo nečte. Jen **uzavřený výčet** s povolenými přepínači per program (`git ls-tree` bez `--name-only` vypíše id blobu → `deny` dál); roura, substituce, proměnná, seskupení, blok nebo přesměrování (kromě stderr do nicoty) = jako 0.2.0. Neplatí v příkazu, který definuje funkci nebo alias, mění `PATH`, načítá cizí kód (`source`, `.`, `Import-Module`), spouští text (`eval`, `iex`) nebo nese heredoc (nález councilu: zastínění `ls() { cat "$@"; }`) |
+| 🔴 **seskupení v PowerShellu** `Get-Content (Get-ChildItem .env)`, `cat (ls .env)`, `-Body (Get-Content -Raw .env)` | **mlčí** | `deny` (podle třídy souboru) | `Z117-Q16`, nález N-C: token nesl závorku (`.env)`) a žádný vzor ho nechránil. Obsah `( … )` / `@( … )` se rozebírá jako podpříkaz |
+| 🔴 **`@soubor`** `curl -d @.env`, `--data-binary @.env`, `-F f=@.env` | **mlčí** | `deny` | `Z117-Q16`, nález N-D (council, Codex): odeslání souboru se secrets na síť bez dotazu |
+| nástroje na klíče `openssl`, `ssh-keygen`, `keytool`, `certutil`, `gpg` s holým jménem souboru (`openssl rsa -in private.pem`) | mlčí | `deny` | `Z117-Q6`: `secrets.pathCommands` (omezení 22) |
+| `printenv API_KEY`, `Get-Content Env:\API_KEY`, `gc Env:/API_KEY`, `(Get-Item Env:\API_KEY).Value` | mlčí | `ask` (`envVarRead`) | `Z117-Q15`, `A117-O5`: hodnota jedné proměnné; `awk ENVIRON`, `python os.environ`, `declare -p` zůstávají mezí (omezení 23) |
+| jméno citlivé proměnné **jen jako text** ve vzoru `grep`/`rg`/`git grep`/`Select-String` (`grep -n "^\$env:GSD_E2E_PASSWORD" f` v Bashi, `Select-String -Pattern '$env:X'`) | `ask` | **mlčí** + audit `secrets:nameOnly:envVarText` | `Z117-Q14/Q22`: uzavřený výčet (omezení 23); týž příkaz v PowerShell nástroji je `ask` (`\` tam není escape) |
+| `$x = 'git'; & $x reset --hard` | `ask` (pod zúžením projektu ticho) | `deny` | `Z117-Q17`, nález N-B: hlava po literálním přiřazení se rozbalí |
+| `$m = "C:\…\mutant.ps1"; & $m -Id x` | `ask` (`invoked`) | **mlčí** | `Z117-Q17`: rozbalená hlava = literální volání skriptu (omezení 1) |
+| 🔴 DB **`Addr=` / `Address=` / `Network Address=`** vzdálený (`dotnet ef database update --connection "Addr=db.firma.cz;…"`) | **mlčí** | `deny` | `Z117-Q16`, `T117-N13`: synonyma SqlClient; všechny hodnoty všech synonym, rozhoduje nejpřísnější |
+| DB vzdálený hostitel **v uvozovkách / slepený / v URI bez uživatele** (`sqlcmd -S "db.firma.cz"`, `-Sdb.firma.cz`, `psql postgresql://db.firma.cz/x`), návnada `Server=localhost;Addr=db.firma.cz` | `ask` | `deny` | `Z117-Q16` |
+| LocalDB `(localdb)\MSSQLLocalDB` v `--connection` | `deny` (vzdálená) | `ask` (místní) | `Z117-Q18`: LocalDB je místní instance pod uživatelem — pevná množina v kódu |
+| `sqllocaldb delete <instance>` (smaže instanci **i všechny její DB**) | mlčí | `ask` | `Z117-Q20`, nález Amber A117-N4; `sqllocaldb stop` beze změny |
+| lokální destruktivní DB operace s projektovým `gate.dbDestroyLocal` | `ask` | `ask` / `deny` / **mlčí + audit** podle přepisu | `Z117-Q13/Q19` (H-f, „Konfigurace") |
+| projektový přepis, který bránu **uvolňuje** (`{"gate":{"denyPatterns":[]}}`, `localDbHosts` se vzdáleným hostitelem, `opaque.encoded: audit`, neznámý klíč) | platil | **odmítnut** (platí výchozí hodnota), kanárek + audit `config:overrideRejected` | `Z117-Q21` (H-c, „Konfigurace") |
+| zápis do `hooks/hooks.json` a `hooks/config/*` **mimo nainstalovanou kopii pluginu** (vývojový klon) | `ask` (`selfProtect`) | **mlčí** | `Z117-Q23` (a): chráněné jen pod `.claude/plugins/`; cesta se posuzuje absolutní (relativně k `cwd`, `..` sbalené); `.claude/settings*.json` a `.claude/sinogard-hooks.json` chráněné všude |
+| výpis prostředí, který teče jen do filtru podle **jména** a končí projekcí na jméno nebo počtem (`Get-ChildItem Env: \| Where-Object Name -like 'GSD_TEST*' \| Select-Object -ExpandProperty Name`, `gci env: \| % Name`) | `ask` (`envDump`) | **mlčí** | `Z117-Q23` (c); filtr podle hodnoty, skript-blok, projekce `Value` nebo výpis bez projekce = `ask` dál |
+| 🔴 **cíl kopie / přesunu** do chráněné cesty (`cp x .claude/settings.json`, `Copy-Item … -Destination …`, `mv` do nainstalované kopie, `xcopy`, `robocopy`) | **mlčí** | `ask` / `deny` | `Z117-Q25`; omezení 25 |
+| 🔴 Bash skupina `{ cat .env; }` (i do roury, ve funkci, se zápisem), prefix `\\?\` / `\\.\` u nástrojů nad souborem, `curl --data-urlencode name@soubor` / `--variable`, `InvokeScript(…)` / `[scriptblock]::Create(…)` | **mlčí** (`\\?\…\.env` jen `ask`) | `deny` / `ask` jako bez obalu | `Z117-Q26` (`A117-N5`–`N8`) |
+
+🔴 **Audit nese od 0.3.0 i `ask` a `deny`** (`Z117-Q8`, H-b): řádek má id tvaru
+(`gate:git-reset-hard`, `gate:opaque:invoked`, `secrets:secretFile`, `secrets:envVarRead`) a vydané
+rozhodnutí; `ask` vydaný v bypassu jako `deny` nese `ask-bypass`. **Text příkazu, cesta ani jméno
+proměnné do auditu nejdou** — test to tvrdí u každého nového tvaru.
+
 ---
 
 ## Instalace
@@ -157,10 +188,61 @@ Projekt je může přepsat souborem `.claude/sinogard-hooks.json` ve své složc
 - **pole a skaláry se nahrazují CELÉ**.
 
 Takže `{"gate":{"opaque":{"variable":"ask"}}}` přepíše `gate.opaque` a **nechá být**
-`denyPatterns`, `allowedRemoveRoots` i `shapes`; `{"gate":{"denyPatterns":[]}}` naopak
-ten seznam vyprázdní celý. Důvod původního mělkého slučování tím drží — položku seznamu
-pořád nejde jen odebrat — jen kvůli jednomu klíči už nemizí zbytek objektu.
-Hlouběji než o jednu úroveň se **vědomě nejde**.
+`denyPatterns`, `allowedRemoveRoots` i `shapes`; `{"gate":{"denyPatterns":[]}}` by naopak
+ten seznam vyprázdnil celý — **od 0.3.0 ho ale odmítne kontrola obsahu (níže)**. Důvod
+původního mělkého slučování tím drží — položku seznamu pořád nejde jen odebrat — jen kvůli
+jednomu klíči už nemizí zbytek objektu. Hlouběji než o jednu úroveň se **vědomě nejde**.
+
+### Přepis smí bránu jen ZPŘÍSNIT — s pojmenovanými výjimkami `opaque` a `dbDestroyLocal` (od 0.3.0, H-c)
+
+Do 0.2.0 se obsah přepisu nekontroloval: `{"gate":{"denyPatterns":[]}}` vypnulo
+`git reset --hard` a `localDbHosts` s `db.firma.cz` udělalo ze vzdáleného serveru „lokální".
+Od 0.3.0 (`Z117-Q21`, Tom 2026-10-08) platí pravidla z `_overridePolicy` ve **výchozí**
+konfiguraci — čtou se před sloučením, takže je přepis sám změnit nemůže:
+
+| klíč přepisu | přijat, když |
+|---|---|
+| seznamy, jejichž přidání zpřísňuje (`gate.denyPatterns`, `askPatterns`, `rawDestructiveTokens`, `interpreterDestructiveTokens`, `sqlClients`, `shellInterpreters`, `codeInterpreters`, `remoteShells`, `protectedBranches`; `secrets.denyPathPatterns`, `askPathPatterns`, `selfProtectPathPatterns`, `protectedBaseNames`, `protectedPaths`, `pathCommands`, `writeCommands`) | obsahuje **všechny** výchozí položky |
+| seznamy, jejichž přidání povoluje (`gate.allowedRemoveRoots`, `secrets.dataHeredocHosts`) | jen **vybírá** z výchozích |
+| `gate.localDbHosts` | jen jména z pevné místní množiny v kódu: `localhost`, `127.0.0.1`, `::1`, `(local)`, `.`, `(localdb)\<instance>` |
+| `gate.opaque` | hodnoty `audit` / `ask`; `encoded` jen `ask` |
+| `secrets.envFile` | `denyNames` nadmnožina, `allowNames` podmnožina, `otherPolicy` beze změny |
+| `gate.dbDestroyLocal` | schéma níže |
+| `hooks`, `texts`, `notify`, `resumeCost`, klíče začínající `_` | beze změny |
+| cokoli jiného (`shapes`, `auditFile`, regexy jmen proměnných, neznámý klíč) | **odmítnuto** |
+
+**Režim selhání: odmítne se jen vadný klíč** — platí jeho výchozí hodnota, zbytek přepisu
+platí dál. Zahodit celý přepis by tiše zrušilo i jeho zpřísnění; zakázat vše by zamklo
+i session, která má přepis opravit. Odmítnutí je vidět: kanárek vypíše
+`· přepis: odmítnuto N klíčů (gate.denyPatterns, …)` a každé volání brány, které odmítnutý
+klíč potkalo, zapíše audit `config:overrideRejected:<klíč>` (jen jméno, nikdy hodnota).
+
+### Lokální destruktivní operace nad DB per projekt (`gate.dbDestroyLocal`, od 0.3.0, H-f)
+
+```jsonc
+{ "gate": { "dbDestroyLocal": { "decision": "allow", "databases": ["Hrms*"], "hosts": ["(localdb)\\MSSQLLocalDB"] } } }
+```
+
+Výchozí `{"decision":"ask","databases":[],"hosts":[]}` = chování 0.2.0. `deny` → lokální
+destruktivní operace `deny`. **`allow` = hook MLČÍ a zapíše audit `gate:dbDestroyLocal`**
+(bez jména DB, serveru i textu příkazu) — ne `permissionDecision: allow`; v headless běhu
+(`claude -p`) proto projekt potřebuje i vlastní pravidlo `permissions.allow`. `allow` platí
+**jen** pro příkaz, který jméno serveru i databáze nese sám (`Z117-Q19`; konfigurace projektu
+se nečte — může nést tajemství a mezi kontrolou a během se změnit):
+
+- `sqlcmd -S <server> -Q "[ALTER DATABASE [X] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;] DROP DATABASE [X]"`
+  — přepínače jen `-S`, `-Q`, `-E`, `-b`; jedno jméno; `EXEC`, dynamické SQL, `GO`, `USE`,
+  komentáře, druhý příkaz → `ask`;
+- `dotnet ef database drop --connection "Server=…;Database=…"` (EF Core 11+; na EF Core 10
+  `--connection` u `drop` neexistuje).
+
+Server: **právě jedna** hodnota ze synonym (`Server`, `Data Source`, `Address`, `Addr`,
+`Network Address`), v `hosts` **a** v pevné místní množině v kódu. Databáze: právě jedna
+hodnota (`Database` / `Initial Catalog`), vzor z `databases` (glob `*`/`?`) ukotvený na celé
+jméno bez ohledu na velikost písmen (`Hrms*` ≠ `ProdHrms`). Dvě hodnoty, proměnná, roura,
+přesměrování, prefix proměnné prostředí, argument za `--`, příkaz bez jména (`dotnet ef
+database drop` bez `--connection`), `dropdb`, `psql -c "DROP DATABASE …"` → `ask`. Vzdálený
+hostitel = `deny` vždy; `sqllocaldb delete` (smaže instanci i s DB) se `allow` netýká nikdy.
 
 <details>
 <summary>🔴 Do 0.1.10 to tak nebylo — a bylo to past (nález K2-1 review Amber)</summary>
@@ -181,6 +263,9 @@ Změřeno (0.1.10) s override `{"gate":{"opaque":{"variable":"audit"}}}`:
 blokovat běžnou práci, protože `allowedRemoveRoots` zmizely s ní. Pravidla, která žijí
 v kódu (rekurzivní mazání, DB podle hostitele), držela dál — proto se ta ztráta
 nepoznala podle toho, že by „přestalo fungovat všechno".
+ℹ️ Od 0.3.0 je u DB nastavitelné jen rozhodnutí o **lokální** destruktivní operaci
+(`gate.dbDestroyLocal`); „vzdálený = `deny`" zůstává v kódu a „místní" určuje pevná množina
+v kódu, ne přepisovatelné `localDbHosts`.
 
 Táž stavba je u `secrets` (nález Ada N43): `{"secrets":{"envFile":{…}}}` by zahodilo
 `denyPathPatterns`, tedy `id_rsa`, `.envrc` i `secrets.json`. Právě proto je oprava
@@ -223,12 +308,36 @@ aby si je nikdo nemusel objevit sám.
 1. **Skript volaný souborem je pro hook neprůhledný.** Hook vidí jen příkaz, který
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
    uvnitř byl `git reset --hard`. Obal s literálem (`bash -c "…"`) se rozebere,
-   obal se souborem ne.
+   obal se souborem ne. Od 0.3.0 obal rozebírají **oba** hooky touž funkcí (`Get-ShellWrapperBody` v `_common.ps1`,
+   `Z117-Q27`, `A117-N16`): `bash|sh|zsh -c`, `pwsh|powershell -Command`, `cmd /c` i za `sudo` / `env` / `&`, vnořeně;
+   `secrets` navíc dekóduje `-EncodedCommand` (nejde-li to — proměnná, vadný base64 — `ask`). Do 0.3.0 `bash -c 'cat .env'`
+   v hooku `secrets` mlčel. `Start-Process git -ArgumentList 'reset','--hard'` (pole bez závorek, druhý poziční argument,
+   zkratky `-f` / `-a`, `-Verb RunAs` před programem) gate od 0.3.0 složí (`A117-N18`).
+   ⚠️ **Mez 0.3.0 — rozbor obalu NENÍ úplný** (`Z117-Q29 = A`, Tom 2026-10-09: vydat bez dalších oprav, zbytek po jednom
+   nálezu ve verzi 0.3.1; review `2026-10-09-review-amber-117-delta-05.md`). Výčet výše jmenuje tvary, které se rozeberou;
+   neplatí „každý obal": část zápisů obalu, které shell skutečně spustí, sdílená funkce nerozpozná a oba hooky mlčí
+   (`A117-N29`); hook `secrets` nerozebírá literál předaný příkazům, které text spouštějí — gate ano (`A117-N30`); nad
+   stropem zanoření se tělo obalu nerozhoduje a nic se neptá (`A117-N31`).
    ➕ **A platí to i tehdy, když je ta cesta v proměnné** (0.1.11, nález Ada N49):
    `pwsh -File $p`, `bash $script` ani `Start-Process -FilePath 'pwsh' …
    -RedirectStandardOutput $log` nejsou spuštění obsahu proměnné — proměnná je tam
    **cesta**, ne kód. Rozdíl proti omezení 2 je právě tenhle: `-c $x` je kód, `-File $p`
    je soubor.
+   ➕ **0.3.0 (H-a, `Z117-Q17` = varianta 1):** `& $m` / `& "$sp\x.ps1"` / `. $m` v PowerShell
+   nástroji, kde **každá** proměnná hlavy má v **témže** příkazu **dřív** jediné přiřazení
+   **literálem** (řetězec bez proměnné; z `$env:` jen `LOCALAPPDATA`, `TEMP`, `TMP`,
+   `USERPROFILE`, `APPDATA`, `HOME`), se rozbalí a rozebere jako literální volání — tedy
+   přesně podle tohohle omezení (skript souborem mlčí; `$x = 'git'; & $x reset --hard` je
+   `deny`). Allow-list cest by nepokryl nic: tam, kde cestu brána zná, už mlčela. Nerozbaluje
+   se: druhé přiřazení téže proměnné kdekoli (i v bloku, `[ref]`, `-OutVariable`, `foreach`),
+   přiřazení v bloku nebo až po volání, statement, který **zapisuje** a proměnnou, literál
+   nebo jméno skriptu jmenuje (`Set-Content $p …; & $p` — soubor se změní po kontrole), obal,
+   který text spouští (`iex $x`, `Start-Process $x`, `bash -c "$x"`), a Bash nástroj — tam
+   všechno zůstává `invoked` (`ask`). ⚠️ **Co to uvolňuje i bez přepisu** (`A117-N9`): destruktivní ocas
+   v proměnné nebo poli (`$x = 'git'; & $x $y --hard`, `& $x @('reset','--hard')`) mlčí stejně jako literální
+   `git $y --hard` už v 0.2.0 (proměnná v argumentu = audit) — v 0.2.0 se ptal jako `invoked`. Nad 46 příkazy s proměnnou v hlavě z transkriptů GSD
+   (2026-09-05 → 10-06): 0.2.0 bez přepisu 45 `ask`, 0.3.0 bez přepisu **3 `ask`** (2× skript,
+   který sám sebe přepíše, 1× hlava v jednoduchých uvozovkách).
 2. **Obal, ve kterém se obsah proměnné SPUSTÍ, končí `ask`; hodnota a výraz končí
    auditem.** Od 0.1.11 (nález Ada N34, volba **(i)**) je rozlišovač ten, který se
    celou dobu tvrdil: rozhoduje, jestli se obsah proměnné **provede jako kód**.
@@ -328,9 +437,15 @@ aby si je nikdo nemusel objevit sám.
    dotazem. Cena je **různá podle interpretu** (`N40`): Bash `*` **nerozvíjí** soubory
    začínající tečkou, takže `cat *` v kořeni repa `.env` **nepřečte**; PowerShell
    (`Get-Content *`, `.en?`) ano — tam má mez v repu se secrety v `.env` konkrétní cenu.
-   🔴 **Pro shellové tvary druhá vrstva neexistuje** (`N32`, revize Ady): `permissions.deny`
-   kryje jen nástroj `Read` — na `cat *` z definice nedosáhne, a to byl přesně důvod, proč
-   byla `C1` skutečná regrese; auto-mode klasifikátor není pravidlo, na které se dá spoléhat
+   🔴 **Pro glob druhá vrstva neexistuje** (`N32`, revize Ady; **přeměřeno v 0.3.0**, H-d):
+   pravidlo `permissions.deny` `Read(./.env)` Claude Code (2.1.286) zastaví v PowerShell
+   nástroji **přímé** `cat .env` i `Get-Content .env`, ale **ne** `Get-Content .en?`,
+   `head -1 .env`, `sed -n 1p .env` ani `Get-Content (Get-ChildItem … "*.env")` — změřeno
+   návnadou (falešný soubor v dočasné složce, pravidlo jen v `--settings` běhu, bez
+   uživatelského nastavení; Bash nástroj v tom běhu k dispozici nebyl, takže **nezměřen**).
+   Věta *„`permissions.deny` kryje jen nástroj `Read`"* do 0.2.0 tak byla příliš silná pro
+   přímé čtení, ale na `cat *` / `.en?` druhá vrstva opravdu nedosáhne — a to byl přesně
+   důvod, proč byla `C1` skutečná regrese; auto-mode klasifikátor není pravidlo, na které se dá spoléhat
    (12 zásahů za měsíc, 0 za poslední tři sessions; z klasifikátoru nejde vyčíst, co
    zastaví). **Právě proto je u téhle meze spouštěč** — a má dvě cesty ven, ne jednu:
    ① fixture adresář u invariantu (varianta ① bodu 11, rozhodnutí závislé na disku),
@@ -479,14 +594,80 @@ aby si je nikdo nemusel objevit sám.
     `Set-Content`), ne příkazu — `cat ~/.claude/settings.json 2>/dev/null` už není „zápis
     do souboru, kterým se brána vypíná".
     ⚠️ **Mez zúžení:** soubor se secrets předaný **nelistovanému** čtecímu programu pod
-    jménem, které v `protectedBaseNames` není (`openssl -in private.pem`, `some-tool
-    config.pem`), od 0.2.0 projde. 🔴 **Rozdíl mezi `openssl -in server.key` (`deny`) a
-    `openssl -in private.pem` (projde) není v nástroji `openssl`, ale v seznamu jmen** (`N38`):
-    `server.key` v `protectedBaseNames` je, `private.pem` ne — „openssl je krytý" z toho
-    odvodit nelze. Rozšíření je konfigurace (`secrets.pathCommands` pro program,
-    `secrets.protectedBaseNames` pro jméno), ne kód.
+    jménem, které v `protectedBaseNames` není (`some-tool config.pem`), od 0.2.0 projde.
+    ✔️ **Od 0.3.0 jsou v `secrets.pathCommands` nástroje na klíče** (`Z117-Q6 = A`, Tom
+    2026-10-01): `openssl`, `ssh-keygen`, `keytool`, `certutil`, `gpg` — jejich poziční
+    argument se posuzuje širokým testem cesty, takže `openssl rsa -in private.pem`,
+    `ssh-keygen -y -f key.pem`, `keytool -list -keystore app.jks`, `certutil -dump cert.pfx`
+    i `gpg --decrypt x.gpg` jsou `deny`; `openssl version` a `ssh-keygen -t ed25519 -C x`
+    mlčí. Do 0.2.0 tu stálo, že rozdíl mezi `openssl -in server.key` (`deny`) a
+    `openssl -in private.pem` (projde) je v seznamu jmen, ne v nástroji (`N38`) — pro tyhle
+    nástroje to už neplatí; pro **ostatní** nelistované programy ano. Rozšíření je dál
+    konfigurace (`secrets.pathCommands` pro program, `secrets.protectedBaseNames` pro jméno).
+    ➕ **0.3.0 (`Z117-Q16`):** do pozice čtení patří i `@<cesta>` (`curl -d @.env`,
+    `-F f=@.env`, nález N-D) a token se strženou závorkou seskupení (`Get-Content
+    (Get-ChildItem .env)`, nález N-C); obsah `( … )` / `@( … )` se rozebírá jako podpříkaz.
     N14 drží: `< ~/.ssh/id_rsa`, `--file=~/.ssh/id_rsa`, cesta v rouře i přes `xargs`
     a heredoc pro `bash`/`python` s příkazem čtoucím secret jsou `deny` dál.
+23. **Jméno citlivé proměnné „jen jako text" je UZAVŘENÝ výčet** (0.3.0, H-g, `Z117-Q14`,
+    výčet `Z117-Q22`). Hook mlčí, jen když je **každý** výskyt jména (`$X`, `${X}`, `$env:X`,
+    `env:X`, `%X%`, `GetEnvironmentVariable("X")`) textem podle čtyř řádků: Bash `'…'`, Bash
+    `"…"` s `\$` (každý `$` v tom řetězci escapovaný), PowerShell `'…'` (i typografické
+    apostrofy, `''`), PowerShell `"…"` se `` `$ `` — a to **jen ve vzoru** `grep`/`egrep`/
+    `fgrep`/`rg`/`git grep` (první poziční argument nebo `-e`) a `Select-String` (`-Pattern`
+    nebo první poziční), s povolenými přepínači (`rg --pre`, `git grep --textconv` text
+    spustí), v **jediném** statementu bez seskupení, bloku a substituce, a s rourou jen do
+    programu, který nic nespouští (`head`, `tail`, `sort`, `uniq`, `wc`, `cut`, `Select-Object`,
+    `Sort-Object`, `Measure-Object`, `Out-Null`). Cokoli jiného — `echo`, vnořený shell, `eval`,
+    `sed …/e`, `envsubst`, `awk system()`, `xargs`, heredoc, here-string, smíšený řádek — je
+    jako 0.2.0 (`ask`). Pravidla uvozování: Bash manuál § Quoting, ShellCheck SC2016,
+    `about_Quoting_Rules`. ⚠️ **Mez, která zůstává** (`Z117-Q15`, otevřená třída): `awk
+    'BEGIN{print ENVIRON["API_KEY"]}'`, `python -c "…os.environ['API_KEY']…"`, `declare -p
+    DB_PASSWORD` hodnotu přečtou a hook **mlčí** — rozšíření detekce není výčet „jen text".
+    Dominantní příčina dotazů `envVarRead` (23 z 37 změřených) je **přiřazení** hodnoty
+    citlivé proměnné a její předání dětskému procesu — to H-g neřeší (kostra v GSD, `A117-O6`).
+24. **Jmenující výjimka posuzuje text, ne prostředí** (0.3.0, položka 7). `ls .env` mlčí,
+    protože `ls` jen vypíše jméno — za předpokladu, že `ls` je opravdu `ls`. Zastínění
+    v **témže** příkazu (funkce, alias, `PATH`, `source`, `Import-Module`, `hash -p`) výjimku
+    ruší; zastínění **dřívějším** příkazem téže session nebo profilem shellu hook nevidí —
+    shell drží stav mezi příkazy. Hlava s cestou (`./ls`, `C:\x\git.exe`) výčet není.
+25. **Ochrana konfigurace pluginu platí jen pro nainstalovanou kopii** (0.3.0, `Z117-Q23`). Rozhoduje text cesty
+    (`.claude/plugins/` v absolutní cestě, nebo `hooks/` právě běžícího pluginu), ne disk: junction ani symlink hook
+    nerozpozná; existující jméno 8.3 (`CLAUDE~1`) rozvine `GetFullPath`, takže se pozná (změřila Amber, `A117-N11`).
+    Zápis do vývojového klonu, který neběží, se neptá — chrání ho sady, review a tag.
+    **Cíl kopie / přesunu / přejmenování je od 0.3.0 zápis** (`Z117-Q25`; do 0.3.0 díra — `cp x .claude/settings.json`
+    mlčel): `-Destination` (i zkratky a `-Destination:`), `-t` / `--target-directory`, jinak poslední poziční argument;
+    adresářový cíl se skládá se jménem zdroje; když jméno zdroje určit nejde (glob, celý adresář, rekurze `-r`/`-a`/
+    `-Recurse`/`/E`/`/S`/`/MIR`, `x/.`), dosadí se do cílového adresáře každé chráněné jméno (`cp cfg/* .claude/` = `ask`,
+    `cp -r src dist` mlčí); `xcopy`, `robocopy` a `Rename-Item`/`ren` (adresář zdroje + nové jméno) taky (`A117-N15`).
+    Adresář se přesune / zkopíruje i **bez** přepínače rekurze — `mv src/.claude .`, `mv cfg .claude`, `Rename-Item cfg
+    .claude`, `xcopy cfg .claude /Y` (obsah adresáře) = `ask`; `cp` / `Copy-Item` bez rekurze adresář nepřenese. Cena:
+    `mv x.json .claude` se ptá — hook nepozná, jestli `.claude` existuje (jinak by šlo o přejmenování adresáře).
+    Za neznámé jméno zdroje platí i (`A117-N22`–`N24`): každá zkratka `-Recurse` v PowerShellu (`-r`, `-re` …; `-Recurse:$false`
+    rekurze není), zdroj z roury (`Get-ChildItem cfg | Copy-Item -Destination .claude`, `… | Rename-Item -NewName
+    settings.json` — nové jméno se zkusí ve všech chráněných adresářích), zdroj jako výraz nebo proměnná (`-Path (…)`, `$x`),
+    zástupné znaky `[…]` a Bash `{a,b}`. **Glob v cíli** (`cp x.json .claude/settings.js*`) se sonduje adresářem před prvním
+    segmentem se zástupným znakem — mez „glob v cíli" z kola 03 je tím zavřená. Rekurzivní kopie s neznámými jmény do
+    **kořene projektu nebo domova** (`cp -r ../sablona/. .`, `cp -r X/. ~`, `robocopy X . /E`, `Copy-Item X\* $HOME -Recurse`)
+    se ptá na `.claude/settings*.json`, `.claude/sinogard-hooks.json` a nainstalovanou kopii pod nimi; `cp -r src .` mlčí.
+    ⚠️ **Mez:** jiný předek chráněného adresáře (`cp -r X/. ..`, `cp -r X/. /c/Users`) se nesonduje — sonda `.claude/…` pod
+    každým cílem by ptala i u `cp -r src dist`. Seznam sondovaných jmen je pevný (`settings*.json`, `sinogard-hooks.json`,
+    `hooks.json`, `defaults.json`): jméno, které projekt přidá do `selfProtectPathPatterns` přepisem, chrání přímá kontrola,
+    sonda kopie s neznámým jménem zdroje ne (`A117-N27`).
+    **Zápisem jsou od 0.3.0 i** (`Z117-Q27 = B`, `A117-N17`): `install`, `ln -s`, `rsync` (zdroj `x/` = obsah adresáře),
+    `dd of=` (`dd if=` je čtení), `New-Item` / `ni` (i `-ItemType SymbolicLink|HardLink|Junction`, `-Name`), `mklink`,
+    `[IO.File]::Copy|Move|Replace` (cíl; zdroj je čtení) a `WriteAll*` / `AppendAll*` / `Create*` / `OpenWrite`, cíl
+    `(Join-Path …)` a `cmd /c copy|move` (obal se rozebere, omezení 1). Cíl, jehož adresář je proměnná nebo výraz a jméno
+    chráněné (`Copy-Item x (Join-Path $d settings.json)`), = `ask` (fail-closed).
+    ⚠️ **Mez, která zůstává:** skládání příkazů — `ls cfg/* | xargs cp -t .claude`, `find … -exec cp {} .claude/ \;`
+    (`A117-N25`; mimo `Z117-Q27`, rozhodla Amber `A117-O11`); cíl celý v proměnné bez chráněného jména (`cp x.json $T`);
+    `[IO.File]::…($p, …)` s cestou jen v proměnné.
+    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.3.1** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`):
+    odkaz nebo junction vytvořený **na místě** chráněného adresáře, kopie metodou souborového objektu a složená cesta
+    (`Join-Path`) u jiných zápisových příkazů než rodiny kopie (`A117-N32`); zápis chráněného souboru stahovacím,
+    rozbalovacím nebo verzovacím příkazem, shell, který čte příkazy ze vstupu, další obalové programy, alias gitu, který
+    spouští shell, a nepřímý zápis přes dříve založený odkaz (`A117-N33`); skládání příkazů výše (`A117-N25`) a pevný
+    seznam sondovaných jmen (`A117-N27`).
 
 ---
 
@@ -543,6 +724,12 @@ návratový kód i kódování, tedy přesně to, o čem sada tvrdí.
 
 Verdikt dává **souhrnný řádek** `N passed / N failed / N skipped`, ne návratový kód:
 pád uprostřed sady vypadá zvenčí jako červená, a přitom je to „neměřeno".
+
+Od 0.3.0 dostává každý běh hooku v sadě **prázdný projekt** (`CLAUDE_PROJECT_DIR`) a **žádný
+audit** (`CLAUDE_PLUGIN_DATA`), pokud si případ obojí neurčí sám. Do 0.2.0 bral hook projekt
+z `cwd` šablony, takže na stroji s repem GSD sada měřila jeho skutečný přepis místo výchozího
+chování. Případy TASK-117 žijí v `tests/fixtures/task117-{secrets,gate}.json` (řádek nese
+`expect`, volitelně přepis, režim a tvrzení o řádku auditu).
 
 ### Konvence: kontrolní skupina je fixtura, ne věta
 
