@@ -632,6 +632,9 @@ aby si je nikdo nemusel objevit sám.
     adresářový cíl se skládá se jménem zdroje; když jméno zdroje určit nejde (glob, celý adresář, rekurze `-r`/`-a`/
     `-Recurse`/`/E`/`/S`/`/MIR`, `x/.`), dosadí se do cílového adresáře každé chráněné jméno (`cp cfg/* .claude/` = `ask`,
     `cp -r src dist` mlčí); `xcopy`, `robocopy` a `Rename-Item`/`ren` (adresář zdroje + nové jméno) taky (`A117-N15`).
+    Adresář se přesune / zkopíruje i **bez** přepínače rekurze — `mv src/.claude .`, `mv cfg .claude`, `Rename-Item cfg
+    .claude`, `xcopy cfg .claude /Y` (obsah adresáře) = `ask`; `cp` / `Copy-Item` bez rekurze adresář nepřenese. Cena:
+    `mv x.json .claude` se ptá — hook nepozná, jestli `.claude` existuje (jinak by šlo o přejmenování adresáře).
     ⚠️ **Mez, která zůstává** (čeká na rozhodnutí Toma, `A117-N16`–`N17`): jiné zápisové příkazy — `install`, `ln -sf`,
     `rsync`, `dd of=`, `New-Item -ItemType SymbolicLink|HardLink`, `[IO.File]::Copy(…)`, cesta složená výrazem
     (`Join-Path`), `cmd /c copy` (omezení 15) — a obaly `bash -c '…'` / `pwsh -c "…"`, které `secrets` (na rozdíl od `gate`)

@@ -439,6 +439,7 @@ function Get-BraceSubcommand([string]$Text, [int]$Depth) {
 
 $script:CopyMoveExe = @('cp', 'copy', 'copy-item', 'cpi', 'mv', 'move', 'move-item', 'mi', 'xcopy')
 $script:RenameExe = @('rename-item', 'ren', 'rni')
+$script:MoveExe = @('mv', 'move', 'move-item', 'mi')
 # A117-N15 (Z117-Q25, delta review Amber 2026-10-09): kdyz jmeno zdroje NEJDE urcit (glob, cely adresar, rekurze
 # `-r`/`-R`/`-a`/`--recursive`/`-Recurse`/`/E`/`/S`/`/MIR`, zdroj `x/.` nebo `x/*`), kopie do adresare, ktery chraneny
 # soubor obsahuje (`.claude/`, kopie pluginu, `hooks/`, `hooks/config/`), ho muze prepsat - `cp cfg/* .claude/` mlcelo.
@@ -494,7 +495,10 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
         if ($src -eq '' -or $null -eq $newName) { return ,@($out) }
         $s2 = ($src -replace '\\', '/').TrimEnd('/')
         $dir = if ($s2.Contains('/')) { $s2.Substring(0, $s2.LastIndexOf('/')) } else { '' }
-        [void]$out.Add($(if ($dir -ne '') { $dir + '/' + $newName } else { $newName }))
+        $renamed = $(if ($dir -ne '') { $dir + '/' + $newName } else { $newName })
+        [void]$out.Add($renamed)
+        # zdroj muze byt adresar (`Rename-Item cfg .claude`) - jeho obsah se ocitne pod novym jmenem (A117-N15)
+        Add-ProtectedChildProbe $out $renamed
         return ,@($out)
     }
     $targets = New-Object System.Collections.ArrayList
@@ -522,8 +526,13 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
     }
     foreach ($tg in $targets) { [void]$out.Add([string]$tg) }
     $dirs = @($targets) + @($targetDirs)
+    # A117-N15 (adresarovy zdroj bez prepinace rekurze): `mv` / `move` / `Move-Item` presune adresar cely (`mv src/.claude .`,
+    # `mv cfg .claude`, kdyz `.claude` neexistuje); `xcopy cfg .claude` zkopiruje obsah `cfg` primo do cile. `cp` / `Copy-Item`
+    # bez rekurze adresar neprenese - tam rozhoduje jen rekurze.
+    $isMove = ($script:MoveExe -contains $Exe)
     foreach ($d in $dirs) {
-        $unknown = $recursive
+        $unknown = ($recursive -or $Exe -eq 'xcopy')
+        if ($isMove -and ((([string]$d) -replace '\\', '/').TrimEnd('/') -match '(^|/)(\.claude|hooks|config)$')) { $unknown = $true }
         foreach ($s in $sources) {
             $leaf = (([string]$s) -replace '\\', '/').TrimEnd('/')
             $leaf = $leaf.Substring($leaf.LastIndexOf('/') + 1)
@@ -533,7 +542,7 @@ function Get-CopyWriteTarget($Tokens, [string]$Exe) {
             $composed = ([string]$d).TrimEnd('/', '\') + '/' + $leaf
             [void]$out.Add($composed)
             # rekurzivni kopie adresare `x` do `d` vytvori `d/x/...` - sonda i tam (`cp -r src/.claude .`)
-            if ($recursive) { Add-ProtectedChildProbe $out $composed }
+            if ($recursive -or $isMove) { Add-ProtectedChildProbe $out $composed }
         }
         if ($unknown) { Add-ProtectedChildProbe $out ([string]$d) }
     }

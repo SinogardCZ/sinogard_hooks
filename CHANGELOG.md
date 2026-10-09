@@ -75,6 +75,8 @@ verze (`A117-O3`). Doklady: `docs/logs/mutants/task-117/` v repu GSD (výčet `0
 nejde (glob `cp cfg/* .claude/`, `cp *.json .claude/`, rekurze `cp -r cfg/. .claude`, `cp -r src/.claude .`,
 `Copy-Item -Path cfg\* -Destination .claude -Recurse`, `xcopy cfg .claude /E`, `robocopy cfg .claude /MIR` / `*.json`), a
 `Rename-Item` / `ren` na chráněné jméno → `ask` (do cíle se dosadí každé chráněné jméno); `cp -r src dist` dál mlčí.
+Adresář bez přepínače rekurze taky: `mv src/.claude .`, `mv cfg .claude`, `Move-Item cfg .claude`, `Rename-Item cfg .claude`,
+`xcopy cfg .claude /Y` → `ask`; cena: `mv x.json .claude` se ptá (hook nepozná, jestli cíl existuje).
 `\??\` (NT prefix) se strhne jako `\\?\` (`A117-N19`).
 ⚠️ Mez (čeká na rozhodnutí Toma, `A117-N16`–`N17`): `install`, `ln -sf`, `rsync`, `dd of=`, `New-Item` link, `[IO.File]::Copy`,
 `Join-Path` v cíli, `cmd /c copy` a obaly `bash -c` / `pwsh -c` v hooku `secrets` — zápis i čtení jimi mlčí (i v 0.2.0).

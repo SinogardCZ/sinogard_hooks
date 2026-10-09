@@ -6792,6 +6792,97 @@
       "since": "A117-N19 kontrola: Read \\??\\ bezny soubor -> ticho",
       "hook": "secrets",
       "kind": "path"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv src/.claude .",
+      "expect": "ask",
+      "since": "A117-N15 mv adresare src/.claude do . -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv cfg .claude",
+      "expect": "ask",
+      "since": "A117-N15 mv cfg .claude (prejmenovani adresare) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Move-Item cfg .claude",
+      "expect": "ask",
+      "since": "A117-N15 Move-Item cfg .claude -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Move-Item cfg -Destination C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config",
+      "expect": "ask",
+      "since": "A117-N15 Move-Item -Destination konfigurace pluginu -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Rename-Item cfg .claude",
+      "expect": "ask",
+      "since": "A117-N15 Rename-Item cfg .claude -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "xcopy cfg .claude /Y",
+      "expect": "ask",
+      "since": "A117-N15 xcopy cfg .claude bez /E (obsah adresare) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv x.json .claude",
+      "expect": "ask",
+      "since": "A117-N15 mv x.json .claude (cil muze byt prejmenovani) -> ask",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv a.txt dir/",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: mv a.txt dir/ -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "mv build dist",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: mv build dist -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Move-Item src -Destination dist",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: Move-Item src -Destination dist -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Rename-Item src lib",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: Rename-Item src lib -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "xcopy src dist /Y",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: xcopy src dist /Y -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Copy-Item cfg .claude",
+      "expect": "allow",
+      "since": "A117-N15 kontrola: Copy-Item cfg .claude bez -Recurse -> ticho",
+      "hook": "secrets"
     }
   ]
 }
