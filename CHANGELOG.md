@@ -3,6 +3,55 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.3.1] — 2026-10-18
+
+**TASK-179 (GSD): destruktivní DB příkaz uvnitř kontejnerového obalu — oprava DB části README omezení 11.** Zadání
+Amber v1.1 (`2026-10-18-zadani-task-179.md`, revize Grace `T179-N1`–`N12`), rozhodnutí `ZOPT-Q82`, `ZOPT-Q89` (Tom)
+a `AOPT-O22`–`O28` (Amber). Bezpečnostní oprava brány §6 → patch verze. Doklady: `docs/logs/mutants/task-179/` v repu GSD
+(krok 0 s tabulkami voleb CLI, červená fáze, mutanti).
+
+### Opraveno — díra 0.3.0 (všechny projekty na stroji)
+
+README omezení 11 tvrdilo, že destrukce databáze v kontejneru je krytá. Platilo to jen pro tělo heredocu a rouru do
+klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman` byl list bez SQL klienta).
+
+| třída tvaru | 0.3.0 | 0.3.1 |
+|---|---|---|
+| `docker\|podman exec\|run … <kontejner> psql\|sqlcmd … -c/-Q "<destruktivní SQL>"`, `dropdb`, `dotnet ef database drop`, `sqllocaldb delete` uvnitř — místní | ticho | `ask` (podle `gate.dbDestroyLocal`; `deny` → `deny`) |
+| totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`) | ticho | `deny` |
+| management podpříkaz `container exec\|run`, compose (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem (podman i za ním), `run --entrypoint`, `podman exec --latest\|--cidfile`, volby s hodnotou ve všech zápisech (`--x=h`, `-xh`, shluk `-iu h`, `--`) | ticho | jako řádky výše |
+| volba, kterou tabulka CLI nezná (čte se s hodnotou i bez) | ticho | jako řádky výše |
+| vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
+| heredoc a roura do klienta v kontejneru za globální volbou nebo management podpříkazem | ticho | jako řádky výše |
+| nerozebratelná hlava uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem | ticho | `ask` (tvar `dbDestroyContainerOpaque`) |
+| cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
+
+Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`).
+
+### Beze změny (kontrolní skupiny, `AOPT-O25`)
+
+- Mazání cest a destruktivní git **uvnitř** kontejneru: verdikt 0.3.0 (ticho), README omezení 11 — cestová část a její
+  spouštěč přehodnocení zůstávají. Obal za prefixem (`sudo docker exec …`) dál posuzuje vnitřní příkaz všemi pravidly jako v 0.3.0.
+- Hook **`secrets`: žádná změna verdiktu.** `_common.ps1` dostal nový rozbor kontejneru, ale `Get-WrapperTail` a volání
+  v `secrets.ps1` se nemění; sada `secrets` + kontrolní řádky `tests/fixtures/task179-secrets.json` (8) zelené.
+- Tentýž SQL bez kontejneru, tělo heredocu a roura do `docker exec -i … psql -h …` (už v 0.3.0 `deny`), `scripts/…ps1`
+  spuštěný souborem (README omezení 1): beze změny.
+- Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru.
+
+### Konfigurace
+
+Žádný nový klíč. Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace).
+
+### Testy
+
+`tests/fixtures/task179-gate.json` (105 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny),
+`tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0: 59 z 105 řádků gate červených ze správného důvodu
+(čekáno `ask`/`deny`, dostáno ticho). `Invoke-Task117Rows` bere předponu fixtury.
+
+### Meze TASK-161 přecházejí na 0.3.2
+
+Meze vydání 0.3.0 (`Z117-Q29`, README omezení 1 a 25) se opravují ve verzi **0.3.2** (GSD TASK-161), ne 0.3.1.
+
 ## [0.3.0] — 2026-10-08
 
 **TASK-117 (GSD): `secrets` jen u čtení obsahu, tři díry 0.2.0 zavřené, H-a–H-g.** Zadání

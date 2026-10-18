@@ -96,10 +96,57 @@ $script:NetDeleteTargetPattern = $script:NetDeleteCallHeads + '\(\s*[''"]([^''"]
 # OuterExe `sudo` resp. `docker`, ty nejsou v sqlClients, telo heredocu se proto vubec
 # nectlo jako SQL a destruktivni operace propadla na allow.
 function Get-UnwrappedExe([string]$Command) {
-    if ([string]::IsNullOrWhiteSpace($Command)) { return '' }
-    $tail = Get-WrapperTail (Split-Arguments $Command)
-    if ($tail.Count -eq 0) { return '' }
-    return (Get-ExecutableName ([string]$tail[0]))
+    return [string](Get-UnwrappedCommand $Command).Exe
+}
+
+# TASK-179 (0.3.1): uvozujici prikaz tela heredocu a cil roury. Pruchod obaly (Get-WrapperTail) zustava, jak byl - jeho verdikty
+# (vcetne shellu v kontejneru, `docker exec -i c sh <<EOF`) se nemeni (AOPT-O25). Kdyz ale NEnajde SQL klienta a prikaz je
+# kontejnerovy obal, rozhodne rozbor obalu (Get-ContainerCommand): `podman --connection x exec -i c psql <<SQL` daval do 0.3.0
+# jako klienta jmeno kontejneru a telo se necetlo jako SQL. Pak je hostitelsky text VNITRNI prikaz + promenne prostredi obalu
+# (AOPT-O26, ne volby obalu) a telo nese priznak Container (jen DB pravidlo, nikdy `allow` z gate.dbDestroyLocal).
+function Get-UnwrappedCommand([string]$Command) {
+    $res = @{ Exe = ''; Outer = $Command; Container = $false }
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $res }
+    $argv = Split-Arguments $Command
+    $tail = Get-WrapperTail $argv
+    if ($tail.Count -gt 0) { $res.Exe = Get-ExecutableName ([string]$tail[0]) }
+    if (@($script:SqlClients) -ccontains $res.Exe.ToLowerInvariant()) { return $res }
+    $ci = Get-ContainerIndex $argv
+    if ($ci -lt 0) { return $res }
+    $cc = Get-ContainerCommand @($argv[$ci..($argv.Count - 1)])
+    if ($null -eq $cc) { return $res }
+    foreach ($t0 in $cc.Tails) {
+        # Bez `@()` kolem volani: Get-WrapperTail vraci `,@(...)` (N-H10).
+        $t = Get-WrapperTail @($t0)
+        if ($t.Count -eq 0) { continue }
+        $exe = Get-ExecutableName ([string]$t[0])
+        if (@($script:SqlClients) -ccontains $exe.ToLowerInvariant()) {
+            return @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + (@($cc.Env) -join ' ')).Trim(); Container = $true }
+        }
+    }
+    return $res
+}
+
+# TASK-179 (0.3.1): listy VNITRNIHO prikazu kontejneroveho obalu (Get-ContainerCommand v _common.ps1). List obalu samotny
+# (`Exe = docker`) vznika dal beze zmeny, takze vsechna pravidla nad nim maji dnesni verdikt. Vnitrni listy nesou priznak
+# Container: Test-Leaf na ne pousti JEN DB pravidlo (AOPT-O25 - cesty a git v obrazu zustavaji README omezenim 11)
+# a `gate.dbDestroyLocal = allow` se jich nikdy netyka (AOPT-O26). Hostitel = vnitrni prikaz + promenne prostredi,
+# ktere obal predava (`-e PGHOST=...`), nikdy volby obalu (`-H` enginu, `run -h` hostname kontejneru).
+function Get-ContainerLeaves($Argv, [int]$Depth) {
+    $out = New-Object System.Collections.ArrayList
+    $cc = Get-ContainerCommand $Argv
+    if ($null -eq $cc) { return $out }
+    $envText = (@($cc.Env) -join ' ')
+    foreach ($t0 in $cc.Tails) {
+        $t = @($t0)
+        if ($t.Count -eq 0) { continue }
+        foreach ($l in (Get-CommandLeaf (Join-Argument $t) ($Depth + 1))) {
+            $l['Container'] = $true
+            $l['ContainerEnv'] = $envText
+            [void]$out.Add($l)
+        }
+    }
+    return $out
 }
 
 # Test-ParameterPrefix a Test-EncodedCommandFlag ziji od 0.3.0 v _common.ps1 (Z117-Q27, A117-N16).
@@ -138,7 +185,8 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
         if ($stages.Count -lt 2) { continue }
 
         $sink = $stages[$stages.Count - 1]
-        $sinkExe = Get-UnwrappedExe $sink
+        $sinkU = Get-UnwrappedCommand $sink
+        $sinkExe = [string]$sinkU.Exe
         if (-not ($SqlClients -ccontains $sinkExe.ToLowerInvariant())) { continue }
 
         $literal = New-Object System.Collections.ArrayList
@@ -158,9 +206,9 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
         }
 
         if ($opaque) {
-            [void]$bodies.Add(@{ Outer = $sink; OuterExe = $sinkExe; Body = ''; Opaque = $true })
+            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ''; Opaque = $true; Container = [bool]$sinkU.Container })
         } elseif ($literal.Count -gt 0) {
-            [void]$bodies.Add(@{ Outer = $sink; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false })
+            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false; Container = [bool]$sinkU.Container })
         }
     }
 
@@ -246,7 +294,8 @@ function Split-Heredoc([string]$Command) {
             }
             if ($j -ge $lines.Count) { $unterminated = $true }
             $myOuter = if ($d -lt $outerStages.Count) { [string]$outerStages[$d] } else { $outer }
-            [void]$bodies.Add(@{ Outer = $myOuter; OuterExe = (Get-UnwrappedExe $myOuter)
+            $myU = Get-UnwrappedCommand $myOuter
+            [void]$bodies.Add(@{ Outer = $myU.Outer; OuterExe = [string]$myU.Exe; Container = [bool]$myU.Container
                                  Body = ($bodyLines -join "`n") })
             $j++   # radek s ukoncovacim delimiterem se zahazuje
         }
@@ -386,7 +435,7 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     }
     foreach ($b in $hd.Bodies) {
         [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container })
     }
     # Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti.
     if ($hd.Unterminated) {
@@ -395,10 +444,10 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     foreach ($b in $pl.Bodies) {
         if ($b.Opaque) {
             [void]$out.Add(@{ Kind = 'sqlPipeOpaque'; Exe = 'sql-pipe'; Args = @(); Raw = $b.Outer
-                              Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+                              Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container })
         } else {
             [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                              Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+                              Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container })
         }
     }
     return $out
@@ -673,9 +722,20 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $exe = Get-ExecutableName $argv[0]
     $rest = Get-RestTokens $argv
+    # TASK-179: vnitrni prikaz kontejneroveho obalu - pripoji se ZA list obalu (ten zustava beze zmeny, viz Get-ContainerLeaves).
+    $containerLeaves = New-Object System.Collections.ArrayList
 
     switch -Regex ($exe) {
+        '^(docker|podman|docker-compose|podman-compose)$' {
+            foreach ($l in (Get-ContainerLeaves $argv $Depth)) { [void]$containerLeaves.Add($l) }
+        }
         '^(sudo|nice|nohup|time|doas|timeout|command|builtin|exec|env|stdbuf)$' {
+            # TASK-179: kontejnerovy obal za prefixem (`sudo docker --context x exec ...`). Pruchod nize (Get-WrapperTail) zustava
+            # dnesni - u tvaru, ktery jeho starsi kontejnerova vetev rozbali, dal posuzuje vnitrni prikaz VSEMI pravidly (0.3.0).
+            $ci = Get-ContainerIndex $argv
+            if ($ci -gt 0) {
+                foreach ($l in (Get-ContainerLeaves @($argv[$ci..($argv.Count - 1)]) $Depth)) { [void]$out.Add($l) }
+            }
             # Nalez Amber G2: tady stala DRUHA, chudsi kopie tabulky obalu. Vetev jen
             # spojila `$rest` a rekurzivne se zavolala, takze u obalu s prepinacem
             # BEROUCIM HODNOTU (`sudo -u root rm -rf /srv`, `nice -n 10 rm -rf src`,
@@ -926,6 +986,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     $text = ($exe + ' ' + ($args2 -join ' ')).Trim()
     [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @($args2); Raw = $raw; Text = $text
                       GitConfig = @($gitConfig) })
+    foreach ($l in $containerLeaves) { [void]$out.Add($l) }
     return $out
 }
 
@@ -1363,6 +1424,30 @@ function Test-UpdateWithoutWhere([string]$Sql) {
     return $false
 }
 
+# Destruktivni mnozina SQL pravidla (AOPT-O24 = mnozina Test-DatabaseRule na 245a0fe): DROP TABLE|DATABASE|SCHEMA, TRUNCATE,
+# DELETE a UPDATE bez WHERE. Od 0.3.1 jedna funkce - vola ji Test-DatabaseRule i Test-ContainerLeaf (TASK-179).
+# `(?:\s|/\*.*?\*/)+` misto `\s+`: nalez Metis 17 - SQL bere blokovy komentar jako bily znak.
+function Test-DestructiveSql([string]$Sql) {
+    if ([string]::IsNullOrWhiteSpace($Sql)) { return $false }
+    return ([regex]::IsMatch($Sql, '\bdrop(?:\s|/\*.*?\*/)+(table|database|schema)\b', 'IgnoreCase')) -or
+           ([regex]::IsMatch($Sql, '\btruncate\b', 'IgnoreCase')) -or
+           (Test-DeleteWithoutWhere $Sql) -or
+           (Test-UpdateWithoutWhere $Sql)
+}
+
+# TASK-179 (clen tridy M-d): text uvnitr kontejneru, ktery nejde rozebrat (promenna v hlave `sh -c "$PSQL -c '...'"`),
+# ale destruktivni DB literal v nem VIDET JE. Na hostiteli by takovy tvar skoncil `invoked` = ask; uvnitr kontejneru
+# plati jen DB pravidlo (AOPT-O25), takze se pta jen tehdy, kdyz text nese celou destruktivni DB mnozinu - SQL i jmena
+# programu (`dropdb`, `dotnet ef database drop`, `sqllocaldb delete`).
+function Test-DbDestructiveText([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    if (Test-DestructiveSql $Text) { return $true }
+    if ([regex]::IsMatch($Text, '(?:^|[\s;|&(''"/\\])dropdb(?:\.exe)?(?:\s|$|[''";|&)])', 'IgnoreCase')) { return $true }
+    if ([regex]::IsMatch($Text, '\bdotnet[- ]ef(?:\s|/\*.*?\*/)+database(?:\s|/\*.*?\*/)+drop\b', 'IgnoreCase')) { return $true }
+    if ([regex]::IsMatch($Text, '\bsqllocaldb(?:\.exe)?\s+(?:delete|d)\b', 'IgnoreCase')) { return $true }
+    return $false
+}
+
 # Nalez Ada N20: je v prikazu presmerovani stdin s NELITERALNIM operandem?
 #
 # !! Regexem to nejde: `psql -c "SELECT * FROM t WHERE a < 5"` ma `<` UVNITR retezce
@@ -1528,7 +1613,8 @@ function Test-DatabaseRule($Leaf, $Config) {
     $raw = $Leaf.Raw
 
     # Hostitel se cte i z UVOZUJICIHO prikazu - u tela heredocu stoji jen tam (A4).
-    $hostText = [string]$raw + ' ' + [string](Get-LeafField $Leaf 'Outer' '')
+    # TASK-179: u vnitrniho prikazu kontejneru i z promennych prostredi, ktere mu obal predava (`-e PGHOST=...`, AOPT-O26).
+    $hostText = [string]$raw + ' ' + [string](Get-LeafField $Leaf 'Outer' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')
 
     $sql = Get-SqlText $Leaf $sqlClients
 
@@ -1554,12 +1640,7 @@ function Test-DatabaseRule($Leaf, $Config) {
     $sqlVisible = ($sql -replace '__SQL_ZE_SOUBORU__', ' ').Trim()
 
     $sqlDestructive = $false
-    if ($sqlVisible -ne '') {
-        $sqlDestructive = ([regex]::IsMatch($sqlVisible, ('\bdrop' + $gap + '(table|database|schema)\b'), 'IgnoreCase')) -or
-                          ([regex]::IsMatch($sqlVisible, '\btruncate\b', 'IgnoreCase')) -or
-                          (Test-DeleteWithoutWhere $sqlVisible) -or
-                          (Test-UpdateWithoutWhere $sqlVisible)
-    }
+    if ($sqlVisible -ne '') { $sqlDestructive = Test-DestructiveSql $sqlVisible }
 
     # !! Nalez Amber A-1 (kolo 1 nad 01afb82): prvni oprava N28 zavrela bypass jen pro
     # SQL v TEXTU. Destruktivnost ale nese jeste DVA zdroje, ktere s textem nemaji nic
@@ -1630,7 +1711,9 @@ function Test-DatabaseRule($Leaf, $Config) {
             return @{ Id = 'dbDestroyLocalDenied'; Decision = 'deny'
                       Shape = (Get-Field $shapes 'dbDestroyLocalDenied' 'DB (gate.dbDestroyLocal = deny)') }
         }
-        if ($dlDecision -eq 'allow' -and -not $localDbDelete -and (Test-DbDestroyLocalAllowed $Leaf $dl)) {
+        # TASK-179 (AOPT-O26): tvar uvnitr kontejneru nikdy `allow` - ani kdyz jeho vnitrni text je doslova povoleny statement.
+        if ($dlDecision -eq 'allow' -and -not $localDbDelete -and -not [bool](Get-LeafField $Leaf 'Container' $false) -and
+            (Test-DbDestroyLocalAllowed $Leaf $dl)) {
             # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
             # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
             Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
@@ -1741,9 +1824,51 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
               Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
 }
 
+# TASK-179 (0.3.1, AOPT-O25): list VNITRNIHO prikazu kontejneroveho obalu posuzuje JEN DB pravidlo. Cesty a git v obrazu
+# zustavaji README omezenim 11 (TASK-106 bod 3) - list obalu samotny jde dal beznou cestou s dnesnim verdiktem.
+function Test-ContainerLeaf($Leaf, $Config) {
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+    $kind = [string](Get-LeafField $Leaf 'Kind' '')
+    if ($kind -eq 'leaf') { return (Test-DatabaseRule $Leaf $Config) }
+    if ($kind -eq 'heredoc') {
+        $oe = ([string](Get-LeafField $Leaf 'OuterExe' '')).ToLowerInvariant()
+        if (@(Get-Field $gate 'sqlClients' @()) -ccontains $oe) { return (Test-DatabaseRule $Leaf $Config) }
+        $shells = @(Get-Field $gate 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
+        if ($shells -ccontains $oe) {
+            $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
+            $worst = $null
+            foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
+                $inner['Container'] = $true
+                $inner['ContainerEnv'] = [string](Get-LeafField $Leaf 'ContainerEnv' '')
+                $r = Test-ContainerLeaf $inner $Config
+                if ($null -eq $r) { continue }
+                if ($r.Decision -eq 'deny') { return $r }
+                if ($null -eq $worst) { $worst = $r }
+            }
+            return $worst
+        }
+        return $null
+    }
+    if ($kind -eq 'sqlPipeOpaque') {
+        # Tataz udalost jako na hostiteli (T-10 A): SQL z roury nevidime -> audit a ticho.
+        Write-GateAudit $script:ToolName 'sqlFromPipe' 'allow' $Config
+        return $null
+    }
+    if ($kind -eq 'opaque') {
+        if ((Test-DbDestructiveText ([string]$Leaf.Raw)) -or (Test-DbDestructiveText ([string](Get-LeafField $Leaf 'Body' '')))) {
+            return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
+                      Shape = (Get-Field $shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
+        }
+    }
+    return $null
+}
+
 function Test-Leaf($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
+
+    if ([bool](Get-LeafField $Leaf 'Container' $false)) { return (Test-ContainerLeaf $Leaf $Config) }
 
     if ($Leaf.Kind -eq 'opaque') {
         # N39: chybejici `Why` NESMI tise dedit politiku `variable` (dnes `audit`) -

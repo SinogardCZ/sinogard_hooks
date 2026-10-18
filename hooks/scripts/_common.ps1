@@ -1043,6 +1043,231 @@ function Get-WrapperTail($Argv, [int]$Depth = 0) {
     return ,@($arr[$i..($arr.Count - 1)])
 }
 
+# ------------------------------------------- kontejnerovy obal (TASK-179, 0.3.1) ---
+# TASK-179 (0.3.1; AOPT-O24 az O27, Amber 2026-10-18): `docker|podman exec|run` byl pro gate obycejny list s Exe `docker`,
+# DB pravidlo v nem nenaslo SQL klienta a destruktivni prikaz uvnitr kontejneru MLCEL - i proti vzdalenemu hostiteli
+# (pripady 17-24). Rozbor obalu proto zije tady: globalni volby, `exec|run`, management `container exec|run` a compose
+# (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`). Tabulky voleb s hodnotou jsou z dokumentace
+# docker/cli v29.9.0, docker/compose v5.6.0, podman v6.1.3 (+ nainstalovany 5.5.2) a podman-compose 1.6.0 (krok 0).
+# Volba, kterou tabulka nezna (budouci verze CLI), muze a nemusi brat hodnotu - rozbor proto vrati OBA kandidaty
+# vnitrniho prikazu, smerem k prisnosti (clen tridy M-c).
+# !! Get-WrapperTail se tim NEMENI (AOPT-O25): jeho starsi kontejnerova vetev drzi dnesni verdikt hooku secrets i cestovych
+# a git pravidel za prefixovym obalem (`sudo docker exec ...`). Tahle funkce slouzi jen DB pravidlu gate (README omezeni 11).
+$script:ContainerCli = '^(docker|podman|docker-compose|podman-compose)$'
+
+function New-ContainerOptionTable([string]$ValueLong, [string]$ValueShort, [string]$BoolLong, [string]$BoolShort) {
+    # Kratke volby jsou case-SENSITIVNI (`-H` host enginu x `-h` hostname kontejneru) - proto Ordinal, ne hashtable.
+    $t = @{}
+    foreach ($k in @('VL', 'VS', 'BL', 'BS')) { $t[$k] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal) }
+    foreach ($x in ($ValueLong -split '\s+')) { if ($x -ne '') { [void]$t['VL'].Add($x) } }
+    foreach ($x in ($ValueShort -split '\s+')) { if ($x -ne '') { [void]$t['VS'].Add($x) } }
+    foreach ($x in ($BoolLong -split '\s+')) { if ($x -ne '') { [void]$t['BL'].Add($x) } }
+    foreach ($x in ($BoolShort -split '\s+')) { if ($x -ne '') { [void]$t['BS'].Add($x) } }
+    return $t
+}
+
+function Join-ContainerOptionTable($A, $B) {
+    $t = @{}
+    foreach ($k in @('VL', 'VS', 'BL', 'BS')) {
+        $t[$k] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($x in $A[$k]) { [void]$t[$k].Add($x) }
+        foreach ($x in $B[$k]) { [void]$t[$k].Add($x) }
+    }
+    return $t
+}
+
+# Tabulky se stavi az pri prvnim kontejnerovem obalu - dot-source _common.ps1 plati kazdy beh obou hooku (i secrets,
+# ktery je nepouziva), takze bezny prikaz bez kontejneru je stavet nema.
+$script:CtDockerGlobal = $null
+function Initialize-ContainerOptionTables {
+$script:CtDockerGlobal = New-ContainerOptionTable 'config context host log-level tlscacert tlscert tlskey' 'c H l' 'debug tls tlsverify help version' 'D v'
+# Globalni volby podmana jsou "persistent" - smeji stat i za podprikazem, proto se pridavaji i k tabulkam `exec` a `run`.
+$script:CtPodmanGlobal = New-ContainerOptionTable ('cdi-spec-dir cgroup-manager config conmon connection events-backend hooks-dir identity imagestore ' +
+    'log-level module network-config-dir out root runroot runtime runtime-flag ssh storage-driver storage-opt tls-ca tls-cert tls-details ' +
+    'tls-key tmpdir url volumepath') 'c' 'remote syslog transient-store help version' 'r v'
+$script:CtDockerExec = New-ContainerOptionTable 'detach-keys env env-file user workdir' 'e u w' 'detach interactive privileged tty' 'd i t'
+$script:CtPodmanExec = Join-ContainerOptionTable (New-ContainerOptionTable 'cidfile detach-keys env env-file preserve-fd preserve-fds user workdir' 'e u w' 'detach interactive latest no-session privileged tty' 'd i l t') $script:CtPodmanGlobal
+$script:CtDockerRun = New-ContainerOptionTable ('add-host annotation attach blkio-weight blkio-weight-device cap-add cap-drop cgroup-parent cgroupns cidfile ' +
+    'cpu-count cpu-percent cpu-period cpu-quota cpu-rt-period cpu-rt-runtime cpu-shares cpus cpuset-cpus cpuset-mems detach-keys device ' +
+    'device-cgroup-rule device-read-bps device-read-iops device-write-bps device-write-iops dns dns-option dns-search domainname entrypoint ' +
+    'env env-file expose group-add health-cmd health-interval health-retries health-start-interval health-start-period health-timeout ' +
+    'hostname io-maxbandwidth io-maxiops ip ip6 ipc isolation label label-file link link-local-ip log-driver log-opt mac-address memory ' +
+    'memory-reservation memory-swap memory-swappiness mount name network network-alias oom-score-adj pid pids-limit platform publish pull ' +
+    'restart runtime security-opt shm-size stop-signal stop-timeout storage-opt sysctl tmpfs ulimit umask user userns uts volume ' +
+    'volume-driver volumes-from workdir') 'a c e h l m p u v w' ('detach help init interactive no-healthcheck oom-kill-disable privileged ' +
+    'publish-all quiet read-only rm sig-proxy tty use-api-socket') 'd i P q t'
+$script:CtPodmanRun = Join-ContainerOptionTable (New-ContainerOptionTable ('add-host annotation arch attach authfile blkio-weight ' +
+    'blkio-weight-device cap-add cap-drop cgroup-conf cgroup-parent cgroupns cgroups chrootdirs cidfile conmon-pidfile cpu-period cpu-quota ' +
+    'cpu-rt-period cpu-rt-runtime cpu-shares cpus cpuset-cpus cpuset-mems decryption-key detach-keys device device-cgroup-rule ' +
+    'device-read-bps device-read-iops device-write-bps device-write-iops dns dns-option dns-search entrypoint env env-file env-merge expose ' +
+    'gidmap gpus group-add group-entry health-cmd health-interval health-log-destination health-max-log-count health-max-log-size ' +
+    'health-on-failure health-retries health-start-period health-startup-cmd health-startup-interval health-startup-retries ' +
+    'health-startup-success health-startup-timeout health-timeout hostname hosts-file hostuser image-volume init-path ip ip6 ipc label ' +
+    'label-file log-driver log-opt mac-address memory memory-reservation memory-swap memory-swappiness mount name network network-alias ' +
+    'oom-score-adj os passwd-entry personality pid pidfile pids-limit platform pod pod-id-file preserve-fd preserve-fds publish pull ' +
+    'rdt-class requires restart retry retry-delay sdnotify seccomp-policy secret security-opt shm-size shm-size-systemd stop-signal ' +
+    'stop-timeout subgidname subuidname sysctl systemd timeout tmpfs tz uidmap ulimit umask unsetenv user userns uts variant volume ' +
+    'volumes-from workdir') 'a c e h l m p u v w' ('detach disable-content-trust help http-proxy init interactive no-healthcheck no-hostname ' +
+    'no-hosts oom-kill-disable passwd privileged publish-all quiet read-only read-only-tmpfs replace rm rmi rootfs sig-proxy tls-verify tty ' +
+    'unsetenv-all') 'd i P q t') $script:CtPodmanGlobal
+# compose: docker compose v5.6.0 a podman-compose 1.6.0 v jedne tabulce (`podman compose` predava volby providerovi).
+$script:CtComposeGlobal = New-ContainerOptionTable ('ansi env-file file parallel profile progress project-directory project-name in-pod ' +
+    'pod-args podman-path podman-args podman-pull-args podman-push-args podman-build-args podman-inspect-args podman-run-args ' +
+    'podman-start-args podman-stop-args podman-rm-args podman-volume-args') 'f p' ('all-resources compatibility dry-run no-ansi no-cleanup ' +
+    'verbose help version') 'v'
+$script:CtComposeExec = New-ContainerOptionTable 'env index user workdir' 'e u w' 'detach dry-run no-tty privileged help' 'd T'
+$script:CtComposeRun = New-ContainerOptionTable 'cap-add cap-drop entrypoint env env-from-file label name publish pull user volume workdir' 'e l p u v w' ('build detach dry-run interactive no-deps no-tty quiet quiet-build quiet-pull remove-orphans rm ' +
+    'service-ports use-aliases help') 'd i q P T'
+}
+
+# Jedna volba na pozici $I (pflag: `--x=hodnota`, `--x hodnota`, shluk `-abc`, v nemz prvni pismeno s hodnotou vezme zbytek
+# tokenu nebo dalsi token). Vraci 1 nebo vic moznych cteni @{ I = dalsi pozice; Name; Value } - vic jen u volby, kterou
+# tabulka nezna (bere hodnotu? nevime -> obe cteni).
+function Read-ContainerOption($Arr, [int]$I, $Table) {
+    $out = New-Object System.Collections.ArrayList
+    $t = [string]$Arr[$I]
+    $hasNext = ($I + 1) -lt $Arr.Count
+    $next = if ($hasNext) { [string]$Arr[$I + 1] } else { '' }
+    if ($t.StartsWith('--')) {
+        $body = $t.Substring(2)
+        $eq = $body.IndexOf('=')
+        if ($eq -ge 0) {
+            [void]$out.Add(@{ I = $I + 1; Name = $body.Substring(0, $eq); Value = $body.Substring($eq + 1) })
+            return ,@($out)
+        }
+        if ($Table['VL'].Contains($body)) {
+            [void]$out.Add(@{ I = $I + 2; Name = $body; Value = $next })
+            return ,@($out)
+        }
+        [void]$out.Add(@{ I = $I + 1; Name = $body; Value = $null })
+        if (-not $Table['BL'].Contains($body) -and $hasNext) { [void]$out.Add(@{ I = $I + 2; Name = $body; Value = $next }) }
+        return ,@($out)
+    }
+    $letters = $t.Substring(1)
+    for ($k = 0; $k -lt $letters.Length; $k++) {
+        $c = [string]$letters[$k]
+        $rest = $letters.Substring($k + 1)
+        $known = $Table['VS'].Contains($c)
+        if ($known -or -not $Table['BS'].Contains($c)) {
+            # Pismeno s hodnotou (nebo nezname - pak je to jedno ze dvou cteni): hodnota je zbytek tokenu, jinak dalsi token.
+            if ($rest -ne '') { [void]$out.Add(@{ I = $I + 1; Name = $c; Value = $rest.TrimStart('=') }) }
+            elseif ($hasNext) { [void]$out.Add(@{ I = $I + 2; Name = $c; Value = $next }) }
+            else { [void]$out.Add(@{ I = $I + 1; Name = $c; Value = '' }) }
+            if ($known) { return ,@($out) }
+        }
+    }
+    # Cely shluk jako prepinace bez hodnoty (u nezname volby druhe cteni).
+    [void]$out.Add(@{ I = $I + 1; Name = ''; Value = $null })
+    return ,@($out)
+}
+
+# Rozbor kontejneroveho obalu. $Argv[0] je CLI (docker, podman, docker-compose, podman-compose). Vraci $null (neni obal)
+# nebo @{ Tails = kandidati vnitrniho prikazu (ARGV); Env = hodnoty `-e/--env` predane vnitrnimu prikazu }. Prazdne
+# Tails = obal bez vnitrniho prikazu (`docker ps`, `docker compose up`, `docker run img` s vychozim prikazem obrazu).
+function Get-ContainerCommand($Argv) {
+    $arr = @(@($Argv) | ForEach-Object { [string]$_ })
+    if ($arr.Count -eq 0) { return $null }
+    $cli = Get-ExecutableName $arr[0]
+    if ($cli -notmatch $script:ContainerCli) { return $null }
+    if ($null -eq $script:CtDockerGlobal) { Initialize-ContainerOptionTables }
+    $isPodman = $cli.StartsWith('podman')
+    $tails = New-Object System.Collections.ArrayList
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    $envs = New-Object System.Collections.ArrayList
+    $queue = New-Object System.Collections.Queue
+    $first = if ($cli.EndsWith('compose')) { 'cglobal' } else { 'global' }
+    $queue.Enqueue(@{ I = 1; Stage = $first; Sub = ''; Entry = $null; NoTarget = $false; Positional = $false })
+    $budget = 256
+    while ($queue.Count -gt 0) {
+        $s = $queue.Dequeue()
+        $budget--
+        if ($budget -lt 0) {
+            # Patologicky mnoho neznamych voleb: kazda pozice za CLI je kandidat (fail-closed smerem k prisnosti).
+            for ($p = 1; $p -lt $arr.Count; $p++) {
+                $tl = @($arr[$p..($arr.Count - 1)])
+                if ($keys.Add((Join-Argument $tl))) { [void]$tails.Add($tl) }
+            }
+            break
+        }
+        $i = [int]$s.I
+        while ($i -lt $arr.Count) {
+            $tok = $arr[$i]
+            $table = switch ([string]$s.Stage) {
+                'global'  { if ($isPodman) { $script:CtPodmanGlobal } else { $script:CtDockerGlobal } }
+                'mgmt'    { if ($isPodman) { $script:CtPodmanGlobal } else { $script:CtDockerGlobal } }
+                'cglobal' { $script:CtComposeGlobal }
+                'sub'     { if ($s.Sub -eq 'exec') { if ($isPodman) { $script:CtPodmanExec } else { $script:CtDockerExec } }
+                            else { if ($isPodman) { $script:CtPodmanRun } else { $script:CtDockerRun } } }
+                'csub'    { if ($s.Sub -eq 'exec') { $script:CtComposeExec } else { $script:CtComposeRun } }
+            }
+            if (-not $s.Positional -and $tok -eq '--') { $s.Positional = $true; $i++; continue }
+            if (-not $s.Positional -and $tok.Length -gt 1 -and $tok.StartsWith('-')) {
+                # Bez `@()`: funkce vraci `,@(...)`, dalsi `@()` by pole zabalil podruhe (tataz past jako Split-Pipe, N-H10).
+                $reads = Read-ContainerOption $arr $i $table
+                for ($r = 0; $r -lt $reads.Count; $r++) {
+                    $rd = $reads[$r]
+                    $st = if ($r -eq 0) { $s } else { $s.Clone() }
+                    $nm = [string]$rd.Name
+                    if ($null -ne $rd.Value) {
+                        if ($nm -ceq 'e' -or $nm -ceq 'env') { [void]$envs.Add([string]$rd.Value) }
+                        if ($nm -ceq 'entrypoint') { $st.Entry = [string]$rd.Value }
+                    }
+                    # `podman exec --latest|-l|--cidfile` bere kontejner odjinud - prvni pozicni token je uz vnitrni prikaz (M-b).
+                    if ($isPodman -and $st.Stage -eq 'sub' -and $st.Sub -eq 'exec') {
+                        if ($nm -ceq 'cidfile' -or ($nm -ceq 'latest' -and [string]$rd.Value -ne 'false')) { $st.NoTarget = $true }
+                        if (-not $tok.StartsWith('--')) {
+                            # Shluk kratkych voleb: `l` pred prvnim pismenem s hodnotou (`-il`, `-lu root`).
+                            foreach ($ch in $tok.Substring(1).ToCharArray()) {
+                                if ([string]$ch -ceq 'l') { $st.NoTarget = $true; break }
+                                if ($table['VS'].Contains([string]$ch)) { break }
+                            }
+                        }
+                    }
+                    if ($r -gt 0) { $st.I = [int]$rd.I; $queue.Enqueue($st) }
+                }
+                $i = [int]$reads[0].I
+                continue
+            }
+            # Pozicni token: podprikaz, nebo cil (kontejner / obraz / sluzba), za kterym stoji vnitrni prikaz.
+            $stage = [string]$s.Stage
+            if ($stage -eq 'global' -or $stage -eq 'mgmt' -or $stage -eq 'cglobal') {
+                $s.Positional = $false
+                if ($tok -ceq 'exec' -or $tok -ceq 'run') { $s.Sub = $tok; $s.Stage = $(if ($stage -eq 'cglobal') { 'csub' } else { 'sub' }); $i++; continue }
+                if ($stage -eq 'global' -and $tok -ceq 'container') { $s.Stage = 'mgmt'; $i++; continue }
+                if ($stage -eq 'global' -and $tok -ceq 'compose') { $s.Stage = 'cglobal'; $i++; continue }
+                break   # jiny podprikaz (ps, logs, volume, up ...) - vnitrni prikaz nema
+            }
+            # Bez cile (`--latest`) je vnitrni prikaz uz tenhle token; obe cteni se vraci, kdyby `l` patrilo nezname volbe.
+            $starts = if ($s.NoTarget) { @($i, ($i + 1)) } else { @($i + 1) }
+            foreach ($from in $starts) {
+                $tl = New-Object System.Collections.ArrayList
+                if ($null -ne $s.Entry -and $s.Sub -eq 'run' -and ([string]$s.Entry).Trim() -ne '') {
+                    foreach ($x in (Split-Arguments ([string]$s.Entry))) { [void]$tl.Add([string]$x) }
+                }
+                for ($p = $from; $p -lt $arr.Count; $p++) { [void]$tl.Add($arr[$p]) }
+                if ($tl.Count -gt 0 -and $keys.Add((Join-Argument @($tl)))) { [void]$tails.Add(@($tl)) }
+            }
+            break
+        }
+    }
+    return @{ Tails = @($tails); Env = @($envs) }
+}
+
+# Index kontejneroveho CLI v ARGV, ktere stoji v POZICI PRIKAZU za prefixovymi obaly (`sudo`, `env`, `timeout 60`, ...),
+# nebo -1. Pozici rozhoduje tentyz pruchod jako vsude (Get-WrapperTail): CLI je v pozici prikazu, kdyz pruchod
+# predpony konci presne na nem.
+function Get-ContainerIndex($Argv) {
+    $arr = @($Argv)
+    for ($k = 0; $k -lt $arr.Count; $k++) {
+        if ((Get-ExecutableName ([string]$arr[$k])) -notmatch $script:ContainerCli) { continue }
+        if ($k -eq 0) { return 0 }
+        # Bez `@()` kolem volani: Get-WrapperTail vraci `,@(...)` a dalsi `@()` by pole zabalil podruhe (N-H10).
+        $probe = Get-WrapperTail (@($arr[0..($k - 1)]) + @('sinogard-probe'))
+        if ($probe.Count -eq 1 -and [string]$probe[0] -ceq 'sinogard-probe') { return $k }
+    }
+    return -1
+}
+
 # Je token zkratkou daneho parametru PowerShellu? Prijima se kazda jednoznacna
 # predpona, takze `-c`, `-co`, `-com` ... `-command` (nalez Metis 4, kolo 2).
 function Test-ParameterPrefix([string]$Token, [string]$Full) {

@@ -135,7 +135,8 @@
       "shortAbsolutePath": "rekurzivní mazání s krátkou absolutní cestou ({target}) — do tří znaků je od přepínače cmd (/s, /q) k nerozeznání, cíl není vidět",
       "opaque": "příkaz, který nejde rozebrat ({text})",
       "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})",
-      "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})"
+      "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})",
+      "dbDestroyContainerOpaque": "destruktivní DB literál uvnitř kontejneru v příkazu, který nejde celý rozebrat"
     }
   },
 

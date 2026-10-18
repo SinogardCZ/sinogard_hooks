@@ -314,7 +314,8 @@ aby si je nikdo nemusel objevit sám.
    v hooku `secrets` mlčel. `Start-Process git -ArgumentList 'reset','--hard'` (pole bez závorek, druhý poziční argument,
    zkratky `-f` / `-a`, `-Verb RunAs` před programem) gate od 0.3.0 složí (`A117-N18`).
    ⚠️ **Mez 0.3.0 — rozbor obalu NENÍ úplný** (`Z117-Q29 = A`, Tom 2026-10-09: vydat bez dalších oprav, zbytek po jednom
-   nálezu ve verzi 0.3.1; review `2026-10-09-review-amber-117-delta-05.md`). Výčet výše jmenuje tvary, které se rozeberou;
+   nálezu ve verzi 0.3.2 — ℹ️ do 0.3.1 tu stálo „0.3.1"; verzi 0.3.1 převzala oprava kontejneru, omezení 11, GSD TASK-179;
+   review `2026-10-09-review-amber-117-delta-05.md`). Výčet výše jmenuje tvary, které se rozeberou;
    neplatí „každý obal": část zápisů obalu, které shell skutečně spustí, sdílená funkce nerozpozná a oba hooky mlčí
    (`A117-N29`); hook `secrets` nerozebírá literál předaný příkazům, které text spouštějí — gate ano (`A117-N30`); nad
    stropem zanoření se tělo obalu nerozhoduje a nic se neptá (`A117-N31`).
@@ -484,15 +485,30 @@ aby si je nikdo nemusel objevit sám.
     i **jméno programu** (`dropdb`) a `dotnet ef database drop`, a první oprava
     podmínila audit jen tím textem. *„Vyhodnotit výjimku až po pravidle" nestačí —
     musí se vyhodnotit po **celém** pravidle.*
-11. **Příkaz uvnitř kontejneru se nerozebírá.** `docker exec` a `docker run` se odloupnou
-    jen kvůli jménu klienta (`docker exec -i db psql …` je pořád `psql`), ale to, co se
-    spustí *uvnitř* kontejneru, se pravidly nad cestami neposuzuje. Důvod je věcný:
-    `/tmp` v obrazu není pracovní strom Toma, takže by pravidlo „mazání mimo povolené
-    složky" blokovalo běžnou práci — a brána, která blokuje běžnou práci, se do týdne
-    vypne. Vědomé rozhodnutí kola 4, ne opomenutí.
-    ⚠️ **Co ale kryté JE:** destrukce databáze se pozná podle `-h <host>` v příkazu,
-    takže `docker exec -i db psql -h prod -c "DROP TABLE x"` končí `deny` jako každý
-    jiný `psql`. Nekryté jsou **jen cesty uvnitř obrazu**.
+11. **Příkaz uvnitř kontejneru se pravidly nad cestami a gitem neposuzuje — DB pravidlem ano.**
+    To, co se spustí *uvnitř* kontejneru (`docker|podman exec|run`), se pravidly nad cestami
+    a gitem neposuzuje. Důvod je věcný: `/tmp` v obrazu není pracovní strom Toma, takže by
+    pravidlo „mazání mimo povolené složky" blokovalo běžnou práci — a brána, která blokuje
+    běžnou práci, se do týdne vypne. Vědomé rozhodnutí kola 4, ne opomenutí.
+    🔴 **Do 0.3.1 tu stálo, že destrukce databáze v kontejneru je krytá** (*„`docker exec -i db psql -h prod -c "DROP TABLE x"`
+    končí `deny` jako každý jiný `psql`"*). **Nebyla:** platilo to jen pro tělo heredocu a rouru do klienta; s `-c` i `dropdb`
+    0.3.0 **mlčela** — i proti vzdálenému hostiteli (měření Amber 2026-10-15, GSD TASK-179, případy 17–24).
+    ✔️ **Od 0.3.1 (GSD TASK-179, `AOPT-O24`–`O27`):** vnitřní příkaz kontejnerového obalu posuzuje **DB pravidlo** — tatáž
+    destruktivní množina jako na hostiteli (SQL `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE`, `DELETE` / `UPDATE` bez `WHERE`;
+    `dropdb`, `dotnet ef database drop`, `sqllocaldb delete`), místní = `ask` podle `gate.dbDestroyLocal`, vzdálený = `deny`.
+    Rozbor zná `exec` i `run` (i `--entrypoint`), management podpříkaz `container exec|run`, compose (`docker compose`,
+    `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem i za ním (podman), `podman exec
+    --latest|--cidfile`, vnořený `bash -c`, heredoc a rouru do klienta a obal za `sudo` / `env` / `timeout`. Volbu s hodnotou
+    bere z dokumentace CLI (docker/cli v29.9.0, docker/compose v5.6.0, podman v6.1.3, podman-compose 1.6.0); volbu, kterou
+    nezná, čte **oběma způsoby** (s hodnotou i bez), takže budoucí volba nic neschová. Hostitel se bere z **vnitřního**
+    příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`), **nikdy z voleb obalu** (`-H` enginu, `run -h`
+    = jméno kontejneru). Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
+    Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
+    ⚠️ **Mez — dvě tabulky obalu:** starší průchod obaly (`Get-WrapperTail`, sdílený s hookem `secrets`) zůstal beze změny,
+    aby se nezměnil žádný verdikt 0.3.0 (`AOPT-O25`). Proto: hook `secrets` uvnitř kontejneru za globální volbou nebo
+    management podpříkazem dál mlčí (kontrolní řádky `tests/fixtures/task179-secrets.json`), a obal za prefixem
+    (`sudo docker exec …`) posuzuje vnitřní příkaz **všemi** pravidly gate jako v 0.3.0 — kontrolní řádek „sudo před exec".
+    Sjednocení obou tabulek je kandidát na další vydání (poznámka v GSD TASK-161).
     ➕ **Rozhodnuto 2026-09-12 (TASK-106 bod 3, výrok 3 Amber v mandátu Toma): přiznat
     jako omezení, neopravovat.** Doslova:
     > 🔴 *Spouštěč přehodnocení: první session, která uvnitř kontejneru sahá na adresář
@@ -662,12 +678,21 @@ aby si je nikdo nemusel objevit sám.
     ⚠️ **Mez, která zůstává:** skládání příkazů — `ls cfg/* | xargs cp -t .claude`, `find … -exec cp {} .claude/ \;`
     (`A117-N25`; mimo `Z117-Q27`, rozhodla Amber `A117-O11`); cíl celý v proměnné bez chráněného jména (`cp x.json $T`);
     `[IO.File]::…($p, …)` s cestou jen v proměnné.
-    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.3.1** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`):
+    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.3.2** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`;
+    ℹ️ do 0.3.1 tu stálo „0.3.1" — tu verzi převzala oprava kontejneru, omezení 11, GSD TASK-179):
     odkaz nebo junction vytvořený **na místě** chráněného adresáře, kopie metodou souborového objektu a složená cesta
     (`Join-Path`) u jiných zápisových příkazů než rodiny kopie (`A117-N32`); zápis chráněného souboru stahovacím,
     rozbalovacím nebo verzovacím příkazem, shell, který čte příkazy ze vstupu, další obalové programy, alias gitu, který
     spouští shell, a nepřímý zápis přes dříve založený odkaz (`A117-N33`); skládání příkazů výše (`A117-N25`) a pevný
     seznam sondovaných jmen (`A117-N27`).
+26. **Cíl enginu kontejneru hook nezná — destruktivní DB příkaz v kontejneru je pak `ask`, ne `deny`** (0.3.1, GSD
+    TASK-179, `AOPT-O26`). CLI kontejneru lze namířit na jiný stroj volbou (`docker -H|--host|-c|--context|--config`,
+    `podman -c|--connection|--url|-r|--remote|--identity`) nebo proměnnou prostředí (`DOCKER_HOST`, `DOCKER_CONTEXT`,
+    `DOCKER_CONFIG`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINER_SSHKEY`, `CONTAINERS_CONF`). Jméno spojení
+    (`--connection gsd-root`) ani kontext neříká, jestli jde o místní VM, nebo cizí server, takže hostitel se bere — jako
+    všude v pluginu — **z vnitřního příkazu**: `psql` bez `-h` uvnitř kontejneru na vzdáleném enginu je „místní" a končí
+    `ask` (s `gate.dbDestroyLocal = deny` `deny`), **nikdy ticho**. Řádky skupiny `O26` v `tests/fixtures/task179-gate.json`
+    to přibíjejí; `deny` by vyžadovalo pravidlo, které cíl enginu rozezná — dnes žádné není.
 
 ---
 
@@ -729,7 +754,8 @@ Od 0.3.0 dostává každý běh hooku v sadě **prázdný projekt** (`CLAUDE_PRO
 audit** (`CLAUDE_PLUGIN_DATA`), pokud si případ obojí neurčí sám. Do 0.2.0 bral hook projekt
 z `cwd` šablony, takže na stroji s repem GSD sada měřila jeho skutečný přepis místo výchozího
 chování. Případy TASK-117 žijí v `tests/fixtures/task117-{secrets,gate}.json` (řádek nese
-`expect`, volitelně přepis, režim a tvrzení o řádku auditu).
+`expect`, volitelně přepis, režim a tvrzení o řádku auditu), případy TASK-179 (0.3.1, kontejner) ve stejném formátu
+v `tests/fixtures/task179-{gate,secrets}.json`.
 
 ### Konvence: kontrolní skupina je fixtura, ne věta
 

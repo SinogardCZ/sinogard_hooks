@@ -655,6 +655,11 @@ Invoke-InvariantRows 'secrets'
 Start-Case 'TASK-117 (fixtures/task117-secrets.json)'
 Invoke-Task117Rows 'secrets'
 
+# --- TASK-179 (0.3.1): kontrolni skupina - novy rozbor kontejneroveho obalu v _common.ps1 slouzi jen DB pravidlu gate;
+#     verdikt secrets nad kontejnerovymi tvary = 0.3.0 (AOPT-O25). Pripady v tests/fixtures/task179-secrets.json.
+Start-Case 'TASK-179 (fixtures/task179-secrets.json)'
+Invoke-Task117Rows 'secrets' 'task179'
+
 Write-CollectedCases
 Assert-TimingBudget
 

@@ -382,15 +382,16 @@ function Invoke-InvariantRows([string]$HookName) {
 # audit (auditShape regex, auditDecision, auditNotContains) a faze. Radek s `faze` vetsi nez
 # `$script:Task117Faze` ceka na schvaleny navrh a pocita se jako PRESKOCENY - ne zeleny.
 $script:Task117Faze = 2
-function Invoke-Task117Rows([string]$HookName) {
-    $path = Join-Path $PSScriptRoot ('fixtures/task117-' + $HookName + '.json')
+# TASK-179 (0.3.1): tentyz format radku nese i tests/fixtures/task179-<hook>.json - `$Fixture` je predpona souboru.
+function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
+    $path = Join-Path $PSScriptRoot ('fixtures/' + $Fixture + '-' + $HookName + '.json')
     $doc = [System.IO.File]::ReadAllText($path, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
     $rows = @($doc.rows)
-    Assert-True ($rows.Count -ge 1) ("[task117/{0}] fixture nese pripady: {1}" -f $HookName, $rows.Count)
+    Assert-True ($rows.Count -ge 1) ("[{0}/{1}] fixture nese pripady: {2}" -f $Fixture, $HookName, $rows.Count)
     foreach ($row in $rows) {
         $faze = if ($row.PSObject.Properties['faze']) { [int]$row.faze } else { 1 }
         $expect = if ($row.PSObject.Properties['expect']) { [string]$row.expect } else { '' }
-        $label = ("[task117/{0}/{1}] {2}" -f $row.group, $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
+        $label = ("[{0}/{1}/{2}] {3}" -f $Fixture, $row.group, $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
         # Faze se kontroluje PRED sberem: radek, ktery ceka na schvaleny navrh, do invariantu
         # nepatri - generator by z nej udelal tvrzeni, ktere zadna sada nemerila.
         if ($faze -gt $script:Task117Faze) {

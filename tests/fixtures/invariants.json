@@ -7573,6 +7573,662 @@
       "expect": "allow",
       "since": "A117-N17 kontrola: rsync -a src . -> ticho",
       "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec gsd-dev-pg psql -h db.example.com -U gsd -d postgres -c \"DROP DATABASE gsd_dev\"",
+      "expect": "deny",
+      "since": "17 podman exec psql vzdaleny DROP DATABASE -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db psql -U gsd -d postgres -c \"DROP DATABASE gsd_dev\"",
+      "expect": "ask",
+      "since": "18 docker exec psql DROP DATABASE -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman --connection gsd-root exec gsd-dev-pg psql -U gsd -d postgres -v ON_ERROR_STOP=1 -c \"drop database gsd_dev;\"",
+      "expect": "ask",
+      "since": "19 podman --connection exec psql drop database (tvar skriptu) -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec gsd-dev-pg dropdb -U gsd gsd_dev",
+      "expect": "ask",
+      "since": "20 podman exec dropdb -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i db psql -h prod -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "21 docker exec -i psql -h prod DROP TABLE (Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker exec -i db psql -h prod -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "22 docker exec -i psql -h prod DROP TABLE (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec -i db psql -h prod -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "23 podman exec -i psql -h prod DROP TABLE -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i db psql -c \"DROP DATABASE gsd_dev\"",
+      "expect": "ask",
+      "since": "24 docker exec -i psql mistni DROP DATABASE -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm postgres:17 psql -h db.example.com -U gsd -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "run vzdaleny DROP TABLE -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman run --rm -e PGPASSWORD=x --network host postgres:17 dropdb -h 127.0.0.1 -U gsd gsd_dev",
+      "expect": "ask",
+      "since": "run s volbami s hodnotou, dropdb mistni -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run -it --rm --name tmp -v pgdata:/var/lib/postgresql/data postgres:17 psql -c \"TRUNCATE audit_events\"",
+      "expect": "ask",
+      "since": "run -it --name -v, TRUNCATE -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm postgres:17 psql -h db.example.com -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "sourozenec: run psql SELECT vzdaleny -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm postgres:17 pg_dump -U gsd gsd_dev",
+      "expect": "allow",
+      "since": "sourozenec: run pg_dump -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker run --rm -p 5433:5432 -e POSTGRES_PASSWORD=x postgres:17",
+      "expect": "allow",
+      "since": "sourozenec: run serveru bez prikazu -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker container exec db psql -c \"DROP DATABASE gsd_dev\"",
+      "expect": "ask",
+      "since": "container exec DROP DATABASE -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman container exec -i db psql -h db.example.com -c \"DELETE FROM t\"",
+      "expect": "deny",
+      "since": "container exec vzdaleny DELETE bez WHERE -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman container run --rm postgres:17 psql -c \"UPDATE t SET a = 1\"",
+      "expect": "ask",
+      "since": "container run UPDATE bez WHERE -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker container exec db ls /tmp",
+      "expect": "allow",
+      "since": "sourozenec: container exec ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker container ls -a",
+      "expect": "allow",
+      "since": "sourozenec: container ls -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman container exec db psql -c \"DELETE FROM t WHERE id = 1\"",
+      "expect": "allow",
+      "since": "sourozenec: container exec DELETE s WHERE -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose exec db psql -U gsd -c \"DROP DATABASE gsd_dev\"",
+      "expect": "ask",
+      "since": "compose exec DROP DATABASE -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker compose -f compose.yml -p gsd exec -T db dropdb -U gsd gsd_dev",
+      "expect": "ask",
+      "since": "compose -f -p exec -T dropdb -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker-compose exec db psql -h db.example.com -c \"DROP SCHEMA public CASCADE\"",
+      "expect": "deny",
+      "since": "docker-compose exec vzdaleny DROP SCHEMA -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman compose run --rm db psql -c \"TRUNCATE t\"",
+      "expect": "ask",
+      "since": "podman compose run TRUNCATE -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman-compose --podman-args \"--log-level debug\" exec db psql -c \"DELETE FROM t\"",
+      "expect": "ask",
+      "since": "podman-compose s globalni volbou exec DELETE -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose --project-directory ./infra run --rm -e X=1 db psql -h db.example.com -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "compose --project-directory run -e vzdaleny DROP TABLE -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose exec db psql -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "sourozenec: compose exec SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose up -d",
+      "expect": "allow",
+      "since": "sourozenec: compose up -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman-compose exec db ls",
+      "expect": "allow",
+      "since": "sourozenec: podman-compose exec ls -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman --log-level debug exec db psql -h db.example.com -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "podman --log-level exec vzdaleny DROP TABLE -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker --config /tmp/dcfg --log-level warn exec db dropdb gsd_dev",
+      "expect": "ask",
+      "since": "docker --config --log-level exec dropdb -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec --url ssh://core@127.0.0.1:65340/run/podman/podman.sock db psql -c \"DROP DATABASE gsd_dev\"",
+      "expect": "ask",
+      "since": "podman globalni volba za podprikazem -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker --tlsverify --tlscacert ca.pem -D exec db psql -c \"TRUNCATE t\"",
+      "expect": "ask",
+      "since": "docker bool i hodnotove TLS volby -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker --context prod ps",
+      "expect": "allow",
+      "since": "sourozenec: docker --context ps -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman --connection gsd-root exec gsd-dev-pg psql -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "sourozenec: podman --connection exec SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -u postgres -w /tmp -e LANG=C db psql -c \"DROP DATABASE gsd_dev\"",
+      "expect": "ask",
+      "since": "exec -u -w -e pred kontejnerem -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker exec --env-file db.env --detach-keys ctrl-x db dropdb gsd_dev",
+      "expect": "ask",
+      "since": "exec --env-file --detach-keys -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -iu postgres db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "slouceny kratky prepinac s hodnotou na konci -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --user=postgres db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "--user=hodnota slepene -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -ePGAPPNAME=x db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "-eHODNOTA slepene -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -- db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "-- pred kontejnerem -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "\"C:/Program Files/Docker/Docker/resources/bin/docker.exe\" exec db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "cesta k docker.exe v uvozovkach -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -u postgres db psql -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "sourozenec: exec -u SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm --entrypoint psql postgres:17 -h db.example.com -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "run --entrypoint klient, vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --entrypoint=dropdb postgres:17 gsd_dev",
+      "expect": "ask",
+      "since": "run --entrypoint=dropdb -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose run --entrypoint \"psql -c 'DROP TABLE x'\" db",
+      "expect": "ask",
+      "since": "compose run --entrypoint s celym prikazem -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm --entrypoint psql postgres:17 -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "sourozenec: run --entrypoint psql SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm --entrypoint /bin/sh postgres:17",
+      "expect": "allow",
+      "since": "sourozenec: run --entrypoint shell bez prikazu -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec --latest psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "podman exec --latest bez kontejneru -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec -l dropdb gsd_dev",
+      "expect": "ask",
+      "since": "podman exec -l dropdb -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec --cidfile /tmp/pg.cid psql -h db.example.com -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "podman exec --cidfile vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec -l psql -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "sourozenec: podman exec -l SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec -l ls",
+      "expect": "allow",
+      "since": "sourozenec: podman exec -l ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --future-opt value db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "neznama dlouha volba s hodnotou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --future-flag db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "neznama dlouha volba bez hodnoty -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec -Z zz db dropdb gsd_dev",
+      "expect": "ask",
+      "since": "neznama kratka volba s hodnotou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --future-opt value db psql -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "sourozenec: neznama volba, SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --future-flag db ls",
+      "expect": "allow",
+      "since": "sourozenec: neznama volba, ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db bash -c 'psql -c \"DROP TABLE x\"'",
+      "expect": "ask",
+      "since": "bash -c uvnitr exec -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec gsd-dev-pg sh -c \"psql -h db.example.com -c 'DROP DATABASE gsd_dev'\"",
+      "expect": "deny",
+      "since": "sh -c uvnitr exec, vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman --connection gsd-root exec -i gsd-dev-pg psql -U gsd <<SQL\nDROP DATABASE gsd_dev;\nSQL",
+      "expect": "ask",
+      "since": "heredoc za globalni volbou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE x\" | podman --connection gsd-root exec -i gsd-dev-pg psql",
+      "expect": "ask",
+      "since": "roura do klienta za globalni volbou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i db psql -h db.example.com <<SQL\nDROP TABLE x;\nSQL",
+      "expect": "deny",
+      "since": "kontrola 0.3.0: heredoc exec vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE x\" | docker exec -i db psql -h db.example.com",
+      "expect": "deny",
+      "since": "kontrola 0.3.0: roura do exec vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db sh -c \"$PSQL -c 'DROP TABLE x'\"",
+      "expect": "ask",
+      "since": "promenna v hlave uvnitr exec, viditelny DROP -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db sh -c \"$CMD\"",
+      "expect": "allow",
+      "since": "sourozenec: promenna v hlave uvnitr exec bez DB -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db bash -c 'psql -c \"SELECT 1\"'",
+      "expect": "allow",
+      "since": "sourozenec: bash -c SELECT uvnitr exec -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo docker --context x exec db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "sudo pred docker s globalni volbou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout 60 podman exec gsd-dev-pg dropdb gsd_dev",
+      "expect": "ask",
+      "since": "kontrola 0.3.0: timeout pred podman exec dropdb -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec -i gsd-dev-pg xargs -n1 dropdb",
+      "expect": "ask",
+      "since": "xargs dropdb uvnitr exec (TASK-117 tvar) -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -e PGHOST=db.example.com db psql -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "exec -e PGHOST vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm --env PGHOST=db.example.com postgres:17 dropdb gsd_dev",
+      "expect": "deny",
+      "since": "run --env PGHOST vzdaleny dropdb -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -e PGHOST=localhost db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "sourozenec: exec -e PGHOST=localhost -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm -h dbbox postgres:17 psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "host z obalu ne: run -h jmeno kontejneru -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker -H ssh://db.example.com exec db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "cil enginu -H -> ask (mez README)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker --context prod exec db dropdb gsd_dev",
+      "expect": "ask",
+      "since": "cil enginu --context -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman --url ssh://core@db.example.com/run/podman/podman.sock exec db psql -c \"TRUNCATE t\"",
+      "expect": "ask",
+      "since": "cil enginu --url -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "DOCKER_HOST=ssh://db.example.com docker exec db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "cil enginu promennou prostredi (prefix) -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$env:CONTAINER_HOST = 'ssh://db.example.com'; podman exec db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "cil enginu promennou prostredi (PowerShell) -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"DROP DATABASE gsd_dev\"",
+      "expect": "ask",
+      "since": "bez kontejneru: psql DROP DATABASE -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -h db.example.com -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "bez kontejneru: psql vzdaleny DROP TABLE -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "dropdb gsd_dev",
+      "expect": "ask",
+      "since": "bez kontejneru: dropdb -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "dotnet ef database drop --force",
+      "expect": "ask",
+      "since": "bez kontejneru: ef drop -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "psql -c \"SELECT 1\"",
+      "expect": "allow",
+      "since": "bez kontejneru: psql SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db rm -rf /var/lib/postgresql/data",
+      "expect": "allow",
+      "since": "mazani cesty uvnitr exec -> dnesni verdikt (ticho)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec db git reset --hard",
+      "expect": "allow",
+      "since": "destruktivni git uvnitr exec -> dnesni verdikt (ticho)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm -v W:/dev/x:/src alpine rm -rf /src/lib",
+      "expect": "allow",
+      "since": "mazani cesty uvnitr run -> dnesni verdikt (ticho)"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker exec db git branch -D x",
+      "expect": "allow",
+      "since": "git branch -D uvnitr exec -> dnesni verdikt (ticho)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker --context x container exec db rm -rf /srv/data",
+      "expect": "allow",
+      "since": "mazani cesty uvnitr container exec za globalni volbou -> dnesni verdikt (ticho)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo docker exec db rm -rf /srv/data",
+      "expect": "deny",
+      "since": "sudo pred exec, mazani cesty -> dnesni verdikt (deny)"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -File scripts/drop-dev-db.ps1 -Database gsd_test_x",
+      "expect": "allow",
+      "since": "drop-dev-db.ps1 souborem -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "& ./scripts/drop-dev-db.ps1 -Database gsd_test_x",
+      "expect": "allow",
+      "since": "drop-dev-db.ps1 operatorem & -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db pg_dump -U gsd gsd_dev",
+      "expect": "allow",
+      "since": "exec pg_dump -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec gsd-dev-pg psql -U gsd -d postgres -c \"SELECT datname FROM pg_database\"",
+      "expect": "allow",
+      "since": "exec psql SELECT z pg_database -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db ls",
+      "expect": "allow",
+      "since": "exec ls -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman ps -a",
+      "expect": "allow",
+      "since": "podman ps -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker logs db",
+      "expect": "allow",
+      "since": "docker logs -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec db psql -f /tmp/m.sql",
+      "expect": "allow",
+      "since": "exec psql -f (SQL ze souboru, audit) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db psql -c \"UPDATE t SET a = 1 WHERE id = 2\"",
+      "expect": "allow",
+      "since": "exec UPDATE s WHERE -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman volume ls",
+      "expect": "allow",
+      "since": "podman volume ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db cat .env",
+      "expect": "deny",
+      "since": "exec cat tajneho souboru",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db bash -c 'cat .env'",
+      "expect": "deny",
+      "since": "exec bash -c cat tajneho souboru",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker --context x exec db bash -c 'cat .env'",
+      "expect": "allow",
+      "since": "dnesni verdikt (zname omezeni secrets, TASK-161): globalni volba + exec bash -c cat tajneho souboru",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman container exec db sh -c 'cat .env'",
+      "expect": "allow",
+      "since": "dnesni verdikt (zname omezeni secrets, TASK-161): container exec sh -c cat tajneho souboru",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose exec db printenv",
+      "expect": "allow",
+      "since": "compose exec printenv",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db sh -c 'echo $DB_PASSWORD'",
+      "expect": "ask",
+      "since": "exec echo citlive promenne",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db ls",
+      "expect": "allow",
+      "since": "exec ls",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman exec gsd-dev-pg psql -c \"DROP DATABASE gsd_dev\"",
+      "expect": "allow",
+      "since": "exec psql DROP (DB neni vec secrets)",
+      "hook": "secrets"
     }
   ]
 }

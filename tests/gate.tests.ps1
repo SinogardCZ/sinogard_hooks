@@ -1849,6 +1849,12 @@ if (-not (Test-CollectOnly)) {
 Start-Case 'TASK-117 (fixtures/task117-gate.json)'
 Invoke-Task117Rows 'gate'
 
+# --- TASK-179 (0.3.1): destruktivni DB prikaz uvnitr kontejneroveho obalu - tvary 17-24, clenove tridy (AOPT-O27, M-a az M-d)
+#     a kontrolni skupiny (cesty a git uvnitr kontejneru = dnesni verdikt, AOPT-O25; prepis dbDestroyLocal, AOPT-O26).
+#     Pripady v tests/fixtures/task179-gate.json; mutanti v repu GSD docs/logs/mutants/task-179/.
+Start-Case 'TASK-179 (fixtures/task179-gate.json)'
+Invoke-Task117Rows 'gate' 'task179'
+
 Write-CollectedCases
 Assert-TimingBudget
 
