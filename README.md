@@ -503,8 +503,10 @@ aby si je nikdo nemusel objevit sám.
     nezná, čte **oběma způsoby** (s hodnotou i bez), takže budoucí volba nic neschová. Hostitel se bere z **vnitřního**
     příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`; průchozí `-e PGHOST` bere hodnotu z téhož
     příkazu — prefix `PGHOST=…`, `export`, `$env:PGHOST = …`; `--env-file` a hodnotu ze session hook nevidí → místní = `ask`),
-    **nikdy z voleb obalu** (`-H` enginu, `run -h` = jméno kontejneru). Jiná CLI, která spouštějí příkaz v kontejneru
-    (`kubectl exec`, `oc`, `nerdctl`), rozbor nezná — mimo třídu 0.3.1 (kandidát na další vydání, GSD TASK-161). Stejně jako
+    **nikdy z voleb obalu** (`-H` enginu, `run -h` = jméno kontejneru) — s jednou výjimkou z 0.3.0: `dotnet ef database
+    drop|update` se jako dřív posuzuje i nad **celým** příkazem obalu, takže tam volba obalu `-h` / `--host` může vyjít jako
+    vzdálený hostitel a dát `deny` (přísněji, ne tišeji; uvolnění by měnilo verdikt 0.3.0). Jiná CLI, která spouštějí
+    příkaz v kontejneru (`kubectl exec`, `oc`, `nerdctl`) nebo jinde (`podman machine ssh`, `podman unshare`), rozbor nezná — mimo třídu 0.3.1 (kandidát na další vydání, GSD TASK-161). Stejně jako
     na hostiteli se nerozebírají obaly `su -c`, `gosu`, `runuser` (další obalové programy, `A117-N33`, TASK-161) — `docker exec db
     su postgres -c "dropdb x"` proto dál mlčí; a hostitel z proměnných `PGHOSTADDR` / `SQLCMDSERVER` se nečte ani na hostiteli.
     ⚠️ **Mez hostitele (ne kontejneru), od 0.3.0:** přiřazení proměnné prostředí, jejíž hodnota je substituce příkazu, před
@@ -516,6 +518,8 @@ aby si je nikdo nemusel objevit sám.
     zpětné apostrofy, závorka PowerShellu) se čte jako jeden token; zkratky dlouhých voleb `podman-compose` (argparse,
     `--entry` = `--entrypoint`) se rozvinou, je-li zkratka jednoznačná. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
+    Heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem = `ask` (volání `truncate(` není SQL);
+    `-EncodedCommand` v kontejneru se dekóduje a tělo jde DB pravidlem, nedekódovatelné = `ask`.
     ⚠️ **Mez — dvě tabulky obalu:** starší průchod obaly (`Get-WrapperTail`, sdílený s hookem `secrets`) zůstal beze změny,
     aby se nezměnil žádný verdikt 0.3.0 (`AOPT-O25`). Proto: hook `secrets` uvnitř kontejneru za globální volbou nebo
     management podpříkazem dál mlčí (kontrolní řádky `tests/fixtures/task179-secrets.json`), a obal za prefixem

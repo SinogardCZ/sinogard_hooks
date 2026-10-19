@@ -142,6 +142,8 @@ function Get-UnwrappedCommand([string]$Command) {
         $hit = @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + $envText).Trim(); Container = $true; NoAllow = $true; ContainerEnv = $envText }
         if (@($script:SqlClients) -ccontains $exe.ToLowerInvariant()) { return $hit }
         if ($null -eq $shellHit -and (@($script:ShellInterpreters) -ccontains $exe.ToLowerInvariant())) { $shellHit = $hit }
+        # K4-3 (kolo 4): i interpret (`python3 <<EOF`) v kontejneru - telo posoudi Test-ContainerLeaf (DB literal -> ask).
+        if ($null -eq $shellHit -and (@(Get-Field (Get-Field $script:config 'gate') 'codeInterpreters' @()) -ccontains $exe.ToLowerInvariant())) { $shellHit = $hit }
     }
     if ($null -ne $shellHit) { return $shellHit }
     return $res
@@ -174,9 +176,10 @@ function Resolve-ContainerEnv($Envs) {
 # Container: Test-Leaf na ne pousti JEN DB pravidlo (AOPT-O25 - cesty a git v obrazu zustavaji README omezenim 11)
 # a `gate.dbDestroyLocal = allow` se jich nikdy netyka (AOPT-O26). Hostitel = vnitrni prikaz + promenne prostredi,
 # ktere obal predava (`-e PGHOST=...`), nikdy volby obalu (`-H` enginu, `run -h` hostname kontejneru).
-function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '') {
+function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '', $Parsed = $null) {
     $out = New-Object System.Collections.ArrayList
-    $cc = Get-ContainerCommand $Argv
+    # K4-8 (kolo 4): vetev prefixu rozbor uz ma - podruhe se nepocita.
+    $cc = if ($null -ne $Parsed) { $Parsed } else { Get-ContainerCommand $Argv }
     if ($null -eq $cc) { return $out }
     $envText = Resolve-ContainerEnv $cc.Env
     foreach ($t0 in $cc.Tails) {
@@ -187,7 +190,9 @@ function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '') {
         if ($SkipTail -ne '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
         foreach ($l in (Get-CommandLeaf (Join-Argument $t) ($Depth + 1))) {
             $l['Container'] = $true
-            $l['ContainerEnv'] = $envText
+            # K4-2 (kolo 4): pripojit, ne prepsat - vnoreny obal (`docker exec outer docker exec -e PGHOST=... inner`) uz svou
+            # promennou do listu zapsal a vnejsi vrstva by ji jinak smazala.
+            $l['ContainerEnv'] = ([string](Get-LeafField $l 'ContainerEnv' '') + ' ' + $envText).Trim()
             [void]$out.Add($l)
         }
     }
@@ -792,11 +797,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             $prefixEnv = ''
             if ($inContainer) {
                 $skip = if ($oldTail.Count -gt 0) { Join-Argument $oldTail } else { '' }
-                foreach ($l in (Get-ContainerLeaves @($argv[$ci..($argv.Count - 1)]) $Depth $skip)) { [void]$out.Add($l) }
-                # K3-6 (kolo 3): starsi pruchod `-e` obalu zahodi - jeho listy (vsechna pravidla, 0.3.0) dostanou promenne obalu
-                # a zakaz `allow` (tvar v kontejneru, AOPT-O26) samy, misto druheho listu s tymz prikazem (dvoji audit).
                 $ccP = Get-ContainerCommand @($argv[$ci..($argv.Count - 1)])
-                if ($null -ne $ccP) { $prefixEnv = Resolve-ContainerEnv $ccP.Env }
+                if ($null -ne $ccP) {
+                    foreach ($l in (Get-ContainerLeaves $null $Depth $skip $ccP)) { [void]$out.Add($l) }
+                    # K3-6 (kolo 3): starsi pruchod `-e` obalu zahodi - jeho listy (vsechna pravidla, 0.3.0) dostanou promenne obalu
+                    # a zakaz `allow` (tvar v kontejneru, AOPT-O26) samy, misto druheho listu s tymz prikazem (dvoji audit).
+                    $prefixEnv = Resolve-ContainerEnv $ccP.Env
+                }
             }
             # Nalez Amber G2: tady stala DRUHA, chudsi kopie tabulky obalu. Vetev jen
             # spojila `$rest` a rekurzivne se zavolala, takze u obalu s prepinacem
@@ -1514,6 +1521,8 @@ function Test-DbDestructiveText([string]$Text) {
     # CR-7 (kolo 1 /code-review): prikaz coreutils `truncate -s 0 log` neni SQL - tady jde o text SHELLU, ne o SQL z klienta,
     # takze se jeho volani s prepinacem (kratkym nebo dlouhym z man truncate) vyjme. SQL `TRUNCATE -- komentar` zustava.
     $Text = [regex]::Replace($Text, '(?i)\btruncate(?=\s+(?:-[a-z]|--(?:size|reference|no-create|io-blocks)\b))', ' ')
+    # K4-7 (kolo 4): souborove API (`os.truncate(...)`, `f.truncate()`) neni SQL - SQL TRUNCATE nikdy nestoji pred zavorkou.
+    $Text = [regex]::Replace($Text, '(?i)\btruncate(?=\s*\()', ' ')
     if (Test-DestructiveSql $Text) { return $true }
     if ([regex]::IsMatch($Text, '(?:^|[\s;|&(''"/\\])dropdb(?:\.exe)?(?:\s|$|[''";|&)])', 'IgnoreCase')) { return $true }
     if ([regex]::IsMatch($Text, ('\bdotnet[- ]ef' + $script:SqlGap + 'database' + $script:SqlGap + 'drop\b'), 'IgnoreCase')) { return $true }
@@ -1914,14 +1923,23 @@ function Test-ContainerLeaf($Leaf, $Config) {
             $worst = $null
             foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
                 $inner['Container'] = $true
-                # Hostitelsky text tela = JEN promenne obalu (Get-UnwrappedCommand), ne argumenty shellu (K3-5: `bash -s -- --host=x`).
-                $inner['ContainerEnv'] = [string](Get-LeafField $Leaf 'ContainerEnv' '')
+                # Hostitelsky text tela = JEN promenne obalu (Get-UnwrappedCommand), ne argumenty shellu (K3-5: `bash -s -- --host=x`);
+                # K4-2: pripojit k tomu, co uz list nese (vnoreny obal uvnitr tela).
+                $inner['ContainerEnv'] = ([string](Get-LeafField $inner 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')).Trim()
                 $r = Test-ContainerLeaf $inner $Config
                 if ($null -eq $r) { continue }
                 if ($r.Decision -eq 'deny') { return $r }
                 if ($null -eq $worst) { $worst = $r }
             }
             return $worst
+        }
+        # K4-3 (kolo 4): telo heredocu do interpretu v kontejneru (`docker compose exec -T db python3 <<EOF`) = kod, ktery
+        # rozebrat neumime - tataz zavora jako u `python -c` v kontejneru (clen M-d): viditelny destruktivni DB literal -> ask.
+        if (@(Get-Field $gate 'codeInterpreters' @()) -ccontains $oe) {
+            if (Test-DbDestructiveText ([string]$Leaf.Raw)) {
+                return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
+                          Shape = (Get-Field $shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
+            }
         }
         return $null
     }
@@ -1931,6 +1949,34 @@ function Test-ContainerLeaf($Leaf, $Config) {
         return $null
     }
     if ($kind -eq 'opaque') {
+        # K4-4 (kolo 4): `pwsh -EncodedCommand` uvnitr kontejneru - literal neni videt, ale text jde dekodovat (UTF-16LE base64,
+        # jako hook secrets, A117-N16). Dekodovany text se rozebere jako prikaz v kontejneru; nejde-li dekodovat -> ask.
+        if ([string](Get-LeafField $Leaf 'Why' '') -eq 'encoded') {
+            $argvE = Split-Arguments ([string]$Leaf.Raw)
+            $wb = $null
+            if ($argvE.Count -gt 0) {
+                $restE = @(if ($argvE.Count -gt 1) { $argvE[1..($argvE.Count - 1)] })
+                $wb = Get-ShellWrapperBody (Get-ExecutableName ([string]$argvE[0])) $restE
+            }
+            $decoded = $null
+            if ($null -ne $wb -and [string]$wb.Text -ne '' -and -not (Test-Unexpandable ([string]$wb.Text))) {
+                try { $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String([string]$wb.Text)) } catch { $decoded = $null }
+            }
+            if ($null -eq $decoded) {
+                return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
+                          Shape = (Get-Field $shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
+            }
+            $worst = $null
+            foreach ($inner in (Get-NestedShellLeaf $decoded 'PowerShell' 0)) {
+                $inner['Container'] = $true
+                $inner['ContainerEnv'] = ([string](Get-LeafField $inner 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')).Trim()
+                $r = Test-ContainerLeaf $inner $Config
+                if ($null -eq $r) { continue }
+                if ($r.Decision -eq 'deny') { return $r }
+                if ($null -eq $worst) { $worst = $r }
+            }
+            return $worst
+        }
         if ((Test-DbDestructiveText ([string]$Leaf.Raw)) -or (Test-DbDestructiveText ([string](Get-LeafField $Leaf 'Body' '')))) {
             return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
                       Shape = (Get-Field $shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
@@ -2009,7 +2055,7 @@ function Test-Leaf($Leaf, $Config) {
                 # K3-2/K3-3: telo shellu v kontejneru (tvar 0.3.0) - vsechna pravidla, ale bez `allow` a s promennymi obalu.
                 if ([bool](Get-LeafField $Leaf 'NoAllow' $false)) {
                     $inner['NoAllow'] = $true
-                    $inner['ContainerEnv'] = [string](Get-LeafField $Leaf 'ContainerEnv' '')
+                    $inner['ContainerEnv'] = ([string](Get-LeafField $inner 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')).Trim()
                 }
                 $r = Test-Leaf $inner $Config
                 if ($null -eq $r) { continue }

@@ -28,6 +28,9 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
 | heredoc a roura do klienta v kontejneru za globální volbou nebo management podpříkazem, heredoc do shellu v kontejneru (compose, globální volba, `env -S "…"`) | ticho | jako řádky výše (heredoc do shellu jen DB pravidlem) |
 | nerozebratelná hlava uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem | ticho | `ask` (tvar `dbDestroyContainerOpaque`) |
+| uvozovaná závorka nebo zpětný apostrof v hodnotě volby obalu, vnořený kontejner s vlastním `-e PGHOST=…` | ticho | jako řádky výše (proměnné obou obalů se sčítají) |
+| heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem; `-EncodedCommand` v kontejneru (dekódované tělo jde DB pravidlem) | ticho | `ask`, se vzdáleným hostitelem `deny` |
+| `-EncodedCommand` v kontejneru, které nejde dekódovat (i bez DB textu) | ticho | `ask` |
 | cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
 
 Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`).
@@ -41,6 +44,9 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 - Tentýž SQL bez kontejneru, tělo heredocu a roura do `docker exec -i … psql -h …` (už v 0.3.0 `deny`), `scripts/…ps1`
   spuštěný souborem (README omezení 1): beze změny.
 - Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru.
+- Coreutils `truncate` a volání `truncate(` (`os.truncate`, `f.truncate()`) v kódu interpretu nejsou SQL `TRUNCATE` → ticho.
+- `dotnet ef database drop|update` v obalu: DB pravidlo dál posuzuje i celý příkaz obalu jako v 0.3.0 (přísnější verdikt
+  zůstává; README omezení 11).
 
 ### Konfigurace
 
@@ -48,10 +54,10 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (141 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kol 1–3 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+`tests/fixtures/task179-gate.json` (157 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kol 1–4 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
 59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad předchozí verzí opravy. Invariant 1152 → 1295 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
+fází nad předchozí verzí opravy. Invariant 1152 → 1311 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
 
 ### Meze TASK-161 přecházejí na 0.3.2
 

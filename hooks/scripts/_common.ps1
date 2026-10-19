@@ -1203,8 +1203,26 @@ function Join-SubstitutionToken($Tokens) {
 # nebo @{ Tails = kandidati vnitrniho prikazu (ARGV); Env = hodnoty `-e/--env` predane vnitrnimu prikazu }. Prazdne
 # Tails = obal bez vnitrniho prikazu (`docker ps`, `docker compose up`, `docker run img` s vychozim prikazem obrazu).
 function Get-ContainerCommand($Argv) {
+    # K4-1 (kolo 4 /code-review): Split-Arguments uvozovky zahodi, takze `(` nebo zpetny apostrof v KVOTOVANE hodnote volby
+    # (`-e "MSG=bye :("`) od substituce nerozezname. Slepeni by pak spolklo cil i vnitrni prikaz. Proto se rozebira OBOJE -
+    # ARGV jak je i se slepenou substituci - a kandidati se sjednoti (smerem k prisnosti).
+    $raw = @(@($Argv) | ForEach-Object { [string]$_ })
+    if ($raw.Count -eq 0) { return $null }
+    $a = Get-ContainerCommandCore $raw
+    if ($null -eq $a) { return $null }
     # Bez `@()` kolem volani: funkce vraci `,@(...)` (N-H10).
-    $arr = Join-SubstitutionToken (@($Argv) | ForEach-Object { [string]$_ })
+    $joined = Join-SubstitutionToken $raw
+    if ((Join-Argument @($joined)) -ceq (Join-Argument $raw)) { return $a }
+    $b = Get-ContainerCommandCore @($joined)
+    if ($null -eq $b) { return $a }
+    $tails = New-Object System.Collections.ArrayList
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($t in @($a.Tails) + @($b.Tails)) { if ($keys.Add((Join-Argument @($t)))) { [void]$tails.Add(@($t)) } }
+    return @{ Tails = @($tails); Env = @(@($a.Env) + @($b.Env) | Select-Object -Unique) }
+}
+
+function Get-ContainerCommandCore($Arr) {
+    $arr = @($Arr)
     if ($arr.Count -eq 0) { return $null }
     $cli = Get-ExecutableName $arr[0]
     if ($cli -notmatch $script:ContainerCli) { return $null }
