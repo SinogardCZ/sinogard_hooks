@@ -121,10 +121,31 @@ function Get-UnwrappedCommand([string]$Command) {
         if ($t.Count -eq 0) { continue }
         $exe = Get-ExecutableName ([string]$t[0])
         if (@($script:SqlClients) -ccontains $exe.ToLowerInvariant()) {
-            return @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + (@($cc.Env) -join ' ')).Trim(); Container = $true }
+            return @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + (Resolve-ContainerEnv $cc.Env)).Trim(); Container = $true }
         }
     }
     return $res
+}
+
+# Hodnoty `-e/--env` obalu kontejneru jako text pro Get-DbHosts. CR-3 (kolo 1 /code-review): pruchozi `-e PGHOST` (bez `=`)
+# preda vnitrnimu prikazu hodnotu z prostredi hostitele - stoji-li v TEMZE prikazu (`PGHOST=x docker ...`, `export PGHOST=x; ...`,
+# `$env:PGHOST = 'x'; ...`), vezme se odtud. Jinak hodnotu nevidime -> hostitel neznamy = mistni (`ask`, ne ticho);
+# totez `--env-file` (obsah souboru v prikazu neni, README omezeni 11).
+function Resolve-ContainerEnv($Envs) {
+    $out = New-Object System.Collections.ArrayList
+    foreach ($e in @($Envs)) {
+        $v = [string]$e
+        if ($v -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { [void]$out.Add($v); continue }
+        $n = [regex]::Escape($v)
+        $val = '("[^"]*"|''[^'']*''|[^\s;&|]+)'
+        foreach ($m in [regex]::Matches([string]$script:FullCommand, ('(?:^|[\s;&|(])(?:export\s+)?' + $n + '=' + $val))) {
+            [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
+        }
+        foreach ($m in [regex]::Matches([string]$script:FullCommand, ('\$env:' + $n + '\s*=\s*' + $val), 'IgnoreCase')) {
+            [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
+        }
+    }
+    return ($out -join ' ')
 }
 
 # TASK-179 (0.3.1): listy VNITRNIHO prikazu kontejneroveho obalu (Get-ContainerCommand v _common.ps1). List obalu samotny
@@ -132,14 +153,16 @@ function Get-UnwrappedCommand([string]$Command) {
 # Container: Test-Leaf na ne pousti JEN DB pravidlo (AOPT-O25 - cesty a git v obrazu zustavaji README omezenim 11)
 # a `gate.dbDestroyLocal = allow` se jich nikdy netyka (AOPT-O26). Hostitel = vnitrni prikaz + promenne prostredi,
 # ktere obal predava (`-e PGHOST=...`), nikdy volby obalu (`-H` enginu, `run -h` hostname kontejneru).
-function Get-ContainerLeaves($Argv, [int]$Depth) {
+function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '') {
     $out = New-Object System.Collections.ArrayList
     $cc = Get-ContainerCommand $Argv
     if ($null -eq $cc) { return $out }
-    $envText = (@($cc.Env) -join ' ')
+    $envText = Resolve-ContainerEnv $cc.Env
     foreach ($t0 in $cc.Tails) {
         $t = @($t0)
         if ($t.Count -eq 0) { continue }
+        # CR-5: vnitrni prikaz, ktery uz rozebral pruchod prefixovym obalem (vsemi pravidly), se podruhe nerozebira.
+        if ($SkipTail -ne '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
         foreach ($l in (Get-CommandLeaf (Join-Argument $t) ($Depth + 1))) {
             $l['Container'] = $true
             $l['ContainerEnv'] = $envText
@@ -726,15 +749,20 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     $containerLeaves = New-Object System.Collections.ArrayList
 
     switch -Regex ($exe) {
-        '^(docker|podman|docker-compose|podman-compose)$' {
+        '^(docker|podman|podman-remote|docker-compose|podman-compose)$' {
             foreach ($l in (Get-ContainerLeaves $argv $Depth)) { [void]$containerLeaves.Add($l) }
         }
         '^(sudo|nice|nohup|time|doas|timeout|command|builtin|exec|env|stdbuf)$' {
             # TASK-179: kontejnerovy obal za prefixem (`sudo docker --context x exec ...`). Pruchod nize (Get-WrapperTail) zustava
             # dnesni - u tvaru, ktery jeho starsi kontejnerova vetev rozbali, dal posuzuje vnitrni prikaz VSEMI pravidly (0.3.0).
+            # CR-5 (kolo 1 /code-review): dvoji list = dvoji audit. Kdyz starsi pruchod konci na CLI kontejneru
+            # (`sudo docker-compose ...`), rozebere ho rekurze nize sama; tail, ktery uz nasel, se nepridava podruhe.
             $ci = Get-ContainerIndex $argv
-            if ($ci -gt 0) {
-                foreach ($l in (Get-ContainerLeaves @($argv[$ci..($argv.Count - 1)]) $Depth)) { [void]$out.Add($l) }
+            $oldTail = Get-WrapperTail $argv
+            $oldHead = if ($oldTail.Count -gt 0) { Get-ExecutableName ([string]$oldTail[0]) } else { '' }
+            if ($ci -gt 0 -and $oldHead -notmatch $script:ContainerCli) {
+                $skip = if ($oldTail.Count -gt 0) { Join-Argument $oldTail } else { '' }
+                foreach ($l in (Get-ContainerLeaves @($argv[$ci..($argv.Count - 1)]) $Depth $skip)) { [void]$out.Add($l) }
             }
             # Nalez Amber G2: tady stala DRUHA, chudsi kopie tabulky obalu. Vetev jen
             # spojila `$rest` a rekurzivne se zavolala, takze u obalu s prepinacem
@@ -1426,10 +1454,12 @@ function Test-UpdateWithoutWhere([string]$Sql) {
 
 # Destruktivni mnozina SQL pravidla (AOPT-O24 = mnozina Test-DatabaseRule na 245a0fe): DROP TABLE|DATABASE|SCHEMA, TRUNCATE,
 # DELETE a UPDATE bez WHERE. Od 0.3.1 jedna funkce - vola ji Test-DatabaseRule i Test-ContainerLeaf (TASK-179).
-# `(?:\s|/\*.*?\*/)+` misto `\s+`: nalez Metis 17 - SQL bere blokovy komentar jako bily znak.
+# `(?:\s|/\*.*?\*/)+` misto `\s+`: nalez Metis 17 - SQL bere blokovy komentar jako bily znak. Od 0.3.1 jedna promenna
+# pro Test-DestructiveSql, Test-DbDestructiveText i Test-DatabaseRule (CR-8 kola 1 /code-review).
+$script:SqlGap = '(?:\s|/\*.*?\*/)+'
 function Test-DestructiveSql([string]$Sql) {
     if ([string]::IsNullOrWhiteSpace($Sql)) { return $false }
-    return ([regex]::IsMatch($Sql, '\bdrop(?:\s|/\*.*?\*/)+(table|database|schema)\b', 'IgnoreCase')) -or
+    return ([regex]::IsMatch($Sql, ('\bdrop' + $script:SqlGap + '(table|database|schema)\b'), 'IgnoreCase')) -or
            ([regex]::IsMatch($Sql, '\btruncate\b', 'IgnoreCase')) -or
            (Test-DeleteWithoutWhere $Sql) -or
            (Test-UpdateWithoutWhere $Sql)
@@ -1441,9 +1471,12 @@ function Test-DestructiveSql([string]$Sql) {
 # programu (`dropdb`, `dotnet ef database drop`, `sqllocaldb delete`).
 function Test-DbDestructiveText([string]$Text) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    # CR-7 (kolo 1 /code-review): prikaz coreutils `truncate -s 0 log` neni SQL - tady jde o text SHELLU, ne o SQL z klienta,
+    # takze se jeho volani s prepinacem (kratkym nebo dlouhym z man truncate) vyjme. SQL `TRUNCATE -- komentar` zustava.
+    $Text = [regex]::Replace($Text, '(?i)\btruncate(?=\s+(?:-[a-z]|--(?:size|reference|no-create|io-blocks)\b))', ' ')
     if (Test-DestructiveSql $Text) { return $true }
     if ([regex]::IsMatch($Text, '(?:^|[\s;|&(''"/\\])dropdb(?:\.exe)?(?:\s|$|[''";|&)])', 'IgnoreCase')) { return $true }
-    if ([regex]::IsMatch($Text, '\bdotnet[- ]ef(?:\s|/\*.*?\*/)+database(?:\s|/\*.*?\*/)+drop\b', 'IgnoreCase')) { return $true }
+    if ([regex]::IsMatch($Text, ('\bdotnet[- ]ef' + $script:SqlGap + 'database' + $script:SqlGap + 'drop\b'), 'IgnoreCase')) { return $true }
     if ([regex]::IsMatch($Text, '\bsqllocaldb(?:\.exe)?\s+(?:delete|d)\b', 'IgnoreCase')) { return $true }
     return $false
 }
@@ -1621,7 +1654,7 @@ function Test-DatabaseRule($Leaf, $Config) {
     # `(?:\s|/\*.*?\*/)+` misto `\s+`: nalez Metis 17 - SQL bere blokovy komentar jako
     # bily znak, takze `DROP/**/TABLE` je platny prikaz, ktery `\s+` nikdy nepotka.
     # `dotnet[- ]ef`: nalez Metis 10 - primo nainstalovany nastroj se jmenuje `dotnet-ef`.
-    $gap = '(?:\s|/\*.*?\*/)+'
+    $gap = $script:SqlGap
 
     # !! Nalez Ada N28 (0.1.11): marker "SQL ze souboru" je PRIZNAK, ne text SQL.
     # Get-SqlText ho pridava VEDLE viditelneho SQL z `-c`/uvozovek, takze do 0.1.10

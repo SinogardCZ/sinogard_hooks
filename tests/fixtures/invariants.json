@@ -8229,6 +8229,102 @@
       "expect": "allow",
       "since": "exec psql DROP (DB neni vec secrets)",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -u postgres dropdb ls",
+      "expect": "allow",
+      "since": "presnost tabulky (mutant MU9): kontejner jmenem dropdb za -u hodnota -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --user postgres dropdb ls",
+      "expect": "allow",
+      "since": "presnost tabulky (mutant MU9): kontejner jmenem dropdb za --user hodnota -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env -S \"docker --context x exec db dropdb gsd_dev\"",
+      "expect": "ask",
+      "since": "env -S s kontejnerem za globalni volbou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env -S \"docker -H ssh://prod exec db psql -h db.example.com -c 'DROP TABLE x'\"",
+      "expect": "deny",
+      "since": "env -S s kontejnerem, vzdaleny vnitrni hostitel -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env -S \"docker --context x exec db ls\"",
+      "expect": "allow",
+      "since": "sourozenec: env -S s kontejnerem ls -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman-remote exec db dropdb gsd_dev",
+      "expect": "ask",
+      "since": "podman-remote exec dropdb -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "podman-remote ps",
+      "expect": "allow",
+      "since": "sourozenec: podman-remote ps -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "PGHOST=db.example.com docker exec -e PGHOST db psql -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "pruchozi -e PGHOST s hodnotou z prefixu -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "$env:PGHOST = 'db.example.com'; docker exec -e PGHOST db psql -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "pruchozi -e PGHOST s hodnotou z $env: v temze prikazu -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -e PGHOST db psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "sourozenec: pruchozi -e PGHOST bez hodnoty v prikazu -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --env-file prod.env db dropdb app",
+      "expect": "ask",
+      "since": "sourozenec: --env-file (obsah neviditelny) -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db sh -c \"$LOGDIR/rotate.sh && truncate -s 0 /var/log/app.log\"",
+      "expect": "allow",
+      "since": "coreutils truncate pod nerozebratelnou hlavou v kontejneru -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db sh -c \"$SUDO truncate -s 0 /var/log/app.log\"",
+      "expect": "allow",
+      "since": "coreutils truncate v temze statementu za promennou v hlave -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db sh -c \"$PSQL -c 'TRUNCATE t'\"",
+      "expect": "ask",
+      "since": "kontrola: SQL TRUNCATE pod nerozebratelnou hlavou v kontejneru -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --f1 --f2 --f3 --f4 --f5 --f6 --f7 --f8 --f9 --f10 --f11 --f12 --f13 --f14 --name dropdb postgres:17 ls",
+      "expect": "allow",
+      "since": "mnoho neznamych prepinacu: zadny falesny kandidat z hodnoty -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --gpus all dropdb ls",
+      "expect": "allow",
+      "since": "--gpus bere hodnotu (tabulka docker run) -> ticho"
     }
   ]
 }

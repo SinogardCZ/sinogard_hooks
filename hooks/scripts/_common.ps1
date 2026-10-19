@@ -1053,7 +1053,8 @@ function Get-WrapperTail($Argv, [int]$Depth = 0) {
 # vnitrniho prikazu, smerem k prisnosti (clen tridy M-c).
 # !! Get-WrapperTail se tim NEMENI (AOPT-O25): jeho starsi kontejnerova vetev drzi dnesni verdikt hooku secrets i cestovych
 # a git pravidel za prefixovym obalem (`sudo docker exec ...`). Tahle funkce slouzi jen DB pravidlu gate (README omezeni 11).
-$script:ContainerCli = '^(docker|podman|docker-compose|podman-compose)$'
+# `podman-remote` je tentyz klient podmana pod jinym jmenem binarky (CR-2 kola 1 /code-review).
+$script:ContainerCli = '^(docker|podman|podman-remote|docker-compose|podman-compose)$'
 
 function New-ContainerOptionTable([string]$ValueLong, [string]$ValueShort, [string]$BoolLong, [string]$BoolShort) {
     # Kratke volby jsou case-SENSITIVNI (`-H` host enginu x `-h` hostname kontejneru) - proto Ordinal, ne hashtable.
@@ -1090,7 +1091,7 @@ $script:CtPodmanExec = Join-ContainerOptionTable (New-ContainerOptionTable 'cidf
 $script:CtDockerRun = New-ContainerOptionTable ('add-host annotation attach blkio-weight blkio-weight-device cap-add cap-drop cgroup-parent cgroupns cidfile ' +
     'cpu-count cpu-percent cpu-period cpu-quota cpu-rt-period cpu-rt-runtime cpu-shares cpus cpuset-cpus cpuset-mems detach-keys device ' +
     'device-cgroup-rule device-read-bps device-read-iops device-write-bps device-write-iops dns dns-option dns-search domainname entrypoint ' +
-    'env env-file expose group-add health-cmd health-interval health-retries health-start-interval health-start-period health-timeout ' +
+    'env env-file expose gpus group-add health-cmd health-interval health-retries health-start-interval health-start-period health-timeout ' +
     'hostname io-maxbandwidth io-maxiops ip ip6 ipc isolation label label-file link link-local-ip log-driver log-opt mac-address memory ' +
     'memory-reservation memory-swap memory-swappiness mount name network network-alias oom-score-adj pid pids-limit platform publish pull ' +
     'restart runtime security-opt shm-size stop-signal stop-timeout storage-opt sysctl tmpfs ulimit umask user userns uts volume ' +
@@ -1177,6 +1178,10 @@ function Get-ContainerCommand($Argv) {
     $queue = New-Object System.Collections.Queue
     $first = if ($cli.EndsWith('compose')) { 'cglobal' } else { 'global' }
     $queue.Enqueue(@{ I = 1; Stage = $first; Sub = ''; Entry = $null; NoTarget = $false; Positional = $false })
+    # CR-10 (kolo 1 /code-review): stav = (pozice, faze, podprikaz, entrypoint, bez cile, pozicni). Dve cteni neznamych voleb
+    # se sbihaji na tutez pozici; bez evidence navstivenych stavu rostl jejich pocet jako Fibonacci a strop rozpoctu
+    # spoustel nahradni "kazda pozice je kandidat" uz u par desitek neznamych prepinacu (falesny dotaz z hodnoty volby).
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     $budget = 256
     while ($queue.Count -gt 0) {
         $s = $queue.Dequeue()
@@ -1200,13 +1205,16 @@ function Get-ContainerCommand($Argv) {
                             else { if ($isPodman) { $script:CtPodmanRun } else { $script:CtDockerRun } } }
                 'csub'    { if ($s.Sub -eq 'exec') { $script:CtComposeExec } else { $script:CtComposeRun } }
             }
+            $stKey = ('{0}|{1}|{2}|{3}|{4}|{5}' -f $i, $s.Stage, $s.Sub, $s.Entry, $s.NoTarget, $s.Positional)
+            if (-not $seen.Add($stKey)) { break }   # tentyz stav uz rozebira jiny pruchod
             if (-not $s.Positional -and $tok -eq '--') { $s.Positional = $true; $i++; continue }
             if (-not $s.Positional -and $tok.Length -gt 1 -and $tok.StartsWith('-')) {
                 # Bez `@()`: funkce vraci `,@(...)`, dalsi `@()` by pole zabalil podruhe (tataz past jako Split-Pipe, N-H10).
                 $reads = Read-ContainerOption $arr $i $table
+                $base = $s.Clone()   # kazde dalsi cteni vychazi ze stavu PRED ctenim prvnim
                 for ($r = 0; $r -lt $reads.Count; $r++) {
                     $rd = $reads[$r]
-                    $st = if ($r -eq 0) { $s } else { $s.Clone() }
+                    $st = if ($r -eq 0) { $s } else { $base.Clone() }
                     $nm = [string]$rd.Name
                     if ($null -ne $rd.Value) {
                         if ($nm -ceq 'e' -or $nm -ceq 'env') { [void]$envs.Add([string]$rd.Value) }

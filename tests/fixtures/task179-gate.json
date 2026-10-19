@@ -51,6 +51,8 @@
     { "group": "opt", "name": "-- pred kontejnerem -> ask", "tool": "Bash", "cmd": "docker exec -- db psql -c \"DROP TABLE x\"", "expect": "ask" },
     { "group": "opt", "name": "cesta k docker.exe v uvozovkach -> ask", "tool": "Bash", "cmd": "\"C:/Program Files/Docker/Docker/resources/bin/docker.exe\" exec db psql -c \"DROP TABLE x\"", "expect": "ask" },
     { "group": "opt", "name": "sourozenec: exec -u SELECT -> ticho", "tool": "Bash", "cmd": "docker exec -u postgres db psql -c \"SELECT 1\"", "expect": "allow" },
+    { "group": "opt", "name": "presnost tabulky (mutant MU9): kontejner jmenem dropdb za -u hodnota -> ticho", "tool": "Bash", "cmd": "docker exec -u postgres dropdb ls", "expect": "allow" },
+    { "group": "opt", "name": "presnost tabulky (mutant MU9): kontejner jmenem dropdb za --user hodnota -> ticho", "tool": "Bash", "cmd": "docker exec --user postgres dropdb ls", "expect": "allow" },
 
     { "group": "Ma", "name": "run --entrypoint klient, vzdaleny -> deny", "tool": "Bash", "cmd": "docker run --rm --entrypoint psql postgres:17 -h db.example.com -c \"DROP TABLE x\"", "expect": "deny" },
     { "group": "Ma", "name": "run --entrypoint=dropdb -> ask", "tool": "Bash", "cmd": "docker run --entrypoint=dropdb postgres:17 gsd_dev", "expect": "ask" },
@@ -122,6 +124,21 @@
     { "group": "ctl-neskodne", "name": "docker logs -> ticho", "tool": "Bash", "cmd": "docker logs db", "expect": "allow" },
     { "group": "ctl-neskodne", "name": "exec psql -f (SQL ze souboru, audit) -> ticho", "tool": "Bash", "cmd": "podman exec db psql -f /tmp/m.sql", "expect": "allow" },
     { "group": "ctl-neskodne", "name": "exec UPDATE s WHERE -> ticho", "tool": "Bash", "cmd": "docker exec db psql -c \"UPDATE t SET a = 1 WHERE id = 2\"", "expect": "allow" },
-    { "group": "ctl-neskodne", "name": "podman volume ls -> ticho", "tool": "PowerShell", "cmd": "podman volume ls", "expect": "allow" }
+    { "group": "ctl-neskodne", "name": "podman volume ls -> ticho", "tool": "PowerShell", "cmd": "podman volume ls", "expect": "allow" },
+
+    { "group": "CR1", "name": "env -S s kontejnerem za globalni volbou -> ask", "tool": "Bash", "cmd": "env -S \"docker --context x exec db dropdb gsd_dev\"", "expect": "ask" },
+    { "group": "CR1", "name": "env -S s kontejnerem, vzdaleny vnitrni hostitel -> deny", "tool": "Bash", "cmd": "env -S \"docker -H ssh://prod exec db psql -h db.example.com -c 'DROP TABLE x'\"", "expect": "deny" },
+    { "group": "CR1", "name": "sourozenec: env -S s kontejnerem ls -> ticho", "tool": "Bash", "cmd": "env -S \"docker --context x exec db ls\"", "expect": "allow" },
+    { "group": "CR2", "name": "podman-remote exec dropdb -> ask", "tool": "PowerShell", "cmd": "podman-remote exec db dropdb gsd_dev", "expect": "ask" },
+    { "group": "CR2", "name": "sourozenec: podman-remote ps -> ticho", "tool": "PowerShell", "cmd": "podman-remote ps", "expect": "allow" },
+    { "group": "CR3", "name": "pruchozi -e PGHOST s hodnotou z prefixu -> deny", "tool": "Bash", "cmd": "PGHOST=db.example.com docker exec -e PGHOST db psql -c \"DROP TABLE x\"", "expect": "deny" },
+    { "group": "CR3", "name": "pruchozi -e PGHOST s hodnotou z $env: v temze prikazu -> deny", "tool": "PowerShell", "cmd": "$env:PGHOST = 'db.example.com'; docker exec -e PGHOST db psql -c \"DROP TABLE x\"", "expect": "deny" },
+    { "group": "CR3", "name": "sourozenec: pruchozi -e PGHOST bez hodnoty v prikazu -> ask", "tool": "Bash", "cmd": "docker exec -e PGHOST db psql -c \"DROP TABLE x\"", "expect": "ask" },
+    { "group": "CR3", "name": "sourozenec: --env-file (obsah neviditelny) -> ask", "tool": "Bash", "cmd": "docker exec --env-file prod.env db dropdb app", "expect": "ask" },
+    { "group": "CR7", "name": "coreutils truncate pod nerozebratelnou hlavou v kontejneru -> ticho", "tool": "Bash", "cmd": "docker exec db sh -c \"$LOGDIR/rotate.sh && truncate -s 0 /var/log/app.log\"", "expect": "allow" },
+    { "group": "CR7", "name": "coreutils truncate v temze statementu za promennou v hlave -> ticho", "tool": "Bash", "cmd": "docker exec db sh -c \"$SUDO truncate -s 0 /var/log/app.log\"", "expect": "allow" },
+    { "group": "CR7", "name": "kontrola: SQL TRUNCATE pod nerozebratelnou hlavou v kontejneru -> ask", "tool": "Bash", "cmd": "docker exec db sh -c \"$PSQL -c 'TRUNCATE t'\"", "expect": "ask" },
+    { "group": "CR10", "name": "mnoho neznamych prepinacu: zadny falesny kandidat z hodnoty -> ticho", "tool": "Bash", "cmd": "docker run --f1 --f2 --f3 --f4 --f5 --f6 --f7 --f8 --f9 --f10 --f11 --f12 --f13 --f14 --name dropdb postgres:17 ls", "expect": "allow" },
+    { "group": "CR10", "name": "--gpus bere hodnotu (tabulka docker run) -> ticho", "tool": "Bash", "cmd": "docker run --gpus all dropdb ls", "expect": "allow" }
   ]
 }

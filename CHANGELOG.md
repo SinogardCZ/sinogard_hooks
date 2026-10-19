@@ -18,7 +18,8 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | třída tvaru | 0.3.0 | 0.3.1 |
 |---|---|---|
 | `docker\|podman exec\|run … <kontejner> psql\|sqlcmd … -c/-Q "<destruktivní SQL>"`, `dropdb`, `dotnet ef database drop`, `sqllocaldb delete` uvnitř — místní | ticho | `ask` (podle `gate.dbDestroyLocal`; `deny` → `deny`) |
-| totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`) | ticho | `deny` |
+| totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`, průchozí `-e PGHOST` s hodnotou v témže příkazu) | ticho | `deny` |
+| `podman-remote` (tentýž klient podmana) | ticho | jako řádky výše |
 | management podpříkaz `container exec\|run`, compose (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem (podman i za ním), `run --entrypoint`, `podman exec --latest\|--cidfile`, volby s hodnotou ve všech zápisech (`--x=h`, `-xh`, shluk `-iu h`, `--`) | ticho | jako řádky výše |
 | volba, kterou tabulka CLI nezná (čte se s hodnotou i bez) | ticho | jako řádky výše |
 | vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
@@ -44,9 +45,10 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (105 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny),
-`tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0: 59 z 105 řádků gate červených ze správného důvodu
-(čekáno `ask`/`deny`, dostáno ticho). `Invoke-Task117Rows` bere předponu fixtury.
+`tests/fixtures/task179-gate.json` (121 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kola 1 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
+fází nad první verzí opravy. Invariant 1152 → 1276 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
 
 ### Meze TASK-161 přecházejí na 0.3.2
 

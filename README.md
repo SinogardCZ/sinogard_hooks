@@ -496,13 +496,15 @@ aby si je nikdo nemusel objevit sám.
     ✔️ **Od 0.3.1 (GSD TASK-179, `AOPT-O24`–`O27`):** vnitřní příkaz kontejnerového obalu posuzuje **DB pravidlo** — tatáž
     destruktivní množina jako na hostiteli (SQL `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE`, `DELETE` / `UPDATE` bez `WHERE`;
     `dropdb`, `dotnet ef database drop`, `sqllocaldb delete`), místní = `ask` podle `gate.dbDestroyLocal`, vzdálený = `deny`.
-    Rozbor zná `exec` i `run` (i `--entrypoint`), management podpříkaz `container exec|run`, compose (`docker compose`,
+    Rozbor zná `docker`, `podman` i `podman-remote`, `exec` i `run` (i `--entrypoint`), management podpříkaz `container exec|run`, compose (`docker compose`,
     `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem i za ním (podman), `podman exec
     --latest|--cidfile`, vnořený `bash -c`, heredoc a rouru do klienta a obal za `sudo` / `env` / `timeout`. Volbu s hodnotou
     bere z dokumentace CLI (docker/cli v29.9.0, docker/compose v5.6.0, podman v6.1.3, podman-compose 1.6.0); volbu, kterou
     nezná, čte **oběma způsoby** (s hodnotou i bez), takže budoucí volba nic neschová. Hostitel se bere z **vnitřního**
-    příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`), **nikdy z voleb obalu** (`-H` enginu, `run -h`
-    = jméno kontejneru). Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
+    příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`; průchozí `-e PGHOST` bere hodnotu z téhož
+    příkazu — prefix `PGHOST=…`, `export`, `$env:PGHOST = …`; `--env-file` a hodnotu ze session hook nevidí → místní = `ask`),
+    **nikdy z voleb obalu** (`-H` enginu, `run -h` = jméno kontejneru). Jiná CLI, která spouštějí příkaz v kontejneru
+    (`kubectl exec`, `oc`, `nerdctl`), rozbor nezná — mimo třídu 0.3.1 (kandidát na další vydání, GSD TASK-161). Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
     ⚠️ **Mez — dvě tabulky obalu:** starší průchod obaly (`Get-WrapperTail`, sdílený s hookem `secrets`) zůstal beze změny,
     aby se nezměnil žádný verdikt 0.3.0 (`AOPT-O25`). Proto: hook `secrets` uvnitř kontejneru za globální volbou nebo
