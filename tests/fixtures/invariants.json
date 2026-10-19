@@ -8325,6 +8325,54 @@
       "cmd": "docker run --gpus all dropdb ls",
       "expect": "allow",
       "since": "--gpus bere hodnotu (tabulka docker run) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose exec -T db bash <<'EOF'\npsql -U gsd -c \"DROP DATABASE gsd_dev\"\nEOF",
+      "expect": "ask",
+      "since": "heredoc do shellu v compose exec -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman --connection x exec -i c sh <<EOF\ndropdb gsd_dev\nEOF",
+      "expect": "ask",
+      "since": "heredoc do shellu v kontejneru za globalni volbou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose exec -T -e PGHOST=db.example.com db bash <<'EOF'\npsql -c \"DROP TABLE x\"\nEOF",
+      "expect": "deny",
+      "since": "heredoc do shellu v compose exec s -e PGHOST vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman --connection x exec -i c sh <<EOF\nrm -rf /srv/data\nEOF",
+      "expect": "allow",
+      "since": "kontrola AOPT-O25: heredoc do shellu v kontejneru za globalni volbou, mazani cesty -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i c sh <<EOF\nrm -rf /srv/data\nEOF",
+      "expect": "deny",
+      "since": "kontrola 0.3.0: heredoc do shellu v docker exec, mazani cesty -> dnesni verdikt (deny)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo docker exec -e PGHOST=db.example.com db psql -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "sudo pred exec s -e PGHOST vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"PGHOST=db.example.com docker exec -e PGHOST db psql -c 'DROP TABLE x'\"",
+      "expect": "deny",
+      "since": "pruchozi -e PGHOST s prirazenim uvnitr bash -c -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env -S \"docker --context x exec -i db psql\" <<SQL\nDROP DATABASE gsd_dev;\nSQL",
+      "expect": "ask",
+      "since": "heredoc do klienta v kontejneru uvnitr env -S -> ask"
     }
   ]
 }

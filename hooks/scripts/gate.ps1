@@ -96,34 +96,49 @@ $script:NetDeleteTargetPattern = $script:NetDeleteCallHeads + '\(\s*[''"]([^''"]
 # OuterExe `sudo` resp. `docker`, ty nejsou v sqlClients, telo heredocu se proto vubec
 # nectlo jako SQL a destruktivni operace propadla na allow.
 function Get-UnwrappedExe([string]$Command) {
-    return [string](Get-UnwrappedCommand $Command).Exe
+    # K2-9 (kolo 2 /code-review): jen pruchod obaly - volaji ho clanky roury PRED klientem, kde se hleda jen echo/printf.
+    if ([string]::IsNullOrWhiteSpace($Command)) { return '' }
+    $tail = Get-WrapperTail (Split-Arguments $Command)
+    if ($tail.Count -eq 0) { return '' }
+    return (Get-ExecutableName ([string]$tail[0]))
 }
 
 # TASK-179 (0.3.1): uvozujici prikaz tela heredocu a cil roury. Pruchod obaly (Get-WrapperTail) zustava, jak byl - jeho verdikty
-# (vcetne shellu v kontejneru, `docker exec -i c sh <<EOF`) se nemeni (AOPT-O25). Kdyz ale NEnajde SQL klienta a prikaz je
-# kontejnerovy obal, rozhodne rozbor obalu (Get-ContainerCommand): `podman --connection x exec -i c psql <<SQL` daval do 0.3.0
+# (vcetne shellu v kontejneru, `docker exec -i c sh <<EOF`) se nemeni (AOPT-O25). Kdyz ale NEnajde SQL klienta ani shell a prikaz
+# je kontejnerovy obal, rozhodne rozbor obalu (Get-ContainerCommand): `podman --connection x exec -i c psql <<SQL` daval do 0.3.0
 # jako klienta jmeno kontejneru a telo se necetlo jako SQL. Pak je hostitelsky text VNITRNI prikaz + promenne prostredi obalu
 # (AOPT-O26, ne volby obalu) a telo nese priznak Container (jen DB pravidlo, nikdy `allow` z gate.dbDestroyLocal).
+# K2-1 (kolo 2): totez pro shell v kontejneru (`docker compose exec -T db bash <<EOF`) - telo se rozebere, ale jen DB pravidlem.
+# K2-5 (kolo 2): obal kontejneru muze stat az v ocasu starsiho pruchodu (`env -S "docker ... exec -i db psql" <<SQL`).
 function Get-UnwrappedCommand([string]$Command) {
     $res = @{ Exe = ''; Outer = $Command; Container = $false }
     if ([string]::IsNullOrWhiteSpace($Command)) { return $res }
     $argv = Split-Arguments $Command
     $tail = Get-WrapperTail $argv
     if ($tail.Count -gt 0) { $res.Exe = Get-ExecutableName ([string]$tail[0]) }
-    if (@($script:SqlClients) -ccontains $res.Exe.ToLowerInvariant()) { return $res }
-    $ci = Get-ContainerIndex $argv
-    if ($ci -lt 0) { return $res }
-    $cc = Get-ContainerCommand @($argv[$ci..($argv.Count - 1)])
+    $shells = @(Get-Field (Get-Field $script:Config 'gate') 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
+    $oldExe = $res.Exe.ToLowerInvariant()
+    if ((@($script:SqlClients) -ccontains $oldExe) -or ($shells -ccontains $oldExe)) { return $res }
+    $cargv = $null
+    if ($oldExe -match $script:ContainerCli) { $cargv = @($tail) }
+    else {
+        $ci = Get-ContainerIndex $argv
+        if ($ci -ge 0) { $cargv = @($argv[$ci..($argv.Count - 1)]) }
+    }
+    if ($null -eq $cargv) { return $res }
+    $cc = Get-ContainerCommand $cargv
     if ($null -eq $cc) { return $res }
+    $shellHit = $null
     foreach ($t0 in $cc.Tails) {
         # Bez `@()` kolem volani: Get-WrapperTail vraci `,@(...)` (N-H10).
         $t = Get-WrapperTail @($t0)
         if ($t.Count -eq 0) { continue }
         $exe = Get-ExecutableName ([string]$t[0])
-        if (@($script:SqlClients) -ccontains $exe.ToLowerInvariant()) {
-            return @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + (Resolve-ContainerEnv $cc.Env)).Trim(); Container = $true }
-        }
+        $hit = @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + (Resolve-ContainerEnv $cc.Env)).Trim(); Container = $true }
+        if (@($script:SqlClients) -ccontains $exe.ToLowerInvariant()) { return $hit }
+        if ($null -eq $shellHit -and ($shells -ccontains $exe.ToLowerInvariant())) { $shellHit = $hit }
     }
+    if ($null -ne $shellHit) { return $shellHit }
     return $res
 }
 
@@ -138,7 +153,8 @@ function Resolve-ContainerEnv($Envs) {
         if ($v -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { [void]$out.Add($v); continue }
         $n = [regex]::Escape($v)
         $val = '("[^"]*"|''[^'']*''|[^\s;&|]+)'
-        foreach ($m in [regex]::Matches([string]$script:FullCommand, ('(?:^|[\s;&|(])(?:export\s+)?' + $n + '=' + $val))) {
+        # K2-4 (kolo 2): prirazeni muze stat i hned za uvozovkou tela obalu (`bash -c "PGHOST=x docker ..."`).
+        foreach ($m in [regex]::Matches([string]$script:FullCommand, ('(?:^|[\s;&|("''])(?:export\s+)?' + $n + '=' + $val))) {
             [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
         }
         foreach ($m in [regex]::Matches([string]$script:FullCommand, ('\$env:' + $n + '\s*=\s*' + $val), 'IgnoreCase')) {
@@ -161,8 +177,9 @@ function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '') {
     foreach ($t0 in $cc.Tails) {
         $t = @($t0)
         if ($t.Count -eq 0) { continue }
-        # CR-5: vnitrni prikaz, ktery uz rozebral pruchod prefixovym obalem (vsemi pravidly), se podruhe nerozebira.
-        if ($SkipTail -ne '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
+        # CR-5: vnitrni prikaz, ktery uz rozebral pruchod prefixovym obalem (vsemi pravidly), se podruhe nerozebira -
+        # K2-2 (kolo 2): ale jen kdyz obal nepredava promenne prostredi; starsi pruchod `-e PGHOST=...` zahodi a hostitel by zmizel.
+        if ($SkipTail -ne '' -and $envText -eq '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
         foreach ($l in (Get-CommandLeaf (Join-Argument $t) ($Depth + 1))) {
             $l['Container'] = $true
             $l['ContainerEnv'] = $envText
@@ -749,7 +766,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     $containerLeaves = New-Object System.Collections.ArrayList
 
     switch -Regex ($exe) {
-        '^(docker|podman|podman-remote|docker-compose|podman-compose)$' {
+        ($script:ContainerCli) {   # K2-6: tentyz seznam CLI jako Get-ContainerCommand, ne druha kopie
             foreach ($l in (Get-ContainerLeaves $argv $Depth)) { [void]$containerLeaves.Add($l) }
         }
         '^(sudo|nice|nohup|time|doas|timeout|command|builtin|exec|env|stdbuf)$' {
@@ -774,7 +791,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             #
             # Nalez Metis 5: `command rm -rf src` obchazi jmeno spustitelneho souboru -
             # `command|builtin|exec` jsou v tabulce jako obaly bez prepinacu s hodnotou.
-            $tail = Get-WrapperTail $argv
+            $tail = $oldTail   # K2-8: tentyz pruchod jako vyse, podruhe se nepocita
             if ($tail.Count -eq 0) {
                 # `env` bez prikazu je legitimni vypis prostredi, ne obal.
                 if ($exe -eq 'env') {
@@ -1873,7 +1890,8 @@ function Test-ContainerLeaf($Leaf, $Config) {
             $worst = $null
             foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
                 $inner['Container'] = $true
-                $inner['ContainerEnv'] = [string](Get-LeafField $Leaf 'ContainerEnv' '')
+                # Hostitelsky text tela: promenne obalu nese u heredocu do shellu v kontejneru jeho Outer (Get-UnwrappedCommand).
+                $inner['ContainerEnv'] = ([string](Get-LeafField $Leaf 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'Outer' '')).Trim()
                 $r = Test-ContainerLeaf $inner $Config
                 if ($null -eq $r) { continue }
                 if ($r.Decision -eq 'deny') { return $r }

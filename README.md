@@ -504,7 +504,11 @@ aby si je nikdo nemusel objevit sám.
     příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`; průchozí `-e PGHOST` bere hodnotu z téhož
     příkazu — prefix `PGHOST=…`, `export`, `$env:PGHOST = …`; `--env-file` a hodnotu ze session hook nevidí → místní = `ask`),
     **nikdy z voleb obalu** (`-H` enginu, `run -h` = jméno kontejneru). Jiná CLI, která spouštějí příkaz v kontejneru
-    (`kubectl exec`, `oc`, `nerdctl`), rozbor nezná — mimo třídu 0.3.1 (kandidát na další vydání, GSD TASK-161). Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
+    (`kubectl exec`, `oc`, `nerdctl`), rozbor nezná — mimo třídu 0.3.1 (kandidát na další vydání, GSD TASK-161). Stejně jako
+    na hostiteli se nerozebírají obaly `su -c`, `gosu`, `runuser` (další obalové programy, `A117-N33`, TASK-161) — `docker exec db
+    su postgres -c "dropdb x"` proto dál mlčí; a hostitel z proměnných `PGHOSTADDR` / `SQLCMDSERVER` se nečte ani na hostiteli.
+    Heredoc do shellu v kontejneru (`docker compose exec -T db bash <<EOF`) se rozebere **jen DB pravidlem**; tvar, který
+    starší průchod obaly rozbalil už v 0.3.0 (`docker exec -i c sh <<EOF`), má dál všechna pravidla jako v 0.3.0. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
     ⚠️ **Mez — dvě tabulky obalu:** starší průchod obaly (`Get-WrapperTail`, sdílený s hookem `secrets`) zůstal beze změny,
     aby se nezměnil žádný verdikt 0.3.0 (`AOPT-O25`). Proto: hook `secrets` uvnitř kontejneru za globální volbou nebo

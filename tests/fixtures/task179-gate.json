@@ -139,6 +139,15 @@
     { "group": "CR7", "name": "coreutils truncate v temze statementu za promennou v hlave -> ticho", "tool": "Bash", "cmd": "docker exec db sh -c \"$SUDO truncate -s 0 /var/log/app.log\"", "expect": "allow" },
     { "group": "CR7", "name": "kontrola: SQL TRUNCATE pod nerozebratelnou hlavou v kontejneru -> ask", "tool": "Bash", "cmd": "docker exec db sh -c \"$PSQL -c 'TRUNCATE t'\"", "expect": "ask" },
     { "group": "CR10", "name": "mnoho neznamych prepinacu: zadny falesny kandidat z hodnoty -> ticho", "tool": "Bash", "cmd": "docker run --f1 --f2 --f3 --f4 --f5 --f6 --f7 --f8 --f9 --f10 --f11 --f12 --f13 --f14 --name dropdb postgres:17 ls", "expect": "allow" },
-    { "group": "CR10", "name": "--gpus bere hodnotu (tabulka docker run) -> ticho", "tool": "Bash", "cmd": "docker run --gpus all dropdb ls", "expect": "allow" }
+    { "group": "CR10", "name": "--gpus bere hodnotu (tabulka docker run) -> ticho", "tool": "Bash", "cmd": "docker run --gpus all dropdb ls", "expect": "allow" },
+
+    { "group": "K2-1", "name": "heredoc do shellu v compose exec -> ask", "tool": "Bash", "cmd": "docker compose exec -T db bash <<'EOF'\npsql -U gsd -c \"DROP DATABASE gsd_dev\"\nEOF", "expect": "ask" },
+    { "group": "K2-1", "name": "heredoc do shellu v kontejneru za globalni volbou -> ask", "tool": "Bash", "cmd": "podman --connection x exec -i c sh <<EOF\ndropdb gsd_dev\nEOF", "expect": "ask" },
+    { "group": "K2-1", "name": "heredoc do shellu v compose exec s -e PGHOST vzdaleny -> deny", "tool": "Bash", "cmd": "docker compose exec -T -e PGHOST=db.example.com db bash <<'EOF'\npsql -c \"DROP TABLE x\"\nEOF", "expect": "deny" },
+    { "group": "K2-1", "name": "kontrola AOPT-O25: heredoc do shellu v kontejneru za globalni volbou, mazani cesty -> ticho", "tool": "Bash", "cmd": "podman --connection x exec -i c sh <<EOF\nrm -rf /srv/data\nEOF", "expect": "allow" },
+    { "group": "K2-1", "name": "kontrola 0.3.0: heredoc do shellu v docker exec, mazani cesty -> dnesni verdikt (deny)", "tool": "Bash", "cmd": "docker exec -i c sh <<EOF\nrm -rf /srv/data\nEOF", "expect": "deny" },
+    { "group": "K2-2", "name": "sudo pred exec s -e PGHOST vzdaleny -> deny", "tool": "Bash", "cmd": "sudo docker exec -e PGHOST=db.example.com db psql -c \"DROP TABLE x\"", "expect": "deny" },
+    { "group": "K2-4", "name": "pruchozi -e PGHOST s prirazenim uvnitr bash -c -> deny", "tool": "Bash", "cmd": "bash -c \"PGHOST=db.example.com docker exec -e PGHOST db psql -c 'DROP TABLE x'\"", "expect": "deny" },
+    { "group": "K2-5", "name": "heredoc do klienta v kontejneru uvnitr env -S -> ask", "tool": "Bash", "cmd": "env -S \"docker --context x exec -i db psql\" <<SQL\nDROP DATABASE gsd_dev;\nSQL", "expect": "ask" }
   ]
 }

@@ -23,7 +23,7 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | management podpříkaz `container exec\|run`, compose (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem (podman i za ním), `run --entrypoint`, `podman exec --latest\|--cidfile`, volby s hodnotou ve všech zápisech (`--x=h`, `-xh`, shluk `-iu h`, `--`) | ticho | jako řádky výše |
 | volba, kterou tabulka CLI nezná (čte se s hodnotou i bez) | ticho | jako řádky výše |
 | vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
-| heredoc a roura do klienta v kontejneru za globální volbou nebo management podpříkazem | ticho | jako řádky výše |
+| heredoc a roura do klienta v kontejneru za globální volbou nebo management podpříkazem, heredoc do shellu v kontejneru (compose, globální volba, `env -S "…"`) | ticho | jako řádky výše (heredoc do shellu jen DB pravidlem) |
 | nerozebratelná hlava uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem | ticho | `ask` (tvar `dbDestroyContainerOpaque`) |
 | cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
 
@@ -45,10 +45,10 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (121 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kola 1 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+`tests/fixtures/task179-gate.json` (129 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kol 1 a 2 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
 59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad první verzí opravy. Invariant 1152 → 1276 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
+fází nad předchozí verzí opravy. Invariant 1152 → 1284 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
 
 ### Meze TASK-161 přecházejí na 0.3.2
 
