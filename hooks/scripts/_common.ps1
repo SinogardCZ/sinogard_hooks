@@ -1124,7 +1124,16 @@ $script:CtComposeRun = New-ContainerOptionTable 'cap-add cap-drop entrypoint env
 # Jedna volba na pozici $I (pflag: `--x=hodnota`, `--x hodnota`, shluk `-abc`, v nemz prvni pismeno s hodnotou vezme zbytek
 # tokenu nebo dalsi token). Vraci 1 nebo vic moznych cteni @{ I = dalsi pozice; Name; Value } - vic jen u volby, kterou
 # tabulka nezna (bere hodnotu? nevime -> obe cteni).
-function Read-ContainerOption($Arr, [int]$I, $Table) {
+# K3-4 (kolo 3 /code-review): podman-compose je Python argparse a bere kazdou JEDNOZNACNOU zkratku dlouhe volby
+# (`--entry` = `--entrypoint`, `--en` = `--env`). Pro compose se proto zkratka rozvine na plne jmeno z tabulky.
+function Resolve-ContainerLongOption([string]$Name, $Table) {
+    if ($Table['VL'].Contains($Name) -or $Table['BL'].Contains($Name)) { return $Name }
+    $hit = @(@($Table['VL']) + @($Table['BL']) | Where-Object { $_.StartsWith($Name, [System.StringComparison]::Ordinal) } | Sort-Object -Unique)
+    if ($Name -ne '' -and $hit.Count -eq 1) { return [string]$hit[0] }
+    return $Name
+}
+
+function Read-ContainerOption($Arr, [int]$I, $Table, [bool]$Abbrev = $false) {
     $out = New-Object System.Collections.ArrayList
     $t = [string]$Arr[$I]
     $hasNext = ($I + 1) -lt $Arr.Count
@@ -1133,9 +1142,12 @@ function Read-ContainerOption($Arr, [int]$I, $Table) {
         $body = $t.Substring(2)
         $eq = $body.IndexOf('=')
         if ($eq -ge 0) {
-            [void]$out.Add(@{ I = $I + 1; Name = $body.Substring(0, $eq); Value = $body.Substring($eq + 1) })
+            $nm0 = $body.Substring(0, $eq)
+            if ($Abbrev) { $nm0 = Resolve-ContainerLongOption $nm0 $Table }
+            [void]$out.Add(@{ I = $I + 1; Name = $nm0; Value = $body.Substring($eq + 1) })
             return ,@($out)
         }
+        if ($Abbrev) { $body = Resolve-ContainerLongOption $body $Table }
         if ($Table['VL'].Contains($body)) {
             [void]$out.Add(@{ I = $I + 2; Name = $body; Value = $next })
             return ,@($out)
@@ -1162,11 +1174,37 @@ function Read-ContainerOption($Arr, [int]$I, $Table) {
     return ,@($out)
 }
 
+# K3-1 (kolo 3 /code-review): Split-Arguments rozdeli nekvotovanou substituci na slova - `docker exec $(docker ps -q) dropdb x`
+# dal tokeny `$(docker`, `ps`, `-q)`, cilem kontejneru byl `$(docker` a vnitrnim prikazem `ps`. Pro rozbor obalu se slova
+# substituce `$(...)`, zavorky PowerShellu `(...)` / `@(...)` a (v Bashi) zpetnych apostrofu slepi zpet do JEDNOHO tokenu.
+function Join-SubstitutionToken($Tokens) {
+    $out = New-Object System.Collections.ArrayList
+    $arr = @($Tokens)
+    $bash = (Get-ScannerEscape) -ne '`'
+    $i = 0
+    while ($i -lt $arr.Count) {
+        $t = [string]$arr[$i]
+        $open = ([regex]::Matches($t, '\(')).Count - ([regex]::Matches($t, '\)')).Count
+        $ticks = if ($bash) { ([regex]::Matches($t, '`')).Count } else { 0 }
+        $i++
+        while ($i -lt $arr.Count -and ($open -gt 0 -or ($ticks % 2) -eq 1)) {
+            $n = [string]$arr[$i]
+            $t = $t + ' ' + $n
+            $open += ([regex]::Matches($n, '\(')).Count - ([regex]::Matches($n, '\)')).Count
+            if ($bash) { $ticks += ([regex]::Matches($n, '`')).Count }
+            $i++
+        }
+        [void]$out.Add($t)
+    }
+    return ,@($out)
+}
+
 # Rozbor kontejneroveho obalu. $Argv[0] je CLI (docker, podman, docker-compose, podman-compose). Vraci $null (neni obal)
 # nebo @{ Tails = kandidati vnitrniho prikazu (ARGV); Env = hodnoty `-e/--env` predane vnitrnimu prikazu }. Prazdne
 # Tails = obal bez vnitrniho prikazu (`docker ps`, `docker compose up`, `docker run img` s vychozim prikazem obrazu).
 function Get-ContainerCommand($Argv) {
-    $arr = @(@($Argv) | ForEach-Object { [string]$_ })
+    # Bez `@()` kolem volani: funkce vraci `,@(...)` (N-H10).
+    $arr = Join-SubstitutionToken (@($Argv) | ForEach-Object { [string]$_ })
     if ($arr.Count -eq 0) { return $null }
     $cli = Get-ExecutableName $arr[0]
     if ($cli -notmatch $script:ContainerCli) { return $null }
@@ -1210,7 +1248,7 @@ function Get-ContainerCommand($Argv) {
             if (-not $s.Positional -and $tok -eq '--') { $s.Positional = $true; $i++; continue }
             if (-not $s.Positional -and $tok.Length -gt 1 -and $tok.StartsWith('-')) {
                 # Bez `@()`: funkce vraci `,@(...)`, dalsi `@()` by pole zabalil podruhe (tataz past jako Split-Pipe, N-H10).
-                $reads = Read-ContainerOption $arr $i $table
+                $reads = Read-ContainerOption $arr $i $table ($s.Stage -eq 'cglobal' -or $s.Stage -eq 'csub')
                 $base = $s.Clone()   # kazde dalsi cteni vychazi ze stavu PRED ctenim prvnim
                 for ($r = 0; $r -lt $reads.Count; $r++) {
                     $rd = $reads[$r]

@@ -507,8 +507,14 @@ aby si je nikdo nemusel objevit sám.
     (`kubectl exec`, `oc`, `nerdctl`), rozbor nezná — mimo třídu 0.3.1 (kandidát na další vydání, GSD TASK-161). Stejně jako
     na hostiteli se nerozebírají obaly `su -c`, `gosu`, `runuser` (další obalové programy, `A117-N33`, TASK-161) — `docker exec db
     su postgres -c "dropdb x"` proto dál mlčí; a hostitel z proměnných `PGHOSTADDR` / `SQLCMDSERVER` se nečte ani na hostiteli.
+    ⚠️ **Mez hostitele (ne kontejneru), od 0.3.0:** přiřazení proměnné prostředí, jejíž hodnota je substituce příkazu, před
+    SQL klientem rozbor prefixu rozdělí a destruktivní příkaz mlčí. Oprava i obaly `su -c` / `gosu` / `runuser` = GSD TASK-161
+    (0.3.2, `AOPT-O29`).
     Heredoc do shellu v kontejneru (`docker compose exec -T db bash <<EOF`) se rozebere **jen DB pravidlem**; tvar, který
-    starší průchod obaly rozbalil už v 0.3.0 (`docker exec -i c sh <<EOF`), má dál všechna pravidla jako v 0.3.0. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
+    starší průchod obaly rozbalil už v 0.3.0 (`docker exec -i c sh <<EOF`), má dál všechna pravidla jako v 0.3.0 — ale i tam
+    platí zákaz `allow` z `gate.dbDestroyLocal` a hostitel z `-e` obalu. Cíl kontejneru zapsaný substitucí (`$(docker ps -q)`,
+    zpětné apostrofy, závorka PowerShellu) se čte jako jeden token; zkratky dlouhých voleb `podman-compose` (argparse,
+    `--entry` = `--entrypoint`) se rozvinou, je-li zkratka jednoznačná. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
     ⚠️ **Mez — dvě tabulky obalu:** starší průchod obaly (`Get-WrapperTail`, sdílený s hookem `secrets`) zůstal beze změny,
     aby se nezměnil žádný verdikt 0.3.0 (`AOPT-O25`). Proto: hook `secrets` uvnitř kontejneru za globální volbou nebo

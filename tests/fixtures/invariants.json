@@ -8373,6 +8373,72 @@
       "cmd": "env -S \"docker --context x exec -i db psql\" <<SQL\nDROP DATABASE gsd_dev;\nSQL",
       "expect": "ask",
       "since": "heredoc do klienta v kontejneru uvnitr env -S -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec $(docker ps -qf name=db) dropdb gsd_dev",
+      "expect": "ask",
+      "since": "cil kontejneru substituci $() -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -it $(docker ps -q) psql -c \"DROP TABLE x\"",
+      "expect": "ask",
+      "since": "cil kontejneru substituci $() s -it, psql DROP -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman exec `podman ps -q` dropdb gsd_dev",
+      "expect": "ask",
+      "since": "cil kontejneru zpetnym apostrofem (Bash) -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker exec (docker ps -q) dropdb gsd_dev",
+      "expect": "ask",
+      "since": "cil kontejneru zavorkou (PowerShell) -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i $(docker ps -q) psql <<SQL\nDROP TABLE x;\nSQL",
+      "expect": "ask",
+      "since": "heredoc do klienta, cil substituci -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run --rm -e PGHOST=$(cat h) postgres:17 psql -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "hodnota -e substituci (hostitel neni mistni hodnota) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec $(docker ps -q) ls",
+      "expect": "allow",
+      "since": "sourozenec: cil substituci, ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i -e PGHOST=db.example.com c sh <<'EOF'\npsql -c \"DROP TABLE x\"\nEOF",
+      "expect": "deny",
+      "since": "heredoc do shellu v docker exec s -e PGHOST vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman-compose run --entry dropdb db gsd_dev",
+      "expect": "ask",
+      "since": "podman-compose zkracena --entry (argparse) -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman-compose exec --en PGHOST=db.example.com db psql -c \"DROP TABLE x\"",
+      "expect": "deny",
+      "since": "podman-compose exec zkracena --en PGHOST vzdaleny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker compose exec -T db bash -s -- --host=build.example.com <<'EOF'\ndropdb gsd_dev\nEOF",
+      "expect": "ask",
+      "since": "argument shellu za heredocem neni hostitel DB -> ask"
     }
   ]
 }

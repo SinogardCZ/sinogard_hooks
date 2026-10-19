@@ -20,6 +20,9 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | `docker\|podman exec\|run … <kontejner> psql\|sqlcmd … -c/-Q "<destruktivní SQL>"`, `dropdb`, `dotnet ef database drop`, `sqllocaldb delete` uvnitř — místní | ticho | `ask` (podle `gate.dbDestroyLocal`; `deny` → `deny`) |
 | totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`, průchozí `-e PGHOST` s hodnotou v témže příkazu) | ticho | `deny` |
 | `podman-remote` (tentýž klient podmana) | ticho | jako řádky výše |
+| cíl kontejneru substitucí (`$(docker ps -q)`, zpětné apostrofy, `(docker ps -q)` v PowerShellu), zkratky dlouhých voleb `podman-compose` | ticho | jako řádky výše |
+| heredoc do shellu v `docker exec -i c sh` (tvar, který 0.3.0 rozbalovala): s přepisem `gate.dbDestroyLocal = allow` | ticho | `ask` (tvar v kontejneru nikdy `allow`) |
+| totéž s `-e PGHOST=<vzdálený>` | `ask` | `deny` |
 | management podpříkaz `container exec\|run`, compose (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem (podman i za ním), `run --entrypoint`, `podman exec --latest\|--cidfile`, volby s hodnotou ve všech zápisech (`--x=h`, `-xh`, shluk `-iu h`, `--`) | ticho | jako řádky výše |
 | volba, kterou tabulka CLI nezná (čte se s hodnotou i bez) | ticho | jako řádky výše |
 | vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
@@ -45,10 +48,10 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (129 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kol 1 a 2 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+`tests/fixtures/task179-gate.json` (141 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kol 1–3 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
 59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad předchozí verzí opravy. Invariant 1152 → 1284 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
+fází nad předchozí verzí opravy. Invariant 1152 → 1295 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
 
 ### Meze TASK-161 přecházejí na 0.3.2
 

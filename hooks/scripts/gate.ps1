@@ -110,23 +110,28 @@ function Get-UnwrappedExe([string]$Command) {
 # (AOPT-O26, ne volby obalu) a telo nese priznak Container (jen DB pravidlo, nikdy `allow` z gate.dbDestroyLocal).
 # K2-1 (kolo 2): totez pro shell v kontejneru (`docker compose exec -T db bash <<EOF`) - telo se rozebere, ale jen DB pravidlem.
 # K2-5 (kolo 2): obal kontejneru muze stat az v ocasu starsiho pruchodu (`env -S "docker ... exec -i db psql" <<SQL`).
+# K3-2/K3-3/K3-9 (kolo 3): i kdyz klienta nebo shell najde STARSI pruchod (tvar 0.3.0, vsechna pravidla), je to porad tvar
+# v kontejneru: telo nese NoAllow (zadne `allow` z gate.dbDestroyLocal, AOPT-O26) a ContainerEnv (promenne `-e` obalu,
+# ktere starsi pruchod zahodil). ContainerEnv nese JEN promenne obalu, ne argumenty vnitrniho prikazu (K3-5).
 function Get-UnwrappedCommand([string]$Command) {
-    $res = @{ Exe = ''; Outer = $Command; Container = $false }
+    $res = @{ Exe = ''; Outer = $Command; Container = $false; NoAllow = $false; ContainerEnv = '' }
     if ([string]::IsNullOrWhiteSpace($Command)) { return $res }
     $argv = Split-Arguments $Command
     $tail = Get-WrapperTail $argv
     if ($tail.Count -gt 0) { $res.Exe = Get-ExecutableName ([string]$tail[0]) }
-    $shells = @(Get-Field (Get-Field $script:Config 'gate') 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
     $oldExe = $res.Exe.ToLowerInvariant()
-    if ((@($script:SqlClients) -ccontains $oldExe) -or ($shells -ccontains $oldExe)) { return $res }
     $cargv = $null
     if ($oldExe -match $script:ContainerCli) { $cargv = @($tail) }
     else {
         $ci = Get-ContainerIndex $argv
         if ($ci -ge 0) { $cargv = @($argv[$ci..($argv.Count - 1)]) }
     }
-    if ($null -eq $cargv) { return $res }
-    $cc = Get-ContainerCommand $cargv
+    $cc = if ($null -ne $cargv) { Get-ContainerCommand $cargv } else { $null }
+    $envText = if ($null -ne $cc) { Resolve-ContainerEnv $cc.Env } else { '' }
+    if ((@($script:SqlClients) -ccontains $oldExe) -or (@($script:ShellInterpreters) -ccontains $oldExe)) {
+        if ($null -ne $cc) { $res.NoAllow = $true; $res.ContainerEnv = $envText }
+        return $res
+    }
     if ($null -eq $cc) { return $res }
     $shellHit = $null
     foreach ($t0 in $cc.Tails) {
@@ -134,9 +139,9 @@ function Get-UnwrappedCommand([string]$Command) {
         $t = Get-WrapperTail @($t0)
         if ($t.Count -eq 0) { continue }
         $exe = Get-ExecutableName ([string]$t[0])
-        $hit = @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + (Resolve-ContainerEnv $cc.Env)).Trim(); Container = $true }
+        $hit = @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + $envText).Trim(); Container = $true; NoAllow = $true; ContainerEnv = $envText }
         if (@($script:SqlClients) -ccontains $exe.ToLowerInvariant()) { return $hit }
-        if ($null -eq $shellHit -and ($shells -ccontains $exe.ToLowerInvariant())) { $shellHit = $hit }
+        if ($null -eq $shellHit -and (@($script:ShellInterpreters) -ccontains $exe.ToLowerInvariant())) { $shellHit = $hit }
     }
     if ($null -ne $shellHit) { return $shellHit }
     return $res
@@ -177,9 +182,9 @@ function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '') {
     foreach ($t0 in $cc.Tails) {
         $t = @($t0)
         if ($t.Count -eq 0) { continue }
-        # CR-5: vnitrni prikaz, ktery uz rozebral pruchod prefixovym obalem (vsemi pravidly), se podruhe nerozebira -
-        # K2-2 (kolo 2): ale jen kdyz obal nepredava promenne prostredi; starsi pruchod `-e PGHOST=...` zahodi a hostitel by zmizel.
-        if ($SkipTail -ne '' -and $envText -eq '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
+        # CR-5: vnitrni prikaz, ktery uz rozebral pruchod prefixovym obalem (vsemi pravidly), se podruhe nerozebira. Promenne
+        # obalu (`-e PGHOST=...`, K2-2) a zakaz `allow` nese od K3-6 rovnou ten starsi list (vetev prefixu v Get-CommandLeaf).
+        if ($SkipTail -ne '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
         foreach ($l in (Get-CommandLeaf (Join-Argument $t) ($Depth + 1))) {
             $l['Container'] = $true
             $l['ContainerEnv'] = $envText
@@ -246,9 +251,11 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
         }
 
         if ($opaque) {
-            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ''; Opaque = $true; Container = [bool]$sinkU.Container })
+            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ''; Opaque = $true; Container = [bool]$sinkU.Container
+                                 NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv })
         } elseif ($literal.Count -gt 0) {
-            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false; Container = [bool]$sinkU.Container })
+            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false; Container = [bool]$sinkU.Container
+                                 NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv })
         }
     }
 
@@ -336,6 +343,7 @@ function Split-Heredoc([string]$Command) {
             $myOuter = if ($d -lt $outerStages.Count) { [string]$outerStages[$d] } else { $outer }
             $myU = Get-UnwrappedCommand $myOuter
             [void]$bodies.Add(@{ Outer = $myU.Outer; OuterExe = [string]$myU.Exe; Container = [bool]$myU.Container
+                                 NoAllow = [bool]$myU.NoAllow; ContainerEnv = [string]$myU.ContainerEnv
                                  Body = ($bodyLines -join "`n") })
             $j++   # radek s ukoncovacim delimiterem se zahazuje
         }
@@ -475,7 +483,8 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     }
     foreach ($b in $hd.Bodies) {
         [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container })
+                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv })
     }
     # Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti.
     if ($hd.Unterminated) {
@@ -484,10 +493,12 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     foreach ($b in $pl.Bodies) {
         if ($b.Opaque) {
             [void]$out.Add(@{ Kind = 'sqlPipeOpaque'; Exe = 'sql-pipe'; Args = @(); Raw = $b.Outer
-                              Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container })
+                              Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv })
         } else {
             [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                              Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container })
+                              Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv })
         }
     }
     return $out
@@ -777,9 +788,15 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             $ci = Get-ContainerIndex $argv
             $oldTail = Get-WrapperTail $argv
             $oldHead = if ($oldTail.Count -gt 0) { Get-ExecutableName ([string]$oldTail[0]) } else { '' }
-            if ($ci -gt 0 -and $oldHead -notmatch $script:ContainerCli) {
+            $inContainer = ($ci -gt 0 -and $oldHead -notmatch $script:ContainerCli)
+            $prefixEnv = ''
+            if ($inContainer) {
                 $skip = if ($oldTail.Count -gt 0) { Join-Argument $oldTail } else { '' }
                 foreach ($l in (Get-ContainerLeaves @($argv[$ci..($argv.Count - 1)]) $Depth $skip)) { [void]$out.Add($l) }
+                # K3-6 (kolo 3): starsi pruchod `-e` obalu zahodi - jeho listy (vsechna pravidla, 0.3.0) dostanou promenne obalu
+                # a zakaz `allow` (tvar v kontejneru, AOPT-O26) samy, misto druheho listu s tymz prikazem (dvoji audit).
+                $ccP = Get-ContainerCommand @($argv[$ci..($argv.Count - 1)])
+                if ($null -ne $ccP) { $prefixEnv = Resolve-ContainerEnv $ccP.Env }
             }
             # Nalez Amber G2: tady stala DRUHA, chudsi kopie tabulky obalu. Vetev jen
             # spojila `$rest` a rekurzivne se zavolala, takze u obalu s prepinacem
@@ -799,7 +816,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 }
                 return $out
             }
-            foreach ($l in (Get-CommandLeaf (Join-Argument $tail) ($Depth + 1))) { [void]$out.Add($l) }
+            foreach ($l in (Get-CommandLeaf (Join-Argument $tail) ($Depth + 1))) {
+                if ($inContainer) {
+                    $l['NoAllow'] = $true
+                    if ($prefixEnv -ne '') { $l['ContainerEnv'] = ([string](Get-LeafField $l 'ContainerEnv' '') + ' ' + $prefixEnv).Trim() }
+                }
+                [void]$out.Add($l)
+            }
             return $out
         }
         '^(python|python3|node|nodejs|ruby|perl|php|deno)$' {
@@ -1762,7 +1785,9 @@ function Test-DatabaseRule($Leaf, $Config) {
                       Shape = (Get-Field $shapes 'dbDestroyLocalDenied' 'DB (gate.dbDestroyLocal = deny)') }
         }
         # TASK-179 (AOPT-O26): tvar uvnitr kontejneru nikdy `allow` - ani kdyz jeho vnitrni text je doslova povoleny statement.
+        # K3-2 (kolo 3): totez pro tvar v kontejneru, ktery rozbalil starsi pruchod (`docker exec -i c sh <<EOF`) - NoAllow.
         if ($dlDecision -eq 'allow' -and -not $localDbDelete -and -not [bool](Get-LeafField $Leaf 'Container' $false) -and
+            -not [bool](Get-LeafField $Leaf 'NoAllow' $false) -and
             (Test-DbDestroyLocalAllowed $Leaf $dl)) {
             # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
             # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
@@ -1884,14 +1909,13 @@ function Test-ContainerLeaf($Leaf, $Config) {
     if ($kind -eq 'heredoc') {
         $oe = ([string](Get-LeafField $Leaf 'OuterExe' '')).ToLowerInvariant()
         if (@(Get-Field $gate 'sqlClients' @()) -ccontains $oe) { return (Test-DatabaseRule $Leaf $Config) }
-        $shells = @(Get-Field $gate 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
-        if ($shells -ccontains $oe) {
+        if (@($script:ShellInterpreters) -ccontains $oe) {
             $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
             $worst = $null
             foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
                 $inner['Container'] = $true
-                # Hostitelsky text tela: promenne obalu nese u heredocu do shellu v kontejneru jeho Outer (Get-UnwrappedCommand).
-                $inner['ContainerEnv'] = ([string](Get-LeafField $Leaf 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'Outer' '')).Trim()
+                # Hostitelsky text tela = JEN promenne obalu (Get-UnwrappedCommand), ne argumenty shellu (K3-5: `bash -s -- --host=x`).
+                $inner['ContainerEnv'] = [string](Get-LeafField $Leaf 'ContainerEnv' '')
                 $r = Test-ContainerLeaf $inner $Config
                 if ($null -eq $r) { continue }
                 if ($r.Decision -eq 'deny') { return $r }
@@ -1966,7 +1990,7 @@ function Test-Leaf($Leaf, $Config) {
     # SQL pravidlo se dal uplatnuje, ale jen kdyz uvozujici prikaz JE SQL klient.
     if ($Leaf.Kind -eq 'heredoc') {
         $clients = @(Get-Field $gate 'sqlClients' @())
-        $shells = @(Get-Field $gate 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
+        $shells = @($script:ShellInterpreters)
         $oe = ([string](Get-LeafField $Leaf 'OuterExe' '')).ToLowerInvariant()
 
         if ($clients -ccontains $oe) { return (Test-DatabaseRule $Leaf $Config) }
@@ -1982,6 +2006,11 @@ function Test-Leaf($Leaf, $Config) {
             $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
             $worst = $null
             foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
+                # K3-2/K3-3: telo shellu v kontejneru (tvar 0.3.0) - vsechna pravidla, ale bez `allow` a s promennymi obalu.
+                if ([bool](Get-LeafField $Leaf 'NoAllow' $false)) {
+                    $inner['NoAllow'] = $true
+                    $inner['ContainerEnv'] = [string](Get-LeafField $Leaf 'ContainerEnv' '')
+                }
                 $r = Test-Leaf $inner $Config
                 if ($null -eq $r) { continue }
                 if ($r.Decision -eq 'deny') { return $r }
@@ -2096,6 +2125,8 @@ $decision = $null
 # zije v Get-CommandLineLeaves a volaji ho i vsechny rekurze. Drive stal rozepsany
 # tady a zanoreni znalo jen posledni clanek.
 $script:SqlClients = @(Get-Field (Get-Field $config 'gate') 'sqlClients' @('psql', 'pgcli', 'dropdb', 'sqlcmd'))
+# K3-8 (TASK-179, kolo 3 /code-review): jeden seznam shellu pro Test-Leaf, Test-ContainerLeaf i Get-UnwrappedCommand.
+$script:ShellInterpreters = @(Get-Field (Get-Field $config 'gate') 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
 # H-a (TASK-117): literalni prirazeni prikazu - jen PowerShell nastroj (viz Get-LiteralAssignment).
 $script:FullCommand = $command
 if ($toolName -eq 'PowerShell') { $script:LiteralAssign = Get-LiteralAssignment $command }
