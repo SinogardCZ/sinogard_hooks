@@ -500,7 +500,8 @@ aby si je nikdo nemusel objevit sám.
     `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem i za ním (podman), `podman exec
     --latest|--cidfile`, vnořený `bash -c`, heredoc a rouru do klienta a obal za `sudo` / `env` / `timeout`. Volbu s hodnotou
     bere z dokumentace CLI (docker/cli v29.9.0, docker/compose v5.6.0, podman v6.1.3, podman-compose 1.6.0); volbu, kterou
-    nezná, čte **oběma způsoby** (s hodnotou i bez), takže budoucí volba nic neschová. Hostitel se bere z **vnitřního**
+    nezná, čte **oběma způsoby** (s hodnotou i bez), takže budoucí volba nic neschová; tělo heredocu a roury se posoudí pro
+    každé čtení obalu a platí nejpřísnější verdikt. Hostitel se bere z **vnitřního**
     příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`; průchozí `-e PGHOST` bere hodnotu z téhož
     příkazu — prefix `PGHOST=…`, `export`, `$env:PGHOST = …`; `--env-file` a hodnotu ze session hook nevidí → místní = `ask`),
     **nikdy z voleb obalu** (`-H` enginu, `run -h` = jméno kontejneru) — s jednou výjimkou z 0.3.0: `dotnet ef database
@@ -515,10 +516,12 @@ aby si je nikdo nemusel objevit sám.
     Heredoc do shellu v kontejneru (`docker compose exec -T db bash <<EOF`) se rozebere **jen DB pravidlem**; tvar, který
     starší průchod obaly rozbalil už v 0.3.0 (`docker exec -i c sh <<EOF`), má dál všechna pravidla jako v 0.3.0 — ale i tam
     platí zákaz `allow` z `gate.dbDestroyLocal` a hostitel z `-e` obalu. Cíl kontejneru zapsaný substitucí (`$(docker ps -q)`,
-    zpětné apostrofy, závorka PowerShellu) se čte jako jeden token; zkratky dlouhých voleb `podman-compose` (argparse,
+    zpětné apostrofy, závorka PowerShellu) se čte jako jeden token (slepuje se jen uzavřená substituce z textu příkazu,
+    kvotovaná závorka v hodnotě volby ne); zkratky dlouhých voleb `podman-compose` (argparse,
     `--entry` = `--entrypoint`) se rozvinou, je-li zkratka jednoznačná. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
-    Heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem = `ask` (volání `truncate(` není SQL);
+    Heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem = `ask` (volání `truncate(` není SQL;
+    tvar, který rozbalovala už 0.3.0 — `docker exec -i app python3 <<EOF` — má navíc dál verdikt 0.3.0);
     `-EncodedCommand` v kontejneru se dekóduje a tělo jde DB pravidlem, nedekódovatelné = `ask`.
     ⚠️ **Mez — dvě tabulky obalu:** starší průchod obaly (`Get-WrapperTail`, sdílený s hookem `secrets`) zůstal beze změny,
     aby se nezměnil žádný verdikt 0.3.0 (`AOPT-O25`). Proto: hook `secrets` uvnitř kontejneru za globální volbou nebo

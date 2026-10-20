@@ -8535,6 +8535,102 @@
       "cmd": "docker run --rm -h buildbox sdk dotnet ef database drop --force",
       "expect": "deny",
       "since": "dnesni verdikt 0.3.0: ef database drop v run, DB pravidlo i nad celym prikazem obalu -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i app python3 <<'EOF'\nimport shutil; shutil.rmtree('/srv/data')\nEOF",
+      "expect": "ask",
+      "since": "dnesni verdikt 0.3.0: heredoc do interpretu v exec, destruktivni volani -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo docker exec -i app node <<'EOF'\nrequire('fs').rmSync('/srv/data', { recursive: true })\nEOF",
+      "expect": "ask",
+      "since": "dnesni verdikt 0.3.0: heredoc do interpretu v exec za sudo -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i app python3 <<'EOF'\nprint(1)\nEOF",
+      "expect": "allow",
+      "since": "dnesni verdikt 0.3.0: neskodny heredoc do interpretu v exec -> ticho s auditem"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i -e PGHOST=prod.example.com app python3 <<'EOF'\nimport os; os.system('dropdb prod')\nEOF",
+      "expect": "ask",
+      "since": "dnesni verdikt 0.3.0: heredoc do interpretu v exec, DB prikaz se vzdalenym -e -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -e \"MSG=bye :(\" $(docker ps -q) dropdb prod",
+      "expect": "ask",
+      "since": "kvotovana zavorka v hodnote a cil substituci $() -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -e 'X=`' `docker ps -q` dropdb prod",
+      "expect": "ask",
+      "since": "kvotovany zpetny apostrof v hodnote a cil zpetnym apostrofem -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker exec -w \"/data(1\" (docker ps -q) dropdb prod",
+      "expect": "ask",
+      "since": "kvotovana zavorka v -w a cil zavorkou (PowerShell) -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -e \"MSG=bye :(\" $(docker ps -q) ls",
+      "expect": "allow",
+      "since": "sourozenec: kvotovana zavorka a cil substituci, ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker run -i --rm --entrypoint psql bash <<SQL\nDROP TABLE x;\nSQL",
+      "expect": "ask",
+      "since": "run --entrypoint klient, obraz se jmenem shellu, heredoc -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i --detach-keys ctrl-q bash psql <<SQL\nDROP TABLE x;\nSQL",
+      "expect": "ask",
+      "since": "exec --detach-keys, kontejner se jmenem shellu, heredoc do klienta -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i --detach-keys ctrl-q bash psql <<SQL\nSELECT 1;\nSQL",
+      "expect": "allow",
+      "since": "sourozenec: exec --detach-keys, kontejner se jmenem shellu, SELECT -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i app python3 <<'EOF'\ncur.execute('DROP DATABASE gsd_dev')\nEOF",
+      "expect": "ask",
+      "since": "heredoc do interpretu v exec (tvar 0.3.0), DB literal mimo tokeny interpretu -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo \"DROP TABLE x\" | docker exec -i --detach-keys ctrl-q bash psql",
+      "expect": "ask",
+      "since": "roura do klienta v exec --detach-keys, kontejner se jmenem shellu -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "podman --connection x exec -i --future-opt db psql sh <<'EOF'\nPGHOST=prod.example.com dropdb x\nEOF",
+      "expect": "deny",
+      "since": "dve cteni nezname volby za globalni volbou: klient i shell, vzdaleny dropdb v tele shellu -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i --future-opt db psql sh <<'EOF'\nPGHOST=prod.example.com dropdb x\nEOF",
+      "expect": "deny",
+      "since": "klient i shell za neznamou volbou (tvar 0.3.0), vzdaleny dropdb v tele shellu -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i --future-opt db python3 sh <<'EOF'\npsql -h prod.example.com -c \"DROP TABLE x\"\nEOF",
+      "expect": "deny",
+      "since": "dve cteni nezname volby: interpret i shell, vzdaleny psql -> deny"
     }
   ]
 }

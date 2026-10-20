@@ -24,12 +24,14 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | heredoc do shellu v `docker exec -i c sh` (tvar, který 0.3.0 rozbalovala): s přepisem `gate.dbDestroyLocal = allow` | ticho | `ask` (tvar v kontejneru nikdy `allow`) |
 | totéž s `-e PGHOST=<vzdálený>` | `ask` | `deny` |
 | management podpříkaz `container exec\|run`, compose (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem (podman i za ním), `run --entrypoint`, `podman exec --latest\|--cidfile`, volby s hodnotou ve všech zápisech (`--x=h`, `-xh`, shluk `-iu h`, `--`) | ticho | jako řádky výše |
-| volba, kterou tabulka CLI nezná (čte se s hodnotou i bez) | ticho | jako řádky výše |
+| volba, kterou tabulka CLI nezná (čte se s hodnotou i bez); tělo heredocu a roury se posoudí pro **každé** čtení obalu (i proti staršímu průchodu, který `--entrypoint` / `--detach-keys` nezná) a platí nejpřísnější | ticho | jako řádky výše |
 | vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
 | heredoc a roura do klienta v kontejneru za globální volbou nebo management podpříkazem, heredoc do shellu v kontejneru (compose, globální volba, `env -S "…"`) | ticho | jako řádky výše (heredoc do shellu jen DB pravidlem) |
 | nerozebratelná hlava uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem | ticho | `ask` (tvar `dbDestroyContainerOpaque`) |
 | uvozovaná závorka nebo zpětný apostrof v hodnotě volby obalu, vnořený kontejner s vlastním `-e PGHOST=…` | ticho | jako řádky výše (proměnné obou obalů se sčítají) |
-| heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem; `-EncodedCommand` v kontejneru (dekódované tělo jde DB pravidlem) | ticho | `ask`, se vzdáleným hostitelem `deny` |
+| heredoc do interpretu (`python`, `node` …) v kontejneru, který 0.3.0 nerozbalila (compose, globální volba), s destruktivním DB literálem | ticho | `ask` |
+| heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | beze změny; navíc destruktivní DB literál v těle → `ask` |
+| `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (místní `ask`, vzdálený `deny`) |
 | `-EncodedCommand` v kontejneru, které nejde dekódovat (i bez DB textu) | ticho | `ask` |
 | cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
 
@@ -39,8 +41,8 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 - Mazání cest a destruktivní git **uvnitř** kontejneru: verdikt 0.3.0 (ticho), README omezení 11 — cestová část a její
   spouštěč přehodnocení zůstávají. Obal za prefixem (`sudo docker exec …`) dál posuzuje vnitřní příkaz všemi pravidly jako v 0.3.0.
-- Hook **`secrets`: žádná změna verdiktu.** `_common.ps1` dostal nový rozbor kontejneru, ale `Get-WrapperTail` a volání
-  v `secrets.ps1` se nemění; sada `secrets` + kontrolní řádky `tests/fixtures/task179-secrets.json` (8) zelené.
+- Hook **`secrets`: žádná změna verdiktu.** `_common.ps1` dostal nový rozbor kontejneru, ale `Get-WrapperTail` a jeho volání
+  v `secrets.ps1` se nemění; dekódování `-EncodedCommand` se jen přesunulo do sdílené funkce (gate ho používá taky, beze změny chování); sada `secrets` + kontrolní řádky `tests/fixtures/task179-secrets.json` (8) zelené.
 - Tentýž SQL bez kontejneru, tělo heredocu a roura do `docker exec -i … psql -h …` (už v 0.3.0 `deny`), `scripts/…ps1`
   spuštěný souborem (README omezení 1): beze změny.
 - Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru.
@@ -54,10 +56,10 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (157 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kol 1–4 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+`tests/fixtures/task179-gate.json` (175 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kol 1–5 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
 59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad předchozí verzí opravy. Invariant 1152 → 1311 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
+fází nad předchozí verzí opravy. Invariant 1152 → 1327 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
 
 ### Meze TASK-161 přecházejí na 0.3.2
 

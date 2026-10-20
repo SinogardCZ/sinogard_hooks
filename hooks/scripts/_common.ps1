@@ -1177,26 +1177,80 @@ function Read-ContainerOption($Arr, [int]$I, $Table, [bool]$Abbrev = $false) {
 # K3-1 (kolo 3 /code-review): Split-Arguments rozdeli nekvotovanou substituci na slova - `docker exec $(docker ps -q) dropdb x`
 # dal tokeny `$(docker`, `ps`, `-q)`, cilem kontejneru byl `$(docker` a vnitrnim prikazem `ps`. Pro rozbor obalu se slova
 # substituce `$(...)`, zavorky PowerShellu `(...)` / `@(...)` a (v Bashi) zpetnych apostrofu slepi zpet do JEDNOHO tokenu.
-function Join-SubstitutionToken($Tokens) {
+# K5-2 (kolo 5): slepuje se jen to, co je v TEXTU prikazu skutecne uzavrena substituce (Get-SubstitutionSpan), ne kazdy token
+# s lichou zavorkou - kvotovana `(` v hodnote volby (K4-1) by jinak spolkla i cil zapsany substituci.
+$script:SubstSpanText = $null
+$script:SubstSpanValue = $null
+function Get-SubstitutionSpan([string]$Text) {
+    # Tentyz text prikazu se v jednom behu hooku pta vickrat (kazdy list a clanek s obalem) - spocita se jednou.
+    if ($null -ne $script:SubstSpanText -and $script:SubstSpanText -ceq $Text) { return ,@($script:SubstSpanValue) }
     $out = New-Object System.Collections.ArrayList
-    $arr = @($Tokens)
+    $script:SubstSpanText = $Text
+    $script:SubstSpanValue = $out
+    if ([string]::IsNullOrEmpty($Text)) { return ,@($out) }
     $bash = (Get-ScannerEscape) -ne '`'
-    $i = 0
-    while ($i -lt $arr.Count) {
-        $t = [string]$arr[$i]
-        $open = ([regex]::Matches($t, '\(')).Count - ([regex]::Matches($t, '\)')).Count
-        $ticks = if ($bash) { ([regex]::Matches($t, '`')).Count } else { 0 }
-        $i++
-        while ($i -lt $arr.Count -and ($open -gt 0 -or ($ticks % 2) -eq 1)) {
-            $n = [string]$arr[$i]
-            $t = $t + ' ' + $n
-            $open += ([regex]::Matches($n, '\(')).Count - ([regex]::Matches($n, '\)')).Count
-            if ($bash) { $ticks += ([regex]::Matches($n, '`')).Count }
-            $i++
+    $n = $Text.Length
+    $spans = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $n; $i++) {
+        $c = $Text[$i]
+        $start = -1
+        if (($c -eq '$' -or (-not $bash -and $c -eq '@')) -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') { $start = $i; $p = $i + 1 }
+        elseif (-not $bash -and $c -eq '(') { $start = $i; $p = $i }
+        if ($start -lt 0) { continue }
+        $depth = 0
+        for ($j = $p; $j -lt $n; $j++) {
+            if ($Text[$j] -eq '(') { $depth++ }
+            elseif ($Text[$j] -eq ')') { $depth--; if ($depth -eq 0) { [void]$spans.Add($Text.Substring($start, $j - $start + 1)); break } }
         }
-        [void]$out.Add($t)
+    }
+    if ($bash) {
+        $ticks = New-Object System.Collections.ArrayList
+        for ($i = 0; $i -lt $n; $i++) { if ($Text[$i] -eq '`') { [void]$ticks.Add($i) } }
+        for ($k = 0; ($k + 1) -lt $ticks.Count; $k++) { [void]$spans.Add($Text.Substring($ticks[$k], $ticks[$k + 1] - $ticks[$k] + 1)) }
+    }
+    foreach ($s in $spans) {
+        # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
+        $w = Split-Arguments $s
+        if ($w.Count -ge 2) { [void]$out.Add($w) }
     }
     return ,@($out)
+}
+
+function Join-SubstitutionToken($Tokens, [string]$Text) {
+    $out = New-Object System.Collections.ArrayList
+    $arr = @($Tokens)
+    $spans = Get-SubstitutionSpan $Text
+    $i = 0
+    while ($i -lt $arr.Count) {
+        $best = 0
+        foreach ($w in $spans) {
+            $k = $w.Count
+            if ($k -le $best -or ($i + $k) -gt $arr.Count) { continue }
+            # Substituce muze stat uprostred tokenu (`--name=x$(a b)`): prvni slovo je konec tokenu, posledni jeho zacatek.
+            if (-not ([string]$arr[$i]).EndsWith([string]$w[0], [System.StringComparison]::Ordinal)) { continue }
+            if (-not ([string]$arr[$i + $k - 1]).StartsWith([string]$w[$k - 1], [System.StringComparison]::Ordinal)) { continue }
+            $ok = $true
+            for ($m = 1; $m -lt ($k - 1); $m++) { if (-not ([string]$arr[$i + $m] -ceq [string]$w[$m])) { $ok = $false; break } }
+            if ($ok) { $best = $k }
+        }
+        if ($best -ge 2) {
+            [void]$out.Add((@($arr[$i..($i + $best - 1)]) -join ' '))
+            $i += $best
+        } else {
+            [void]$out.Add([string]$arr[$i])
+            $i++
+        }
+    }
+    return ,@($out)
+}
+
+# K5-6 (kolo 5): `-EncodedCommand <base64>` = UTF-16LE text skriptu - jedno dekodovani pro gate i secrets. Vraci '' = obsah
+# neni videt (promenna, vadny base64, prazdny text); volajici z toho dela `ask` (fail-closed).
+function ConvertFrom-EncodedCommandText([string]$Text) {
+    $decoded = ''
+    try { $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($Text.Trim().Trim("'").Trim('"'))) } catch { $decoded = '' }
+    if ([string]::IsNullOrWhiteSpace($decoded)) { return '' }
+    return $decoded
 }
 
 # Rozbor kontejneroveho obalu. $Argv[0] je CLI (docker, podman, docker-compose, podman-compose). Vraci $null (neni obal)
@@ -1211,8 +1265,9 @@ function Get-ContainerCommand($Argv) {
     $a = Get-ContainerCommandCore $raw
     if ($null -eq $a) { return $null }
     # Bez `@()` kolem volani: funkce vraci `,@(...)` (N-H10).
-    $joined = Join-SubstitutionToken $raw
-    if ((Join-Argument @($joined)) -ceq (Join-Argument $raw)) { return $a }
+    $text = if (Test-Path variable:script:FullCommand) { [string]$script:FullCommand } else { '' }
+    $joined = Join-SubstitutionToken $raw $text
+    if ($joined.Count -eq $raw.Count) { return $a }
     $b = Get-ContainerCommandCore @($joined)
     if ($null -eq $b) { return $a }
     $tails = New-Object System.Collections.ArrayList

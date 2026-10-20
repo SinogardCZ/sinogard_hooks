@@ -1478,9 +1478,8 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
             if ($wb.Kind -eq 'encoded') {
                 # `-EncodedCommand <base64>` = UTF-16LE text skriptu; kdyz se dekodovat neda (promenna, vadny base64),
                 # obsah neni videt -> ask (fail-closed).
-                $decoded = ''
-                try { $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($inner.Trim().Trim("'").Trim('"'))) } catch { $decoded = '' }
-                if ([string]::IsNullOrWhiteSpace($decoded)) {
+                $decoded = ConvertFrom-EncodedCommandText $inner
+                if ($decoded -eq '') {
                     if ($null -eq $worst) { $worst = @{ Id = 'wrapperEncoded'; Decision = 'ask'; Shape = (Get-Field $shapes 'wrapperEncoded' 'pwsh -EncodedCommand') } }
                     continue
                 }

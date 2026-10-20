@@ -113,8 +113,12 @@ function Get-UnwrappedExe([string]$Command) {
 # K3-2/K3-3/K3-9 (kolo 3): i kdyz klienta nebo shell najde STARSI pruchod (tvar 0.3.0, vsechna pravidla), je to porad tvar
 # v kontejneru: telo nese NoAllow (zadne `allow` z gate.dbDestroyLocal, AOPT-O26) a ContainerEnv (promenne `-e` obalu,
 # ktere starsi pruchod zahodil). ContainerEnv nese JEN promenne obalu, ne argumenty vnitrniho prikazu (K3-5).
+# K5-1/K5-3/K5-4 (kolo 5): vysledek nese i `Alt` = dalsi cteni obalu (jiny klient, shell nebo interpret). Telo heredocu
+# a roura se pak posoudi pro KAZDE cteni a plati nejhorsi verdikt: starsi pruchod muze obal precist spatne (`--entrypoint`,
+# `--detach-keys` nezna) a nezname volby davaji dve cteni - zadne z nich nesmi vyhrat jen proto, ze prislo prvni.
+# Interpret nalezeny starsim pruchodem (`docker exec -i app python3 <<EOF`) zustava na ceste 0.3.0 (verdikt beze zmeny).
 function Get-UnwrappedCommand([string]$Command) {
-    $res = @{ Exe = ''; Outer = $Command; Container = $false; NoAllow = $false; ContainerEnv = '' }
+    $res = @{ Exe = ''; Outer = $Command; Container = $false; NoAllow = $false; ContainerEnv = ''; Alt = @() }
     if ([string]::IsNullOrWhiteSpace($Command)) { return $res }
     $argv = Split-Arguments $Command
     $tail = Get-WrapperTail $argv
@@ -128,25 +132,38 @@ function Get-UnwrappedCommand([string]$Command) {
     }
     $cc = if ($null -ne $cargv) { Get-ContainerCommand $cargv } else { $null }
     $envText = if ($null -ne $cc) { Resolve-ContainerEnv $cc.Env } else { '' }
-    if ((@($script:SqlClients) -ccontains $oldExe) -or (@($script:ShellInterpreters) -ccontains $oldExe)) {
-        if ($null -ne $cc) { $res.NoAllow = $true; $res.ContainerEnv = $envText }
+    # Cteni rozboru obalu: klient, shell nebo interpret (K4-3) v kontejneru - telo posoudi Test-ContainerLeaf.
+    $hits = New-Object System.Collections.ArrayList
+    if ($null -ne $cc) {
+        $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($t0 in $cc.Tails) {
+            # Bez `@()` kolem volani: Get-WrapperTail vraci `,@(...)` (N-H10).
+            $t = Get-WrapperTail @($t0)
+            if ($t.Count -eq 0) { continue }
+            $exe = Get-ExecutableName ([string]$t[0])
+            $lx = $exe.ToLowerInvariant()
+            $rank = if (@($script:SqlClients) -ccontains $lx) { 0 } elseif (@($script:ShellInterpreters) -ccontains $lx) { 1 } elseif (@($script:CodeInterpreters) -ccontains $lx) { 2 } else { -1 }
+            if ($rank -lt 0) { continue }
+            $outer = ((Join-Argument @($t0)) + ' ' + $envText).Trim()
+            if (-not $keys.Add($lx + '|' + $outer)) { continue }
+            [void]$hits.Add(@{ Exe = $exe; Outer = $outer; Container = $true; NoAllow = $true; ContainerEnv = $envText; Rank = $rank })
+        }
+    }
+    if ((@($script:SqlClients) -ccontains $oldExe) -or (@($script:ShellInterpreters) -ccontains $oldExe) -or (@($script:CodeInterpreters) -ccontains $oldExe)) {
+        if ($null -ne $cc) {
+            $res.NoAllow = $true; $res.ContainerEnv = $envText
+            # K5-3: cteni rozboru obalu s JINYM programem nez starsi pruchod (ten treba vzal hodnotu `--entrypoint` za kontejner).
+            $res.Alt = @($hits | Where-Object { $_.Exe.ToLowerInvariant() -cne $oldExe })
+        }
         return $res
     }
-    if ($null -eq $cc) { return $res }
-    $shellHit = $null
-    foreach ($t0 in $cc.Tails) {
-        # Bez `@()` kolem volani: Get-WrapperTail vraci `,@(...)` (N-H10).
-        $t = Get-WrapperTail @($t0)
-        if ($t.Count -eq 0) { continue }
-        $exe = Get-ExecutableName ([string]$t[0])
-        $hit = @{ Exe = $exe; Outer = ((Join-Argument @($t0)) + ' ' + $envText).Trim(); Container = $true; NoAllow = $true; ContainerEnv = $envText }
-        if (@($script:SqlClients) -ccontains $exe.ToLowerInvariant()) { return $hit }
-        if ($null -eq $shellHit -and (@($script:ShellInterpreters) -ccontains $exe.ToLowerInvariant())) { $shellHit = $hit }
-        # K4-3 (kolo 4): i interpret (`python3 <<EOF`) v kontejneru - telo posoudi Test-ContainerLeaf (DB literal -> ask).
-        if ($null -eq $shellHit -and (@(Get-Field (Get-Field $script:config 'gate') 'codeInterpreters' @()) -ccontains $exe.ToLowerInvariant())) { $shellHit = $hit }
-    }
-    if ($null -ne $shellHit) { return $shellHit }
-    return $res
+    if ($hits.Count -eq 0) { return $res }
+    # K5-4: poradi klient > shell > interpret jen urcuje hlavni cteni; ostatni jdou do Alt a posoudi se taky.
+    # Bez Sort-Object: Windows PowerShell 5.1 nema -Stable a poradi cteni ma zustat.
+    $sorted = @(foreach ($rk in 0, 1, 2) { foreach ($h in $hits) { if ($h.Rank -eq $rk) { $h } } })
+    $main = $sorted[0]
+    $main['Alt'] = @(if ($sorted.Count -gt 1) { $sorted[1..($sorted.Count - 1)] })
+    return $main
 }
 
 # Hodnoty `-e/--env` obalu kontejneru jako text pro Get-DbHosts. CR-3 (kolo 1 /code-review): pruchozi `-e PGHOST` (bez `=`)
@@ -192,7 +209,7 @@ function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '', $Parsed
             $l['Container'] = $true
             # K4-2 (kolo 4): pripojit, ne prepsat - vnoreny obal (`docker exec outer docker exec -e PGHOST=... inner`) uz svou
             # promennou do listu zapsal a vnejsi vrstva by ji jinak smazala.
-            $l['ContainerEnv'] = ([string](Get-LeafField $l 'ContainerEnv' '') + ' ' + $envText).Trim()
+            Add-LeafContainerEnv $l $envText
             [void]$out.Add($l)
         }
     }
@@ -235,9 +252,10 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
         if ($stages.Count -lt 2) { continue }
 
         $sink = $stages[$stages.Count - 1]
-        $sinkU = Get-UnwrappedCommand $sink
-        $sinkExe = [string]$sinkU.Exe
-        if (-not ($SqlClients -ccontains $sinkExe.ToLowerInvariant())) { continue }
+        $sinkU0 = Get-UnwrappedCommand $sink
+        # K5-3/K5-4: klient muze byt i jen v dalsim cteni obalu (Alt) - telo roury se posoudi pro kazde cteni s klientem.
+        $sinks = @(@($sinkU0) + @($sinkU0.Alt) | Where-Object { $SqlClients -ccontains ([string]$_.Exe).ToLowerInvariant() })
+        if ($sinks.Count -eq 0) { continue }
 
         $literal = New-Object System.Collections.ArrayList
         $opaque = $false
@@ -255,12 +273,15 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
             }
         }
 
-        if ($opaque) {
-            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ''; Opaque = $true; Container = [bool]$sinkU.Container
-                                 NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv })
-        } elseif ($literal.Count -gt 0) {
-            [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false; Container = [bool]$sinkU.Container
-                                 NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv })
+        foreach ($sinkU in $sinks) {
+            $sinkExe = [string]$sinkU.Exe
+            if ($opaque) {
+                [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ''; Opaque = $true; Container = [bool]$sinkU.Container
+                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv })
+            } elseif ($literal.Count -gt 0) {
+                [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false; Container = [bool]$sinkU.Container
+                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv })
+            }
         }
     }
 
@@ -346,10 +367,13 @@ function Split-Heredoc([string]$Command) {
             }
             if ($j -ge $lines.Count) { $unterminated = $true }
             $myOuter = if ($d -lt $outerStages.Count) { [string]$outerStages[$d] } else { $outer }
-            $myU = Get-UnwrappedCommand $myOuter
-            [void]$bodies.Add(@{ Outer = $myU.Outer; OuterExe = [string]$myU.Exe; Container = [bool]$myU.Container
-                                 NoAllow = [bool]$myU.NoAllow; ContainerEnv = [string]$myU.ContainerEnv
-                                 Body = ($bodyLines -join "`n") })
+            $myU0 = Get-UnwrappedCommand $myOuter
+            # K5-3/K5-4: telo se posoudi pro kazde cteni obalu (Alt) - plati nejhorsi verdikt.
+            foreach ($myU in @(@($myU0) + @($myU0.Alt))) {
+                [void]$bodies.Add(@{ Outer = $myU.Outer; OuterExe = [string]$myU.Exe; Container = [bool]$myU.Container
+                                     NoAllow = [bool]$myU.NoAllow; ContainerEnv = [string]$myU.ContainerEnv
+                                     Body = ($bodyLines -join "`n") })
+            }
             $j++   # radek s ukoncovacim delimiterem se zahazuje
         }
 
@@ -826,7 +850,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             foreach ($l in (Get-CommandLeaf (Join-Argument $tail) ($Depth + 1))) {
                 if ($inContainer) {
                     $l['NoAllow'] = $true
-                    if ($prefixEnv -ne '') { $l['ContainerEnv'] = ([string](Get-LeafField $l 'ContainerEnv' '') + ' ' + $prefixEnv).Trim() }
+                    if ($prefixEnv -ne '') { Add-LeafContainerEnv $l $prefixEnv }
                 }
                 [void]$out.Add($l)
             }
@@ -1910,6 +1934,29 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
 
 # TASK-179 (0.3.1, AOPT-O25): list VNITRNIHO prikazu kontejneroveho obalu posuzuje JEN DB pravidlo. Cesty a git v obrazu
 # zustavaji README omezenim 11 (TASK-106 bod 3) - list obalu samotny jde dal beznou cestou s dnesnim verdiktem.
+# K5-8 (kolo 5): jedno misto pro pripojeni promennych obalu k listu (K4-2: pripojit, neprepsat - vnoreny obal uvnitr tela)
+# a jedno pro nejhorsi verdikt vnitrnich listu tela.
+function Add-LeafContainerEnv($Leaf, [string]$EnvText) {
+    $Leaf['ContainerEnv'] = ([string](Get-LeafField $Leaf 'ContainerEnv' '') + ' ' + $EnvText).Trim()
+}
+
+# $InContainer = $true: vnitrni listy jsou v kontejneru (jen DB pravidlo, Test-ContainerLeaf). $false: telo tvaru 0.3.0
+# (Test-Leaf, vsechna pravidla) - v kontejneru (NoAllow) dedi zakaz `allow` a promenne obalu.
+function Get-WorstInnerVerdict($Inner, $Leaf, [bool]$InContainer, $Config) {
+    $envText = [string](Get-LeafField $Leaf 'ContainerEnv' '')
+    $noAllow = [bool](Get-LeafField $Leaf 'NoAllow' $false)
+    $worst = $null
+    foreach ($inner in $Inner) {
+        if ($InContainer) { $inner['Container'] = $true; Add-LeafContainerEnv $inner $envText }
+        elseif ($noAllow) { $inner['NoAllow'] = $true; Add-LeafContainerEnv $inner $envText }
+        $r = if ($InContainer) { Test-ContainerLeaf $inner $Config } else { Test-Leaf $inner $Config }
+        if ($null -eq $r) { continue }
+        if ($r.Decision -eq 'deny') { return $r }
+        if ($null -eq $worst) { $worst = $r }
+    }
+    return $worst
+}
+
 function Test-ContainerLeaf($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
@@ -1920,22 +1967,12 @@ function Test-ContainerLeaf($Leaf, $Config) {
         if (@(Get-Field $gate 'sqlClients' @()) -ccontains $oe) { return (Test-DatabaseRule $Leaf $Config) }
         if (@($script:ShellInterpreters) -ccontains $oe) {
             $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
-            $worst = $null
-            foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
-                $inner['Container'] = $true
-                # Hostitelsky text tela = JEN promenne obalu (Get-UnwrappedCommand), ne argumenty shellu (K3-5: `bash -s -- --host=x`);
-                # K4-2: pripojit k tomu, co uz list nese (vnoreny obal uvnitr tela).
-                $inner['ContainerEnv'] = ([string](Get-LeafField $inner 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')).Trim()
-                $r = Test-ContainerLeaf $inner $Config
-                if ($null -eq $r) { continue }
-                if ($r.Decision -eq 'deny') { return $r }
-                if ($null -eq $worst) { $worst = $r }
-            }
-            return $worst
+            # Hostitelsky text tela = JEN promenne obalu (Get-UnwrappedCommand), ne argumenty shellu (K3-5: `bash -s -- --host=x`).
+            return (Get-WorstInnerVerdict (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0) $Leaf $true $Config)
         }
         # K4-3 (kolo 4): telo heredocu do interpretu v kontejneru (`docker compose exec -T db python3 <<EOF`) = kod, ktery
         # rozebrat neumime - tataz zavora jako u `python -c` v kontejneru (clen M-d): viditelny destruktivni DB literal -> ask.
-        if (@(Get-Field $gate 'codeInterpreters' @()) -ccontains $oe) {
+        if (@($script:CodeInterpreters) -ccontains $oe) {
             if (Test-DbDestructiveText ([string]$Leaf.Raw)) {
                 return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
                           Shape = (Get-Field $shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
@@ -1958,24 +1995,13 @@ function Test-ContainerLeaf($Leaf, $Config) {
                 $restE = @(if ($argvE.Count -gt 1) { $argvE[1..($argvE.Count - 1)] })
                 $wb = Get-ShellWrapperBody (Get-ExecutableName ([string]$argvE[0])) $restE
             }
-            $decoded = $null
-            if ($null -ne $wb -and [string]$wb.Text -ne '' -and -not (Test-Unexpandable ([string]$wb.Text))) {
-                try { $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String([string]$wb.Text)) } catch { $decoded = $null }
-            }
-            if ($null -eq $decoded) {
+            # K5-6 (kolo 5): totez dekodovani jako hook secrets (ConvertFrom-EncodedCommandText).
+            $decoded = if ($null -ne $wb) { ConvertFrom-EncodedCommandText ([string]$wb.Text) } else { '' }
+            if ($decoded -eq '') {
                 return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
                           Shape = (Get-Field $shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
             }
-            $worst = $null
-            foreach ($inner in (Get-NestedShellLeaf $decoded 'PowerShell' 0)) {
-                $inner['Container'] = $true
-                $inner['ContainerEnv'] = ([string](Get-LeafField $inner 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')).Trim()
-                $r = Test-ContainerLeaf $inner $Config
-                if ($null -eq $r) { continue }
-                if ($r.Decision -eq 'deny') { return $r }
-                if ($null -eq $worst) { $worst = $r }
-            }
-            return $worst
+            return (Get-WorstInnerVerdict (Get-NestedShellLeaf $decoded 'PowerShell' 0) $Leaf $true $Config)
         }
         if ((Test-DbDestructiveText ([string]$Leaf.Raw)) -or (Test-DbDestructiveText ([string](Get-LeafField $Leaf 'Body' '')))) {
             return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
@@ -2050,19 +2076,8 @@ function Test-Leaf($Leaf, $Config) {
             # s bashovym escapem psany z PowerShellu (a naopak) na allow.
             # `cmd` zustava na escapu hostitele - to je zname omezeni (README).
             $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
-            $worst = $null
-            foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
-                # K3-2/K3-3: telo shellu v kontejneru (tvar 0.3.0) - vsechna pravidla, ale bez `allow` a s promennymi obalu.
-                if ([bool](Get-LeafField $Leaf 'NoAllow' $false)) {
-                    $inner['NoAllow'] = $true
-                    $inner['ContainerEnv'] = ([string](Get-LeafField $inner 'ContainerEnv' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')).Trim()
-                }
-                $r = Test-Leaf $inner $Config
-                if ($null -eq $r) { continue }
-                if ($r.Decision -eq 'deny') { return $r }
-                if ($null -eq $worst) { $worst = $r }
-            }
-            return $worst
+            # K3-2/K3-3: telo shellu v kontejneru (tvar 0.3.0) - vsechna pravidla, ale bez `allow` a s promennymi obalu.
+            return (Get-WorstInnerVerdict (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0) $Leaf $false $Config)
         }
 
         # Nalez Amber G8: telo se SPUSTI, ale rozebrat ho neumime - je to kod interpretu
@@ -2074,8 +2089,15 @@ function Test-Leaf($Leaf, $Config) {
         #   cizi stroj      = tataz vec jako `ssh host "cmd"` (nalez Ada N21), tedy ask
         #                     BEZE ZMENY - pravidla nad cestami tam neplati a audit
         #                     na nasem stroji o cizim stroji netvrdi nic.
-        if (@(Get-Field $gate 'codeInterpreters' @()) -ccontains $oe) {
-            return (Resolve-OpaqueDecision 'interpreter' ([string]$Leaf.Raw) ([string]$Leaf.Raw) $Config)
+        if (@($script:CodeInterpreters) -ccontains $oe) {
+            $r = Resolve-OpaqueDecision 'interpreter' ([string]$Leaf.Raw) ([string]$Leaf.Raw) $Config
+            # K5-1 (TASK-179, kolo 5): interpret v kontejneru rozbaleny starsim pruchodem (`docker exec -i app python3 <<EOF`)
+            # ma verdikt 0.3.0 a navic zavoru K4-3 - viditelny destruktivni DB literal v tele -> aspon ask.
+            if ($null -eq $r -and [bool](Get-LeafField $Leaf 'NoAllow' $false) -and (Test-DbDestructiveText ([string]$Leaf.Raw))) {
+                return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
+                          Shape = (Get-Field $shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
+            }
+            return $r
         }
         if (@(Get-Field $gate 'remoteShells' @()) -ccontains $oe) {
             $text = [string]$Leaf.Raw
@@ -2173,6 +2195,8 @@ $decision = $null
 $script:SqlClients = @(Get-Field (Get-Field $config 'gate') 'sqlClients' @('psql', 'pgcli', 'dropdb', 'sqlcmd'))
 # K3-8 (TASK-179, kolo 3 /code-review): jeden seznam shellu pro Test-Leaf, Test-ContainerLeaf i Get-UnwrappedCommand.
 $script:ShellInterpreters = @(Get-Field (Get-Field $config 'gate') 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
+# K5-7 (kolo 5): totez pro interprety kodu (Test-Leaf, Test-ContainerLeaf, Get-UnwrappedCommand).
+$script:CodeInterpreters = @(Get-Field (Get-Field $config 'gate') 'codeInterpreters' @())
 # H-a (TASK-117): literalni prirazeni prikazu - jen PowerShell nastroj (viz Get-LiteralAssignment).
 $script:FullCommand = $command
 if ($toolName -eq 'PowerShell') { $script:LiteralAssign = Get-LiteralAssignment $command }
