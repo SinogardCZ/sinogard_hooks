@@ -8745,6 +8745,12 @@
       "cmd": "docker exec -i --future-opt db sh bash <<'EOF'\npsql -d app -f m.sql\nEOF",
       "expect": "allow",
       "since": "heredoc do shellu, dve cteni nezname volby, v tele klient se souborem (list bez vlastni skupiny) -> jeden radek sqlFromFile"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -e PGHOST c ls; docker exec outer pwsh -EncodedCommand JABlAG4AdgA6AFAARwBIAE8AUwBUACAAPQAgACcAZABiAC4AZQB4AGEAbQBwAGwAZQAuAGMAbwBtACcAOwAgAGQAbwBjAGsAZQByACAAZQB4AGUAYwAgAC0AZQAgAFAARwBIAE8AUwBUACAAaQBuAG4AZQByACAAZAByAG8AcABkAGIAIAB4AA==",
+      "expect": "deny",
+      "since": "drivejsi obal s pruchozim -e PGHOST bez prirazeni, pak EncodedCommand v kontejneru s prirazenim a vnorenym obalem, vzdaleny dropdb -> deny"
     }
   ]
 }
