@@ -516,8 +516,9 @@ aby si je nikdo nemusel objevit sám.
     Heredoc do shellu v kontejneru (`docker compose exec -T db bash <<EOF`) se rozebere **jen DB pravidlem**; tvar, který
     starší průchod obaly rozbalil už v 0.3.0 (`docker exec -i c sh <<EOF`), má dál všechna pravidla jako v 0.3.0 — ale i tam
     platí zákaz `allow` z `gate.dbDestroyLocal` a hostitel z `-e` obalu. Cíl kontejneru zapsaný substitucí (`$(docker ps -q)`,
-    zpětné apostrofy, závorka PowerShellu) se čte jako jeden token (slepuje se jen uzavřená substituce z textu příkazu,
-    kvotovaná závorka v hodnotě volby ne); zkratky dlouhých voleb `podman-compose` (argparse,
+    zpětné apostrofy, závorka PowerShellu) se čte jako jeden token (slepuje se jen uzavřená substituce z textu, který
+    hook rozebírá — hlavní příkaz, tělo vnořeného shellu i dekódované `-EncodedCommand`, každý svými pravidly escapu;
+    závorky se párují bez ohledu na uvozovky i s nimi; kvotovaná závorka v hodnotě volby cíl nespolkne); zkratky dlouhých voleb `podman-compose` (argparse,
     `--entry` = `--entrypoint`) se rozvinou, je-li zkratka jednoznačná. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
     Heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem = `ask` (volání `truncate(` není SQL;

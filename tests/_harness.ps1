@@ -403,7 +403,7 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
         # Radek s projektovym prepisem nebo rezimem meri JINY stav nez invariant (ten bezi
         # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim.
         if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode'] -and
-            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}')) {
+            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}') -and -not ([string]$row.cmd).Contains('{REP}')) {
             $kind = if (@('Write', 'Edit', 'Read') -contains [string]$row.tool) { 'path' } else { 'cmd' }
             Add-CollectedCase $HookName $kind ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
         }
@@ -412,6 +412,8 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
         # `{PLUGIN_ROOT}` = koren pluginu, ze ktereho sada hooky spousti (= "prave bezici plugin", R2 kolo 2).
         $rootFwd = ([string]$script:RepoRoot).Replace('\', '/')
         $cmdText = ([string]$row.cmd).Replace('{PLUGIN_ROOT}', $rootFwd)
+        # TASK-179 kolo 6 (K6-4): `{REP}` = `repText` opakovany `repCount`krat (patologicky dlouhy prikaz bez tisicu znaku ve fixture).
+        if ($cmdText.Contains('{REP}')) { $cmdText = $cmdText.Replace('{REP}', ([string]$row.repText * [int]$row.repCount)) }
         $tool = [string]$row.tool
         $values = @{}
         if (@('Write', 'Edit', 'Read') -contains $tool) {
@@ -453,19 +455,40 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
             if (-not [string]::IsNullOrWhiteSpace($r.Stdout)) { $reason = [string]($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason }
             Assert-True ($reason.Contains([string]$row.reasonContains)) ("{0}: duvod nese <{1}>: {2}" -f $label, $row.reasonContains, $reason)
         }
-        if ($row.PSObject.Properties['auditShape']) {
-            $auditPath = Join-Path $auditDir 'gate-audit.jsonl'
-            $lines = @()
-            if ([System.IO.File]::Exists($auditPath)) {
-                $lines = @([System.IO.File]::ReadAllLines($auditPath, ([System.Text.UTF8Encoding]::new($false))) | Where-Object { $_ -ne '' })
+        $auditPath = Join-Path $auditDir 'gate-audit.jsonl'
+        $lines = @()
+        if ([System.IO.File]::Exists($auditPath)) {
+            $lines = @([System.IO.File]::ReadAllLines($auditPath, ([System.Text.UTF8Encoding]::new($false))) | Where-Object { $_ -ne '' })
+        }
+        # TASK-179 kolo 6 (K6-5): tvar, ktery v auditu byt NESMI (allow radek u tehoz listu, ktery konci ask).
+        if ($row.PSObject.Properties['auditAbsentShape']) {
+            foreach ($l in $lines) {
+                $o = $l | ConvertFrom-Json
+                $bad = [string]$o.shape -match [string]$row.auditAbsentShape -and
+                       (-not $row.PSObject.Properties['auditAbsentDecision'] -or [string]$o.decision -eq [string]$row.auditAbsentDecision)
+                Assert-True (-not $bad) ("{0}: audit NEnese shape~<{1}>; radky: {2}" -f $label, $row.auditAbsentShape, ($lines -join ' || '))
             }
+        }
+        # TASK-179 kolo 6 (K6-4): doba jednoho behu hooku (patologicky dlouhy prikaz nesmi narazit na timeout hooku).
+        if ($row.PSObject.Properties['maxMs']) {
+            Assert-True ([int]$r.Ms -lt [int]$row.maxMs) ("{0}: hook do {1} ms, dostano {2} ms" -f $label, $row.maxMs, $r.Ms)
+        }
+        if ($row.PSObject.Properties['auditShape']) {
             $hit = $null
+            $hits = 0
             foreach ($l in $lines) {
                 $o = $l | ConvertFrom-Json
                 if ([string]$o.shape -match [string]$row.auditShape -and
-                    (-not $row.PSObject.Properties['auditDecision'] -or [string]$o.decision -eq [string]$row.auditDecision)) { $hit = $l; break }
+                    (-not $row.PSObject.Properties['auditDecision'] -or [string]$o.decision -eq [string]$row.auditDecision)) {
+                    if ($null -eq $hit) { $hit = $l }
+                    $hits++
+                }
             }
             Assert-True ($null -ne $hit) ("{0}: radek auditu shape~<{1}> decision=<{2}>; radky: {3}" -f $label, $row.auditShape, $row.auditDecision, ($lines -join ' || '))
+            # TASK-179 kolo 6 (K6-6): kazde cteni obalu nesmi zapsat tutez udalost znovu.
+            if ($row.PSObject.Properties['auditShapeCount']) {
+                Assert-Equal ([int]$row.auditShapeCount) $hits ("{0}: pocet radku auditu shape~<{1}>" -f $label, $row.auditShape)
+            }
             if ($row.PSObject.Properties['auditNotContains']) {
                 foreach ($l in $lines) {
                     Assert-True (-not $l.Contains([string]$row.auditNotContains)) ("{0}: audit NEnese text prikazu <{1}>" -f $label, $row.auditNotContains)

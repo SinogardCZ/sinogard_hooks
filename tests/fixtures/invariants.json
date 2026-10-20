@@ -8631,6 +8631,66 @@
       "cmd": "docker exec -i --future-opt db python3 sh <<'EOF'\npsql -h prod.example.com -c \"DROP TABLE x\"\nEOF",
       "expect": "deny",
       "since": "dve cteni nezname volby: interpret i shell, vzdaleny psql -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker exec (docker ps -q) ls; bash -c 'docker exec `docker ps -q` dropdb prod'",
+      "expect": "ask",
+      "since": "PowerShell: drivejsi obal, pak bash -c s cilem zpetnym apostrofem -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker ps; pwsh -c 'docker exec (docker ps -q) dropdb prod'",
+      "expect": "ask",
+      "since": "Bash: drivejsi obal, pak pwsh -c s cilem zavorkou -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "pwsh -c 'docker ps'; docker exec `docker ps -q` dropdb prod",
+      "expect": "ask",
+      "since": "Bash: pwsh -c s obalem, pak obal s cilem zpetnym apostrofem -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker ps; pwsh -c 'docker exec (docker ps -q) ls'",
+      "expect": "allow",
+      "since": "sourozenec: Bash, pwsh -c s cilem zavorkou, ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec c pwsh -EncodedCommand ZABvAGMAawBlAHIAIABlAHgAZQBjACAAKABkAG8AYwBrAGUAcgAgAHAAcwAgAC0AcQApACAAZAByAG8AcABkAGIAIABwAHIAbwBkAA==",
+      "expect": "ask",
+      "since": "EncodedCommand v kontejneru, v nem obal s cilem zavorkou a dropdb -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec c pwsh -EncodedCommand ZABvAGMAawBlAHIAIABlAHgAZQBjACAAKABkAG8AYwBrAGUAcgAgAHAAcwAgAC0AcQApACAAbABzAA==",
+      "expect": "allow",
+      "since": "sourozenec: EncodedCommand v kontejneru, obal s cilem zavorkou, ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec $(docker ps -q --filter \"name=a(\") dropdb prod",
+      "expect": "ask",
+      "since": "kvotovana zavorka uvnitr substituce v cili (Bash) -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "docker exec (docker ps -q --filter \"name=a(\") dropdb prod",
+      "expect": "ask",
+      "since": "kvotovana zavorka uvnitr zavorky v cili (PowerShell) -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec $(docker ps -q --filter \"name=a(\") ls",
+      "expect": "allow",
+      "since": "sourozenec: kvotovana zavorka uvnitr substituce v cili, ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat m.sql | podman --connection x exec -i --future-opt db psql psql -d app",
+      "expect": "allow",
+      "since": "roura z cat do klienta, dve cteni obalu -> jeden radek auditu sqlFromPipe"
     }
   ]
 }

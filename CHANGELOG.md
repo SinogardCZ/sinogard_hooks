@@ -32,7 +32,7 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | heredoc do interpretu (`python`, `node` …) v kontejneru, který 0.3.0 nerozbalila (compose, globální volba), s destruktivním DB literálem | ticho | `ask` |
 | heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | beze změny; navíc destruktivní DB literál v těle → `ask` |
 | `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (místní `ask`, vzdálený `deny`) |
-| `-EncodedCommand` v kontejneru, které nejde dekódovat (i bez DB textu) | ticho | `ask` |
+| `-EncodedCommand` v kontejneru, které nejde dekódovat nebo dává prázdný text (i bez DB textu) | ticho | `ask` |
 | cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
 
 Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`).
@@ -42,7 +42,8 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 - Mazání cest a destruktivní git **uvnitř** kontejneru: verdikt 0.3.0 (ticho), README omezení 11 — cestová část a její
   spouštěč přehodnocení zůstávají. Obal za prefixem (`sudo docker exec …`) dál posuzuje vnitřní příkaz všemi pravidly jako v 0.3.0.
 - Hook **`secrets`: žádná změna verdiktu.** `_common.ps1` dostal nový rozbor kontejneru, ale `Get-WrapperTail` a jeho volání
-  v `secrets.ps1` se nemění; dekódování `-EncodedCommand` se jen přesunulo do sdílené funkce (gate ho používá taky, beze změny chování); sada `secrets` + kontrolní řádky `tests/fixtures/task179-secrets.json` (8) zelené.
+  v `secrets.ps1` se nemění; dekódování `-EncodedCommand` se jen přesunulo do sdílené funkce (verdikt `secrets` beze změny; gate ji používá pro
+  `-EncodedCommand` v kontejneru, viz řádek tabulky výše); sada `secrets` + kontrolní řádky `tests/fixtures/task179-secrets.json` (8) zelené.
 - Tentýž SQL bez kontejneru, tělo heredocu a roura do `docker exec -i … psql -h …` (už v 0.3.0 `deny`), `scripts/…ps1`
   spuštěný souborem (README omezení 1): beze změny.
 - Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru.
@@ -56,10 +57,13 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (175 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kol 1–5 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+`tests/fixtures/task179-gate.json` (188 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kol 1–6 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
 59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad předchozí verzí opravy. Invariant 1152 → 1327 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury.
+fází nad předchozí verzí opravy. Invariant 1152 → 1337 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury
+a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí), `auditShapeCount` (počet řádků
+auditu), `maxMs` (doba jednoho běhu hooku) a `{REP}` + `repText` / `repCount` (dlouhý příkaz bez tisíců znaků ve fixtuře;
+takový řádek nejde do invariantu).
 
 ### Meze TASK-161 přecházejí na 0.3.2
 

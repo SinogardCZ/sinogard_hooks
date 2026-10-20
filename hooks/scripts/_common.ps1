@@ -920,6 +920,7 @@ function Write-OverrideRejectedAudit([string]$ToolName, $Config, [string]$Sessio
 # !! Loguje se UDALOST, ne obsah: cas, nastroj, id tvaru a rozhodnuti. Text prikazu do
 # souboru NEJDE (zadani par. 4 bod 8 - riziko uniku). Bez CLAUDE_PLUGIN_DATA se nezapisuje
 # nic a hook mlci; evidence nesmi byt duvod, proc brana spadne.
+$script:AuditSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
 function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision, $Config) {
     try {
         # T36-Q7 = A (Tom, 8. 9.): v `bypassPermissions` nad pluginem uz zadna vrstva
@@ -933,6 +934,11 @@ function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision,
         if ($Decision -eq 'ask' -and $script:PermissionMode -eq 'bypassPermissions') {
             $Decision = 'ask-bypass'
         }
+        # TASK-179 kolo 6 (K6-6): dalsi cteni tehoz kontejneroveho obalu (gate.ps1, $script:AuditAltReading) nezapise udalost,
+        # kterou beh uz zapsal - jinak by kazde cteni nafouklo pocty, nad kterymi stoji rozhodnuti T-10 A a T36-O5.
+        $auditKey = $ToolName + '|' + $ShapeId + '|' + $Decision
+        if ((Test-Path variable:script:AuditAltReading) -and $script:AuditAltReading -and $script:AuditSeen.Contains($auditKey)) { return }
+        [void]$script:AuditSeen.Add($auditKey)
         $dir = $env:CLAUDE_PLUGIN_DATA
         if ([string]::IsNullOrWhiteSpace($dir)) { return }
         $file = [string](Get-Field (Get-Field $Config 'gate') 'auditFile' 'gate-audit.jsonl')
@@ -1179,47 +1185,96 @@ function Read-ContainerOption($Arr, [int]$I, $Table, [bool]$Abbrev = $false) {
 # substituce `$(...)`, zavorky PowerShellu `(...)` / `@(...)` a (v Bashi) zpetnych apostrofu slepi zpet do JEDNOHO tokenu.
 # K5-2 (kolo 5): slepuje se jen to, co je v TEXTU prikazu skutecne uzavrena substituce (Get-SubstitutionSpan), ne kazdy token
 # s lichou zavorkou - kvotovana `(` v hodnote volby (K4-1) by jinak spolkla i cil zapsany substituci.
-$script:SubstSpanText = $null
+# K6-1/K6-2 (kolo 6): spany se berou z KAZDEHO textu, ktery beh hooku rozebira (hlavni prikaz, telo vnoreneho shellu,
+# dekodovany `-EncodedCommand`), a kazdy s escape znakem, kterym se rozebiral - ne jen z $script:FullCommand v rezimu
+# prvniho volani. Text zapisuje Get-CommandLineLeaves (gate.ps1) pred rozborem.
+$script:SubstTexts = New-Object System.Collections.ArrayList
+$script:SubstTextKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
 $script:SubstSpanValue = $null
-function Get-SubstitutionSpan([string]$Text) {
-    # Tentyz text prikazu se v jednom behu hooku pta vickrat (kazdy list a clanek s obalem) - spocita se jednou.
-    if ($null -ne $script:SubstSpanText -and $script:SubstSpanText -ceq $Text) { return ,@($script:SubstSpanValue) }
+function Register-SubstitutionText([string]$Text) {
+    if ([string]::IsNullOrEmpty($Text) -or $Text.IndexOfAny([char[]]@('(', '`')) -lt 0) { return }
+    $esc = Get-ScannerEscape
+    if (-not $script:SubstTextKeys.Add($esc + [char]0 + $Text)) { return }
+    [void]$script:SubstTexts.Add(@{ Text = $Text; Esc = $esc })
+    $script:SubstSpanValue = $null
+}
+
+# Uzavrene substituce jednoho textu jako retezce. K6-3/K6-4 (kolo 6): parovani zavorek zasobnikem (linearne, ne sken od kazde
+# `(` do konce textu) a dvakrat - bez ohledu na uvozovky (kvotovana `(` v hodnote, K4-1) i s nimi (kvotovana `(` UVNITR
+# substituce by jinak posunula jeji konec). Oba vysledky plati (slepeni je jen dalsi cteni obalu, smerem k prisnosti).
+function Find-SubstitutionSpanText([string]$Text, [bool]$Bash) {
     $out = New-Object System.Collections.ArrayList
-    $script:SubstSpanText = $Text
-    $script:SubstSpanValue = $out
-    if ([string]::IsNullOrEmpty($Text)) { return ,@($out) }
-    $bash = (Get-ScannerEscape) -ne '`'
     $n = $Text.Length
-    $spans = New-Object System.Collections.ArrayList
-    for ($i = 0; $i -lt $n; $i++) {
-        $c = $Text[$i]
-        $start = -1
-        if (($c -eq '$' -or (-not $bash -and $c -eq '@')) -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') { $start = $i; $p = $i + 1 }
-        elseif (-not $bash -and $c -eq '(') { $start = $i; $p = $i }
-        if ($start -lt 0) { continue }
-        $depth = 0
-        for ($j = $p; $j -lt $n; $j++) {
-            if ($Text[$j] -eq '(') { $depth++ }
-            elseif ($Text[$j] -eq ')') { $depth--; if ($depth -eq 0) { [void]$spans.Add($Text.Substring($start, $j - $start + 1)); break } }
+    $esc = if ($Bash) { [char]'\' } else { [char]'`' }
+    foreach ($quoted in $false, $true) {
+        $stack = New-Object System.Collections.Stack
+        $q = [char]0
+        for ($i = 0; $i -lt $n; $i++) {
+            $c = $Text[$i]
+            if ($quoted) {
+                if ($q -eq [char]"'") { if ($c -eq [char]"'") { $q = [char]0 }; continue }
+                if ($c -eq $esc) { $i++; continue }
+                if ($q -eq [char]'"') {
+                    if ($c -eq [char]'"') { $q = [char]0; continue }
+                    if ($c -ne [char]'$' -or ($i + 1) -ge $n -or $Text[$i + 1] -ne [char]'(') { continue }
+                    # `"$(...)"`: substituce v uvozovkach ma vlastni kvotovani - stav uvozovek se vrati po jejim konci.
+                    $stack.Push(@{ Start = $i; Ok = $true; Q = $q })
+                    $q = [char]0
+                    $i++
+                    continue
+                }
+                if ($c -eq [char]"'" -or $c -eq [char]'"') { $q = $c; continue }
+            }
+            if ($c -eq [char]'(') {
+                $pre = if ($i -gt 0) { $Text[$i - 1] } else { [char]0 }
+                $sub = ($pre -eq [char]'$') -or (-not $Bash -and $pre -eq [char]'@')
+                $stack.Push(@{ Start = $(if ($sub) { $i - 1 } else { $i }); Ok = ($sub -or -not $Bash); Q = [char]0 })
+            } elseif ($c -eq [char]')' -and $stack.Count -gt 0) {
+                $f = $stack.Pop()
+                if ($f.Ok) { [void]$out.Add($Text.Substring($f.Start, $i - $f.Start + 1)) }
+                if ($quoted) { $q = [char]$f.Q }
+            }
         }
     }
-    if ($bash) {
+    if ($Bash) {
         $ticks = New-Object System.Collections.ArrayList
-        for ($i = 0; $i -lt $n; $i++) { if ($Text[$i] -eq '`') { [void]$ticks.Add($i) } }
-        for ($k = 0; ($k + 1) -lt $ticks.Count; $k++) { [void]$spans.Add($Text.Substring($ticks[$k], $ticks[$k + 1] - $ticks[$k] + 1)) }
-    }
-    foreach ($s in $spans) {
-        # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
-        $w = Split-Arguments $s
-        if ($w.Count -ge 2) { [void]$out.Add($w) }
+        for ($i = 0; $i -lt $n; $i++) { if ($Text[$i] -eq [char]'`') { [void]$ticks.Add($i) } }
+        for ($k = 0; ($k + 1) -lt $ticks.Count; $k++) { [void]$out.Add($Text.Substring($ticks[$k], $ticks[$k + 1] - $ticks[$k] + 1)) }
     }
     return ,@($out)
 }
 
-function Join-SubstitutionToken($Tokens, [string]$Text) {
+function Get-SubstitutionSpan {
+    # Tytez texty se v jednom behu hooku ptaji vickrat (kazdy list a clanek s obalem) - pocita se znovu jen po novem textu.
+    if ($null -ne $script:SubstSpanValue) { return ,@($script:SubstSpanValue) }
+    $out = New-Object System.Collections.ArrayList
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    $prev = Get-ScannerEscape
+    try {
+        foreach ($t in @($script:SubstTexts)) {
+            # Slova spanu deli Split-Arguments escapem textu, ze ktereho span je.
+            Set-ScannerEscapeChar ([string]$t.Esc)
+            foreach ($s in (Find-SubstitutionSpanText ([string]$t.Text) ([string]$t.Esc -ne '`'))) {
+                # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
+                $w = Split-Arguments $s
+                if ($w.Count -ge 2 -and $keys.Add(($w -join [string][char]0))) { [void]$out.Add($w) }
+            }
+        }
+    } finally {
+        Set-ScannerEscapeChar $prev
+    }
+    $script:SubstSpanValue = $out
+    return ,@($out)
+}
+
+function Join-SubstitutionToken($Tokens) {
     $out = New-Object System.Collections.ArrayList
     $arr = @($Tokens)
-    $spans = Get-SubstitutionSpan $Text
+    # Bez zavorky nebo zpetneho apostrofu v ARGV neni co slepovat - spany se nepocitaji vubec.
+    $any = $false
+    foreach ($t in $arr) { if (([string]$t).IndexOfAny([char[]]@('(', ')', '`')) -ge 0) { $any = $true; break } }
+    if (-not $any) { return ,@($arr) }
+    $spans = Get-SubstitutionSpan
     $i = 0
     while ($i -lt $arr.Count) {
         $best = 0
@@ -1265,8 +1320,7 @@ function Get-ContainerCommand($Argv) {
     $a = Get-ContainerCommandCore $raw
     if ($null -eq $a) { return $null }
     # Bez `@()` kolem volani: funkce vraci `,@(...)` (N-H10).
-    $text = if (Test-Path variable:script:FullCommand) { [string]$script:FullCommand } else { '' }
-    $joined = Join-SubstitutionToken $raw $text
+    $joined = Join-SubstitutionToken $raw
     if ($joined.Count -eq $raw.Count) { return $a }
     $b = Get-ContainerCommandCore @($joined)
     if ($null -eq $b) { return $a }
