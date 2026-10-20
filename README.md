@@ -521,7 +521,8 @@ aby si je nikdo nemusel objevit sám.
     hook rozebírá — hlavní příkaz, tělo vnořeného shellu i dekódované `-EncodedCommand`, každý svými pravidly escapu;
     závorky se párují bez ohledu na uvozovky i s nimi; kvotovaná závorka v hodnotě volby cíl nespolkne; rozbor substitucí má
     strop práce na jeden běh hooku — po jeho překročení cíl nemusí být přečtený celý a příkaz s destruktivním DB literálem
-    dostane `ask`); zkratky dlouhých voleb `podman-compose` (argparse,
+    dostane `ask` — hostitel se pak nečte a bere se jako místní, takže vzdálený cíl tu dostane `ask`, ne `deny`;
+    `gate.dbDestroyLocal = deny` platí); zkratky dlouhých voleb `podman-compose` (argparse,
     `--entry` = `--entrypoint`) se rozvinou, je-li zkratka jednoznačná. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
     Heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem = `ask` (volání `truncate(` není SQL;

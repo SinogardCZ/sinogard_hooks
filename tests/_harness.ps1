@@ -157,15 +157,26 @@ function Invoke-Hook {
         [Parameter(Mandatory = $true)][string]$Script,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$InputJson,
         [string]$Interpreter = $script:Interpreter,
-        [hashtable]$Environment = $null
+        [hashtable]$Environment = $null,
+        # TASK-179 kolo 8 (K8-5): radek s vlastnim `maxMs` pod stropem se opakuje uz nad nim - jinak by ho jeden vykyv
+        # planovace shodil, zatimco radek bez `maxMs` by tytez vykyv prezil.
+        [int]$RetryAboveMs = 0,
+        [switch]$FreshDataOnRetry
     )
 
+    $limit = if ($RetryAboveMs -gt 0) { [Math]::Min($RetryAboveMs, [int]$script:HookCeilingMs) } else { [int]$script:HookCeilingMs }
     $first = Invoke-HookOnce -Script $Script -InputJson $InputJson -Interpreter $Interpreter -Environment $Environment
     # Do rozpoctu jde PRVNI mereni - jinak by median klesal prave o ty behy, kvuli
     # kterym se opakuje, a prestal by systematicke zpomaleni videt.
     Add-HookTime ([int]$first.Ms)
-    if ($first.Ms -lt $script:HookCeilingMs) { return $first }
+    if ($first.Ms -lt $limit) { return $first }
 
+    # K8-5: s -FreshDataOnRetry pise druhy beh audit do NOVE slozky (volajici cte `CLAUDE_PLUGIN_DATA` z tehoz slovniku) -
+    # jinak by radky auditu nesly oba behy a pocty (`auditShapeCount`) by vysly dvojnasobne. Jen na prani: sady, ktere
+    # slozku sdileji pres vic volani (stav session), ji meni nechteji.
+    if ($FreshDataOnRetry -and $null -ne $Environment -and $Environment.ContainsKey('CLAUDE_PLUGIN_DATA')) {
+        $Environment['CLAUDE_PLUGIN_DATA'] = [string]$Environment['CLAUDE_PLUGIN_DATA'] + '-r2'
+    }
     $script:Retries++
     $second = Invoke-HookOnce -Script $Script -InputJson $InputJson -Interpreter $Interpreter -Environment $Environment
     Add-Member -InputObject $second -NotePropertyName 'FirstMs' -NotePropertyValue ([int]$first.Ms)
@@ -401,9 +412,10 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
             continue
         }
         # Radek s projektovym prepisem nebo rezimem meri JINY stav nez invariant (ten bezi
-        # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim.
+        # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim. Radek s `{REP}` / `{REP2}` (K8-9) nese
+        # nerozvinuty zastupny text.
         if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode'] -and
-            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}') -and -not ([string]$row.cmd).Contains('{REP}')) {
+            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}') -and -not ([string]$row.cmd).Contains('{REP')) {
             $kind = if (@('Write', 'Edit', 'Read') -contains [string]$row.tool) { 'path' } else { 'cmd' }
             Add-CollectedCase $HookName $kind ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
         }
@@ -446,7 +458,10 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
         }
         $auditDir = Join-Path $script:TempDir ('t117a-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
         $envh['CLAUDE_PLUGIN_DATA'] = $auditDir
-        $r = Invoke-Hook -Script ($HookName + '.ps1') -InputJson $json -Environment $envh
+        $retryAbove = if ($row.PSObject.Properties['maxMs']) { [int]$row.maxMs } else { 0 }
+        $r = Invoke-Hook -Script ($HookName + '.ps1') -InputJson $json -Environment $envh -RetryAboveMs $retryAbove -FreshDataOnRetry
+        # K8-5: po opakovani je audit druheho behu v nove slozce.
+        $auditDir = [string]$envh['CLAUDE_PLUGIN_DATA']
         $decision = Get-Decision $r
         if ($expect -ne '') { Assert-Equal $expect $decision $label }
         if ($row.PSObject.Properties['expectNot']) {
@@ -474,8 +489,8 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
             }
         }
         # TASK-179 kolo 6 (K6-4): doba jednoho behu hooku (patologicky dlouhy prikaz nesmi narazit na timeout hooku).
-        # K7-7 (kolo 7): Invoke-Hook beh nad HookCeilingMs jednou opakuje a vraci druhe mereni - `maxMs` do tehoz stropu tedy
-        # zatez stroje neodnese jednim vykyvem; `maxMs` nad stropem by opakovani obeslo, proto se bere mensi z obou.
+        # K7-7/K8-5 (kola 7 a 8): Invoke-Hook beh nad `maxMs` (nejvys HookCeilingMs) jednou opakuje a vraci druhe mereni -
+        # jeden vykyv stroje radek neshodi. `maxMs` nad stropem se na strop zkrati: strop je absolutni mez jednoho behu sady.
         if ($row.PSObject.Properties['maxMs']) {
             $maxMs = [Math]::Min([int]$row.maxMs, [int]$script:HookCeilingMs)
             Assert-True ([int]$r.Ms -lt $maxMs) ("{0}: hook do {1} ms, dostano {2} ms" -f $label, $maxMs, $r.Ms)

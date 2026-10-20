@@ -8727,6 +8727,24 @@
       "cmd": "bash -c 'docker exec $(docker ps -q) ls'; docker exec (docker ps -q) ls",
       "expect": "allow",
       "since": "sourozenec: PowerShell, bash -c s obalem, pak obal s cilem zavorkou, ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i --future-opt db sh bash <<'EOF'\ncat m.sql | psql -d app\nEOF",
+      "expect": "allow",
+      "since": "heredoc do shellu, dve cteni nezname volby, v tele roura z cat do klienta -> jeden radek auditu sqlFromPipe"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i --future-opt db sh bash <<'EOF'\ncat a.sql | psql -d app\ncat b.sql | psql -d app\nEOF",
+      "expect": "allow",
+      "since": "heredoc do shellu, dve cteni nezname volby, v tele dve roury do klienta -> dva radky sqlFromPipe"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec -i --future-opt db sh bash <<'EOF'\npsql -d app -f m.sql\nEOF",
+      "expect": "allow",
+      "since": "heredoc do shellu, dve cteni nezname volby, v tele klient se souborem (list bez vlastni skupiny) -> jeden radek sqlFromFile"
     }
   ]
 }

@@ -33,7 +33,7 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | beze změny; navíc destruktivní DB literál v těle → `ask` |
 | `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (místní `ask`, vzdálený `deny`) |
 | `-EncodedCommand` v kontejneru, které nejde dekódovat nebo dává prázdný text (i bez DB textu) | ticho | `ask` |
-| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `ask` |
+| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `ask` (hostitel se nečte = místní; s přepisem `gate.dbDestroyLocal = deny` → `deny`) |
 | cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
 
 Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`).
@@ -49,7 +49,8 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
   spuštěný souborem (README omezení 1): beze změny.
 - Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru. Obal,
   který hook čte víckrát (neznámá volba, tělo heredocu a roury pro každé čtení), zapíše událost tolikrát, kolikrát ji nese
-  jeho nejbohatší čtení — ne jednou za každé čtení; jiný výskyt v témže příkazu se počítá zvlášť.
+  jeho nejbohatší čtení — ne jednou za každé čtení (i pro tělo shellu, které se rozebírá znovu pro každé čtení vnějšího
+  obalu); jiný výskyt v témže příkazu se počítá zvlášť.
 - Heredoc do interpretu v `docker exec` (tvar 0.3.0) s destruktivním voláním interpretu nese dál id tvaru
   `interpreterDestructive` i tehdy, když tělo má navíc destruktivní DB literál.
 - Coreutils `truncate` a volání `truncate(` (`os.truncate`, `f.truncate()`) v kódu interpretu nejsou SQL `TRUNCATE` → ticho.
@@ -62,13 +63,13 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (200 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kol 1–7 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+`tests/fixtures/task179-gate.json` (204 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kol 1–8 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
 59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad předchozí verzí opravy. Invariant 1152 → 1343 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury
+fází nad předchozí verzí opravy. Invariant 1152 → 1346 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury
 a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
-řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady s jeho jedním
-opakováním) a `{REP}` / `{REP2}` + `repText` / `repCount` / `repText2` / `repCount2` (dlouhý příkaz bez tisíců znaků ve
+řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady; běh
+nad `maxMs` se jednou opakuje a druhý běh píše audit do nové složky) a `{REP}` / `{REP2}` + `repText` / `repCount` / `repText2` / `repCount2` (dlouhý příkaz bez tisíců znaků ve
 fixtuře; takový řádek nejde do invariantu).
 
 ### Meze TASK-161 přecházejí na 0.3.2

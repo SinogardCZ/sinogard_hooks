@@ -1321,6 +1321,8 @@ function Join-SubstitutionToken($Tokens) {
             # Substituce muze stat uprostred tokenu (`--name=x$(a b)`): prvni slovo je konec tokenu, posledni jeho zacatek.
             if (-not ([string]$arr[$i]).EndsWith([string]$w[0], [System.StringComparison]::Ordinal)) { continue }
             if (-not ([string]$arr[$i + $k - 1]).StartsWith([string]$w[$k - 1], [System.StringComparison]::Ordinal)) { continue }
+            # K8-3 (kolo 8): porovnani prostrednich slov (az k na kazdy span) se do stropu pocita taky.
+            if (-not (Add-SubstitutionWork ($k - 2))) { break }
             $ok = $true
             for ($m = 1; $m -lt ($k - 1); $m++) { if (-not ([string]$arr[$i + $m] -ceq [string]$w[$m])) { $ok = $false; break } }
             if ($ok) { $best = $k }
