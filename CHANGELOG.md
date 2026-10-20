@@ -33,7 +33,7 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | beze změny; navíc destruktivní DB literál v těle → `ask` |
 | `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (místní `ask`, vzdálený `deny`) |
 | `-EncodedCommand` v kontejneru, které nejde dekódovat nebo dává prázdný text (i bez DB textu) | ticho | `ask` |
-| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `ask` (hostitel se nečte = místní; s přepisem `gate.dbDestroyLocal = deny` → `deny`, i když jiný list téhož příkazu dostal `ask`) |
+| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `ask` (hostitel se nečte = místní; s přepisem `gate.dbDestroyLocal = deny` → `deny`, i když některý list téhož příkazu dostal `ask`; literál se hledá v každém rozebíraném textu příkazu, i v datech) |
 | cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
 
 Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`).

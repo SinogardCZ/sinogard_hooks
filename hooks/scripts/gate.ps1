@@ -1883,7 +1883,7 @@ function Test-DatabaseRule($Leaf, $Config) {
         # nastavitelne projektovym prepisem `gate.dbDestroyLocal`; vychozi `ask` = 0.2.0.
         # Obsah prepisu uz zkontrolovalo H-c (neplatny klic = vychozi hodnota, nikdy allow).
         $dl = Get-Field $gate 'dbDestroyLocal'
-        $dlDecision = Get-DbDestroyLocalDecision $gate
+        $dlDecision = Get-DbDestroyLocalDecision $dl
         if ($dlDecision -eq 'deny') { return (New-DbDestroyLocalDenied $shapes) }
         # TASK-179 (AOPT-O26): tvar uvnitr kontejneru nikdy `allow` - ani kdyz jeho vnitrni text je doslova povoleny statement.
         # K3-2 (kolo 3): totez pro tvar v kontejneru, ktery rozbalil starsi pruchod (`docker exec -i c sh <<EOF`) - NoAllow.
@@ -2054,8 +2054,9 @@ function New-DbDestroyLocalDenied($Shapes) {
 }
 
 # K9-5 (kolo 9): rozhodnuti prepisu gate.dbDestroyLocal cte jedno misto (Test-DatabaseRule i zaloha po stropu prace).
-function Get-DbDestroyLocalDecision($Gate) {
-    return [string](Get-Field (Get-Field $Gate 'dbDestroyLocal') 'decision' 'ask')
+# K10-7 (kolo 10): bere uz nacteny objekt prepisu - Test-DatabaseRule z nej cte i seznamy pro `allow`.
+function Get-DbDestroyLocalDecision($DbDestroyLocal) {
+    return [string](Get-Field $DbDestroyLocal 'decision' 'ask')
 }
 
 # $InContainer = $true: vnitrni listy jsou v kontejneru (jen DB pravidlo, Test-ContainerLeaf). $false: telo tvaru 0.3.0
@@ -2329,18 +2330,22 @@ foreach ($leaf in $leaves) {
 # a vnitrni prikaz obalu nemusely byt prectene cele. Je-li v nekterem rozebiranem textu destruktivni DB literal, ptame se.
 # K8-2 (kolo 8): hostitel takoveho prikazu neni prectany = mistni (jako pruchozi `-e PGHOST` bez hodnoty, CR-3) - plati
 # `gate.dbDestroyLocal`: `deny` z prepisu zustava `deny`, jinak `ask` (`allow` v kontejneru nikdy, AOPT-O26).
-# K9-1 (kolo 9): zaloha bezi i po `ask` jineho listu - `deny` z prepisu by jinak prebil drivejsi dotaz; `ask` nic neprebiji.
+# K9-1 (kolo 9): zaloha bezi i po `ask` - `deny` z prepisu prebije kazde drive vznikle `ask` (i z listu, ktery DB text sam nese);
+# `ask` zalohy nic neprebiji. K10-6 (kolo 10): po `ask` bez prepisu `deny` se texty neprochazeji (vysledek by se zahodil).
 if ($script:SubstOverflow -and ($null -eq $decision -or $decision.Decision -ne 'deny')) {
-    foreach ($pt in @($script:ParsedTexts)) {
-        if (Test-DbDestructiveText ([string]$pt.Text)) {
-            $ovGate = Get-Field $config 'gate'
-            $ovShapes = Get-Field $ovGate 'shapes'
-            if ((Get-DbDestroyLocalDecision $ovGate) -eq 'deny') {
-                $decision = New-DbDestroyLocalDenied $ovShapes
-            } elseif ($null -eq $decision) {
-                $decision = New-ContainerOpaqueAsk $ovShapes
+    $ovGate = Get-Field $config 'gate'
+    $ovDeny = (Get-DbDestroyLocalDecision (Get-Field $ovGate 'dbDestroyLocal')) -eq 'deny'
+    if ($null -eq $decision -or $ovDeny) {
+        foreach ($pt in @($script:ParsedTexts)) {
+            if (Test-DbDestructiveText ([string]$pt.Text)) {
+                $ovShapes = Get-Field $ovGate 'shapes'
+                if ($ovDeny) {
+                    $decision = New-DbDestroyLocalDenied $ovShapes
+                } else {
+                    $decision = New-ContainerOpaqueAsk $ovShapes
+                }
+                break
             }
-            break
         }
     }
 }
