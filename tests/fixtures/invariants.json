@@ -8691,6 +8691,42 @@
       "cmd": "cat m.sql | podman --connection x exec -i --future-opt db psql psql -d app",
       "expect": "allow",
       "since": "roura z cat do klienta, dve cteni obalu -> jeden radek auditu sqlFromPipe"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec outer pwsh -EncodedCommand JABlAG4AdgA6AFAARwBIAE8AUwBUACAAPQAgACcAZABiAC4AZQB4AGEAbQBwAGwAZQAuAGMAbwBtACcAOwAgAGQAbwBjAGsAZQByACAAZQB4AGUAYwAgAC0AZQAgAFAARwBIAE8AUwBUACAAaQBuAG4AZQByACAAZAByAG8AcABkAGIAIAB4AA==",
+      "expect": "deny",
+      "since": "EncodedCommand v kontejneru: prirazeni PGHOST a vnoreny obal s pruchozim -e PGHOST, vzdaleny dropdb -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec outer pwsh -EncodedCommand ZABvAGMAawBlAHIAIABlAHgAZQBjACAALQBlACAAUABHAEgATwBTAFQAIABpAG4AbgBlAHIAIABkAHIAbwBwAGQAYgAgAHgA",
+      "expect": "ask",
+      "since": "sourozenec: EncodedCommand v kontejneru, pruchozi -e PGHOST bez prirazeni -> ask"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec --future-opt db psql psql -f m.sql",
+      "expect": "allow",
+      "since": "dve cteni nezname volby, obe konci klientem se souborem -> jeden radek auditu sqlFromFile"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db psql -f a.sql; docker exec --future-opt db sh psql -f m.sql",
+      "expect": "allow",
+      "since": "klient se souborem v jednom obalu a jiny obal, jehoz jen dalsi cteni konci klientem -> dva radky sqlFromFile"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash -c 'docker exec $(docker ps -q) ls'; docker exec (docker ps -q) dropdb prod",
+      "expect": "ask",
+      "since": "PowerShell: bash -c s obalem (spany se poprve pocitaji v escapu Bashe), pak obal s cilem zavorkou -> ask"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "bash -c 'docker exec $(docker ps -q) ls'; docker exec (docker ps -q) ls",
+      "expect": "allow",
+      "since": "sourozenec: PowerShell, bash -c s obalem, pak obal s cilem zavorkou, ls -> ticho"
     }
   ]
 }

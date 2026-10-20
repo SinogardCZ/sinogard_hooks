@@ -172,6 +172,21 @@ function Get-UnwrappedReadings($Unwrapped) {
     return ,@(@($Unwrapped) + @($Unwrapped.Alt))
 }
 
+# K7-3/K7-4 (kolo 7): kazdy vyskyt obalu s vic ctenimi (telo heredocu a roury pro kazde cteni, kandidati vnitrniho prikazu
+# kontejneru) dostane vlastni skupinu; list nese ReadingGroup a Reading (poradi cteni). Write-GateAudit pak za skupinu zapise
+# udalost jen tolikrat, kolikrat ji nese nejbohatsi cteni - ruzne vyskyty se navzajem nepotlacuji. Vnoreny vyskyt si
+# skupinu necha (nejvnitrnejsi vyhrava, Set-LeafReading).
+$script:ReadingGroupSeq = 0
+function New-ReadingGroup {
+    $script:ReadingGroupSeq++
+    return $script:ReadingGroupSeq
+}
+function Set-LeafReading($Leaf, [int]$Group, [int]$Reading) {
+    if ([int](Get-LeafField $Leaf 'ReadingGroup' 0) -gt 0) { return }
+    $Leaf['ReadingGroup'] = $Group
+    $Leaf['Reading'] = $Reading
+}
+
 # Hodnoty `-e/--env` obalu kontejneru jako text pro Get-DbHosts. CR-3 (kolo 1 /code-review): pruchozi `-e PGHOST` (bez `=`)
 # preda vnitrnimu prikazu hodnotu z prostredi hostitele - stoji-li v TEMZE prikazu (`PGHOST=x docker ...`, `export PGHOST=x; ...`,
 # `$env:PGHOST = 'x'; ...`), vezme se odtud. Jinak hodnotu nevidime -> hostitel neznamy = mistni (`ask`, ne ticho);
@@ -183,15 +198,19 @@ function Resolve-ContainerEnv($Envs) {
         if ($v -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { [void]$out.Add($v); continue }
         $n = [regex]::Escape($v)
         $val = '("[^"]*"|''[^'']*''|[^\s;&|]+)'
-        # K2-4 (kolo 2): prirazeni muze stat i hned za uvozovkou tela obalu (`bash -c "PGHOST=x docker ..."`).
-        foreach ($m in [regex]::Matches([string]$script:FullCommand, ('(?:^|[\s;&|("''])(?:export\s+)?' + $n + '=' + $val))) {
-            [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
-        }
-        foreach ($m in [regex]::Matches([string]$script:FullCommand, ('\$env:' + $n + '\s*=\s*' + $val), 'IgnoreCase')) {
-            [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
+        # K7-2 (kolo 7): prirazeni se hleda ve VSECH textech, ktere beh rozebira (Register-ParsedText) - dekodovany
+        # `-EncodedCommand` v $script:FullCommand neni a vzdaleny hostitel by se tam cetl jako neznamy (mistni, `ask`).
+        foreach ($text in @([string]$script:FullCommand) + @($script:ParsedTexts | ForEach-Object { [string]$_.Text })) {
+            # K2-4 (kolo 2): prirazeni muze stat i hned za uvozovkou tela obalu (`bash -c "PGHOST=x docker ..."`).
+            foreach ($m in [regex]::Matches($text, ('(?:^|[\s;&|("''])(?:export\s+)?' + $n + '=' + $val))) {
+                [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
+            }
+            foreach ($m in [regex]::Matches($text, ('\$env:' + $n + '\s*=\s*' + $val), 'IgnoreCase')) {
+                [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
+            }
         }
     }
-    return ($out -join ' ')
+    return (@($out | Select-Object -Unique) -join ' ')
 }
 
 # TASK-179 (0.3.1): listy VNITRNIHO prikazu kontejneroveho obalu (Get-ContainerCommand v _common.ps1). List obalu samotny
@@ -199,20 +218,26 @@ function Resolve-ContainerEnv($Envs) {
 # Container: Test-Leaf na ne pousti JEN DB pravidlo (AOPT-O25 - cesty a git v obrazu zustavaji README omezenim 11)
 # a `gate.dbDestroyLocal = allow` se jich nikdy netyka (AOPT-O26). Hostitel = vnitrni prikaz + promenne prostredi,
 # ktere obal predava (`-e PGHOST=...`), nikdy volby obalu (`-H` enginu, `run -h` hostname kontejneru).
-function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '', $Parsed = $null) {
+function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '', $Parsed = $null, [int]$Group = 0) {
     $out = New-Object System.Collections.ArrayList
     # K4-8 (kolo 4): vetev prefixu rozbor uz ma - podruhe se nepocita.
     $cc = if ($null -ne $Parsed) { $Parsed } else { Get-ContainerCommand $Argv }
     if ($null -eq $cc) { return $out }
     $envText = Resolve-ContainerEnv $cc.Env
+    # K7-3 (kolo 7): kandidati vnitrniho prikazu (surove a slepene ARGV, obe cteni nezname volby) jsou cteni TEHOZ obalu -
+    # jedna skupina pro audit. Cteni 0 je list starsiho pruchodu ve vetvi prefixu (ta skupinu predava v $Group).
+    $grp = if ($Group -gt 0) { $Group } else { New-ReadingGroup }
+    $ti = 0
     foreach ($t0 in $cc.Tails) {
         $t = @($t0)
+        $ti++
         if ($t.Count -eq 0) { continue }
         # CR-5: vnitrni prikaz, ktery uz rozebral pruchod prefixovym obalem (vsemi pravidly), se podruhe nerozebira. Promenne
         # obalu (`-e PGHOST=...`, K2-2) a zakaz `allow` nese od K3-6 rovnou ten starsi list (vetev prefixu v Get-CommandLeaf).
         if ($SkipTail -ne '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
         foreach ($l in (Get-CommandLeaf (Join-Argument $t) ($Depth + 1))) {
             $l['Container'] = $true
+            Set-LeafReading $l $grp $ti
             # K4-2 (kolo 4): pripojit, ne prepsat - vnoreny obal (`docker exec outer docker exec -e PGHOST=... inner`) uz svou
             # promennou do listu zapsal a vnejsi vrstva by ji jinak smazala.
             Add-LeafContainerEnv $l $envText
@@ -281,16 +306,17 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
             }
         }
 
+        # K6-6/K7-4: cteni tehoz obalu jsou jedna skupina - do auditu jde udalost jednou (New-ReadingGroup, Write-GateAudit).
+        $grp = New-ReadingGroup
         for ($si = 0; $si -lt $sinks.Count; $si++) {
             $sinkU = $sinks[$si]
             $sinkExe = [string]$sinkU.Exe
-            # K6-6 (kolo 6): dalsi cteni tehoz obalu nezapise do auditu tutez udalost podruhe (AltReading, Write-GateAudit).
             if ($opaque) {
                 [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ''; Opaque = $true; Container = [bool]$sinkU.Container
-                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv; AltReading = ($si -gt 0) })
+                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv; ReadingGroup = $grp; Reading = $si })
             } elseif ($literal.Count -gt 0) {
                 [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false; Container = [bool]$sinkU.Container
-                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv; AltReading = ($si -gt 0) })
+                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv; ReadingGroup = $grp; Reading = $si })
             }
         }
     }
@@ -380,11 +406,12 @@ function Split-Heredoc([string]$Command) {
             $myU0 = Get-UnwrappedCommand $myOuter
             # K5-3/K5-4: telo se posoudi pro kazde cteni obalu (Alt) - plati nejhorsi verdikt.
             $readings = Get-UnwrappedReadings $myU0
+            $grp = New-ReadingGroup
             for ($ri = 0; $ri -lt $readings.Count; $ri++) {
                 $myU = $readings[$ri]
                 [void]$bodies.Add(@{ Outer = $myU.Outer; OuterExe = [string]$myU.Exe; Container = [bool]$myU.Container
                                      NoAllow = [bool]$myU.NoAllow; ContainerEnv = [string]$myU.ContainerEnv
-                                     Body = ($bodyLines -join "`n"); AltReading = ($ri -gt 0) })
+                                     Body = ($bodyLines -join "`n"); ReadingGroup = $grp; Reading = $ri })
             }
             $j++   # radek s ukoncovacim delimiterem se zahazuje
         }
@@ -509,8 +536,9 @@ function Get-InvokedLeaves([string]$Inner, [string]$ShellTool, [int]$Depth) {
 function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     $out = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrWhiteSpace($Text)) { return $out }
-    # K6-1/K6-2 (TASK-179, kolo 6): text a jeho escape pro spojeni substituci v rozboru kontejneroveho obalu (_common.ps1).
-    Register-SubstitutionText $Text
+    # K6-1/K6-2 (TASK-179, kolo 6): text a jeho escape pro spojeni substituci v rozboru kontejneroveho obalu (_common.ps1);
+    # K7-2: i pro prirazeni promennych pruchozich `-e VAR` (Resolve-ContainerEnv).
+    Register-ParsedText $Text
 
     # Tela heredocu se vytahnou PRED delenim - jinak by se telo stalo samostatnym
     # podprikazem bez hosta a vzdalena operace by se cetla jako lokalni (Amber A4).
@@ -527,7 +555,7 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     foreach ($b in $hd.Bodies) {
         [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
                           Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
-                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; AltReading = [bool]$b.AltReading })
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; ReadingGroup = [int]$b.ReadingGroup; Reading = [int]$b.Reading })
     }
     # Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti.
     if ($hd.Unterminated) {
@@ -537,11 +565,11 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
         if ($b.Opaque) {
             [void]$out.Add(@{ Kind = 'sqlPipeOpaque'; Exe = 'sql-pipe'; Args = @(); Raw = $b.Outer
                               Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
-                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; AltReading = [bool]$b.AltReading })
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; ReadingGroup = [int]$b.ReadingGroup; Reading = [int]$b.Reading })
         } else {
             [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
                               Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
-                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; AltReading = [bool]$b.AltReading })
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; ReadingGroup = [int]$b.ReadingGroup; Reading = [int]$b.Reading })
         }
     }
     return $out
@@ -833,11 +861,14 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             $oldHead = if ($oldTail.Count -gt 0) { Get-ExecutableName ([string]$oldTail[0]) } else { '' }
             $inContainer = ($ci -gt 0 -and $oldHead -notmatch $script:ContainerCli)
             $prefixEnv = ''
+            $prefixGroup = 0
             if ($inContainer) {
                 $skip = if ($oldTail.Count -gt 0) { Join-Argument $oldTail } else { '' }
                 $ccP = Get-ContainerCommand @($argv[$ci..($argv.Count - 1)])
                 if ($null -ne $ccP) {
-                    foreach ($l in (Get-ContainerLeaves $null $Depth $skip $ccP)) { [void]$out.Add($l) }
+                    # K7-3: list starsiho pruchodu (cteni 0) a kandidati rozboru obalu jsou jedna skupina pro audit.
+                    $prefixGroup = New-ReadingGroup
+                    foreach ($l in (Get-ContainerLeaves $null $Depth $skip $ccP $prefixGroup)) { [void]$out.Add($l) }
                     # K3-6 (kolo 3): starsi pruchod `-e` obalu zahodi - jeho listy (vsechna pravidla, 0.3.0) dostanou promenne obalu
                     # a zakaz `allow` (tvar v kontejneru, AOPT-O26) samy, misto druheho listu s tymz prikazem (dvoji audit).
                     $prefixEnv = Resolve-ContainerEnv $ccP.Env
@@ -865,6 +896,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 if ($inContainer) {
                     $l['NoAllow'] = $true
                     if ($prefixEnv -ne '') { Add-LeafContainerEnv $l $prefixEnv }
+                    if ($prefixGroup -gt 0) { Set-LeafReading $l $prefixGroup 0 }
                 }
                 [void]$out.Add($l)
             }
@@ -1894,23 +1926,34 @@ function Get-RemoteShellPositional($Argv) {
 #
 # Neznama hodnota politiky konci `ask`, ne vyjimkou: fail-closed je strop, ne prvni
 # omezujici hodnota, a preklep v projektovem override nesmi branu tise otevrit.
+# 1C: kod interpretu se nerozebira, ale JMENO destruktivniho volani v nem videt je.
+# Je to test na TOKEN, ne parser jazyka - `python -c "print(1)"` musi projit,
+# `python -c "shutil.rmtree('x')"` ne. Porovnani je case-SENSITIVNI (`Remove-Item`
+# ano, `remove-item` ne bylo by falesne siroke pres bezna anglicka slova).
+# K7-5 (TASK-179, kolo 7): samostatna funkce - zavora K6-5 (interpret v kontejneru s DB literalem) se pta nejdriv na ni,
+# aby tvar 0.3.0 nesl dal svuj Id `interpreterDestructive`.
+function Get-InterpreterDestructiveVerdict([string]$Body, $Config) {
+    if ($Body -eq '') { return $null }
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+    foreach ($t in @(Get-Field $gate 'interpreterDestructiveTokens' @())) {
+        $token = [string]$t
+        if ($token -eq '') { continue }
+        if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+            return @{ Id = 'interpreterDestructive'; Decision = 'ask'
+                      Shape = (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))) }
+        }
+    }
+    return $null
+}
+
 function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
 
-    # 1C: kod interpretu se nerozebira, ale JMENO destruktivniho volani v nem videt je.
-    # Je to test na TOKEN, ne parser jazyka - `python -c "print(1)"` musi projit,
-    # `python -c "shutil.rmtree('x')"` ne. Porovnani je case-SENSITIVNI (`Remove-Item`
-    # ano, `remove-item` ne bylo by falesne siroke pres bezna anglicka slova).
-    if ($Why -eq 'interpreter' -and $Body -ne '') {
-        foreach ($t in @(Get-Field $gate 'interpreterDestructiveTokens' @())) {
-            $token = [string]$t
-            if ($token -eq '') { continue }
-            if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-                return @{ Id = 'interpreterDestructive'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))) }
-            }
-        }
+    if ($Why -eq 'interpreter') {
+        $id = Get-InterpreterDestructiveVerdict $Body $Config
+        if ($null -ne $id) { return $id }
     }
 
     # !! Nalez Ada N35 (0.1.11), sourozenec N28: klasifikace PRED pohledem na text.
@@ -1954,17 +1997,19 @@ function Add-LeafContainerEnv($Leaf, [string]$EnvText) {
     $Leaf['ContainerEnv'] = ([string](Get-LeafField $Leaf 'ContainerEnv' '') + ' ' + $EnvText).Trim()
 }
 
-# K6-6 (kolo 6): list z dalsiho cteni obalu (AltReading) zapisuje do auditu jen udalost, kterou beh jeste nezapsal
-# (Write-GateAudit, $script:AuditAltReading) - i pro listy, ktere z nej vzniknou rozborem tela.
-$script:AuditAltReading = $false
+# K6-6/K7-3/K7-4 (kola 6 a 7): skupina a cteni listu (New-ReadingGroup) plati pro jeho audit (Write-GateAudit,
+# $script:AuditReading) - i pro listy, ktere z nej vzniknou rozborem tela az tady (ty skupinu nemaji a dedi ji).
+# Audit se pise hluboko v pravidlech sdilenych se secrets.ps1, proto kontext behu a ne parametr.
+$script:AuditReading = $null
 function Invoke-LeafVerdict($Leaf, $Config, [bool]$InContainer) {
-    $prevAlt = $script:AuditAltReading
-    if ([bool](Get-LeafField $Leaf 'AltReading' $false)) { $script:AuditAltReading = $true }
+    $prevReading = $script:AuditReading
+    $grp = [int](Get-LeafField $Leaf 'ReadingGroup' 0)
+    if ($grp -gt 0) { $script:AuditReading = @{ G = $grp; R = [int](Get-LeafField $Leaf 'Reading' 0) } }
     try {
         if ($InContainer) { return (Test-ContainerLeaf $Leaf $Config) }
         return (Test-Leaf $Leaf $Config)
     } finally {
-        $script:AuditAltReading = $prevAlt
+        $script:AuditReading = $prevReading
     }
 }
 
@@ -2123,7 +2168,10 @@ function Test-Leaf($Leaf, $Config) {
             # K5-1 (TASK-179, kolo 5): interpret v kontejneru rozbaleny starsim pruchodem (`docker exec -i app python3 <<EOF`)
             # ma verdikt 0.3.0 a navic zavoru K4-3 - viditelny destruktivni DB literal v tele -> aspon ask.
             # K6-5 (kolo 6): zavora PRED Resolve-OpaqueDecision - ta by pri `audit` zapsala allow radek k listu, ktery konci ask.
+            # K7-5 (kolo 7): destruktivni token interpretu ma prednost - tvar 0.3.0 si necha Id `interpreterDestructive`.
             if ([bool](Get-LeafField $Leaf 'NoAllow' $false) -and (Test-DbDestructiveText ([string]$Leaf.Raw))) {
+                $id = Get-InterpreterDestructiveVerdict ([string]$Leaf.Raw) $Config
+                if ($null -ne $id) { return $id }
                 return (New-ContainerOpaqueAsk $shapes)
             }
             return (Resolve-OpaqueDecision 'interpreter' ([string]$Leaf.Raw) ([string]$Leaf.Raw) $Config)
@@ -2236,6 +2284,17 @@ foreach ($leaf in $leaves) {
     if ($null -eq $r) { continue }
     if ($r.Decision -eq 'deny') { $decision = $r; break }
     if ($null -eq $decision) { $decision = $r }
+}
+
+# K7-1 (TASK-179, kolo 7): rozbor substituci v obalu kontejneru narazil na strop prace (_common.ps1, SubstWorkBudget) - cil
+# a vnitrni prikaz obalu nemusely byt prectene cele. Je-li v nekterem rozebiranem textu destruktivni DB literal, ptame se.
+if ($null -eq $decision -and $script:SubstOverflow) {
+    foreach ($pt in @($script:ParsedTexts)) {
+        if (Test-DbDestructiveText ([string]$pt.Text)) {
+            $decision = New-ContainerOpaqueAsk (Get-Field (Get-Field $config 'gate') 'shapes')
+            break
+        }
+    }
 }
 
 if ($null -eq $decision) { exit 0 }

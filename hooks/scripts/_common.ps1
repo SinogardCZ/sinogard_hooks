@@ -920,7 +920,8 @@ function Write-OverrideRejectedAudit([string]$ToolName, $Config, [string]$Sessio
 # !! Loguje se UDALOST, ne obsah: cas, nastroj, id tvaru a rozhodnuti. Text prikazu do
 # souboru NEJDE (zadani par. 4 bod 8 - riziko uniku). Bez CLAUDE_PLUGIN_DATA se nezapisuje
 # nic a hook mlci; evidence nesmi byt duvod, proc brana spadne.
-$script:AuditSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$script:AuditReadingCount = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
+$script:AuditGroupMax = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
 function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision, $Config) {
     try {
         # T36-Q7 = A (Tom, 8. 9.): v `bypassPermissions` nad pluginem uz zadna vrstva
@@ -934,11 +935,19 @@ function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision,
         if ($Decision -eq 'ask' -and $script:PermissionMode -eq 'bypassPermissions') {
             $Decision = 'ask-bypass'
         }
-        # TASK-179 kolo 6 (K6-6): dalsi cteni tehoz kontejneroveho obalu (gate.ps1, $script:AuditAltReading) nezapise udalost,
-        # kterou beh uz zapsal - jinak by kazde cteni nafouklo pocty, nad kterymi stoji rozhodnuti T-10 A a T36-O5.
-        $auditKey = $ToolName + '|' + $ShapeId + '|' + $Decision
-        if ((Test-Path variable:script:AuditAltReading) -and $script:AuditAltReading -and $script:AuditSeen.Contains($auditKey)) { return }
-        [void]$script:AuditSeen.Add($auditKey)
+        # TASK-179 kolo 6/7 (K6-6, K7-3, K7-4): vic cteni TEHOZ vyskytu obalu (gate.ps1, $script:AuditReading = skupina G
+        # a cteni R) je jedna udalost, ne tolik, kolik je cteni - jinak by nafoukla pocty, nad kterymi stoji T-10 A a T36-O5.
+        # Za skupinu se zapise tolikrat, kolikrat udalost nese NEJBOHATSI cteni (maximum, ne soucet ani prvni). Jiny vyskyt
+        # (jina skupina, list bez skupiny) se nepocita s nim. secrets.ps1 skupinu nema (Test-Path).
+        if ((Test-Path variable:script:AuditReading) -and $null -ne $script:AuditReading) {
+            $groupKey = [string]$script:AuditReading.G + '|' + $ToolName + '|' + $ShapeId + '|' + $Decision
+            $readingKey = $groupKey + '|' + [string]$script:AuditReading.R
+            $count = 1
+            if ($script:AuditReadingCount.ContainsKey($readingKey)) { $count += $script:AuditReadingCount[$readingKey] }
+            $script:AuditReadingCount[$readingKey] = $count
+            if ($script:AuditGroupMax.ContainsKey($groupKey) -and $count -le $script:AuditGroupMax[$groupKey]) { return }
+            $script:AuditGroupMax[$groupKey] = $count
+        }
         $dir = $env:CLAUDE_PLUGIN_DATA
         if ([string]::IsNullOrWhiteSpace($dir)) { return }
         $file = [string](Get-Field (Get-Field $Config 'gate') 'auditFile' 'gate-audit.jsonl')
@@ -1188,15 +1197,29 @@ function Read-ContainerOption($Arr, [int]$I, $Table, [bool]$Abbrev = $false) {
 # K6-1/K6-2 (kolo 6): spany se berou z KAZDEHO textu, ktery beh hooku rozebira (hlavni prikaz, telo vnoreneho shellu,
 # dekodovany `-EncodedCommand`), a kazdy s escape znakem, kterym se rozebiral - ne jen z $script:FullCommand v rezimu
 # prvniho volani. Text zapisuje Get-CommandLineLeaves (gate.ps1) pred rozborem.
-$script:SubstTexts = New-Object System.Collections.ArrayList
-$script:SubstTextKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-$script:SubstSpanValue = $null
-function Register-SubstitutionText([string]$Text) {
-    if ([string]::IsNullOrEmpty($Text) -or $Text.IndexOfAny([char[]]@('(', '`')) -lt 0) { return }
+# K7-2 (kolo 7): tentyz seznam textu cte i Resolve-ContainerEnv (prirazeni promenne pro pruchozi `-e VAR`) - dekodovany
+# `-EncodedCommand` v $script:FullCommand neni.
+$script:ParsedTexts = New-Object System.Collections.ArrayList
+$script:ParsedTextKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+function Register-ParsedText([string]$Text) {
+    if ([string]::IsNullOrEmpty($Text)) { return }
     $esc = Get-ScannerEscape
-    if (-not $script:SubstTextKeys.Add($esc + [char]0 + $Text)) { return }
-    [void]$script:SubstTexts.Add(@{ Text = $Text; Esc = $esc })
-    $script:SubstSpanValue = $null
+    if (-not $script:ParsedTextKeys.Add($esc + [char]0 + $Text)) { return }
+    [void]$script:ParsedTexts.Add(@{ Text = $Text; Esc = $esc })
+}
+
+# K7-1 (kolo 7): strop prace nad substitucemi za cely beh hooku (znaky vyrezanych spanu + porovnani ve slepovani). Hluboko
+# vnorene UZAVRENE zavorky davaji spany, jejichz soucet delek roste se ctvercem hloubky - bez stropu by hook narazil na
+# timeout z hooks.json (10 s) a prikaz by prosel bez verdiktu. Po prekroceni se dal nepocita a beh nese
+# $script:SubstOverflow: gate.ps1 pak u prikazu s destruktivnim DB textem vrati aspon `ask` (fail-closed). Mez je vlastnost
+# parseru jako hloubka zanoreni 5, ne politika - proto neni v konfiguraci.
+$script:SubstWorkBudget = 200000
+$script:SubstWork = 0
+$script:SubstOverflow = $false
+function Add-SubstitutionWork([int]$Units) {
+    $script:SubstWork += $Units
+    if ($script:SubstWork -gt $script:SubstWorkBudget) { $script:SubstOverflow = $true }
+    return (-not $script:SubstOverflow)
 }
 
 # Uzavrene substituce jednoho textu jako retezce. K6-3/K6-4 (kolo 6): parovani zavorek zasobnikem (linearne, ne sken od kazde
@@ -1231,7 +1254,10 @@ function Find-SubstitutionSpanText([string]$Text, [bool]$Bash) {
                 $stack.Push(@{ Start = $(if ($sub) { $i - 1 } else { $i }); Ok = ($sub -or -not $Bash); Q = [char]0 })
             } elseif ($c -eq [char]')' -and $stack.Count -gt 0) {
                 $f = $stack.Pop()
-                if ($f.Ok) { [void]$out.Add($Text.Substring($f.Start, $i - $f.Start + 1)) }
+                if ($f.Ok) {
+                    if (-not (Add-SubstitutionWork ($i - $f.Start + 1))) { return ,@($out) }
+                    [void]$out.Add($Text.Substring($f.Start, $i - $f.Start + 1))
+                }
                 if ($quoted) { $q = [char]$f.Q }
             }
         }
@@ -1239,32 +1265,41 @@ function Find-SubstitutionSpanText([string]$Text, [bool]$Bash) {
     if ($Bash) {
         $ticks = New-Object System.Collections.ArrayList
         for ($i = 0; $i -lt $n; $i++) { if ($Text[$i] -eq [char]'`') { [void]$ticks.Add($i) } }
-        for ($k = 0; ($k + 1) -lt $ticks.Count; $k++) { [void]$out.Add($Text.Substring($ticks[$k], $ticks[$k + 1] - $ticks[$k] + 1)) }
+        for ($k = 0; ($k + 1) -lt $ticks.Count; $k++) {
+            if (-not (Add-SubstitutionWork ($ticks[$k + 1] - $ticks[$k] + 1))) { break }
+            [void]$out.Add($Text.Substring($ticks[$k], $ticks[$k + 1] - $ticks[$k] + 1))
+        }
     }
     return ,@($out)
 }
 
+# Tytez texty se v jednom behu hooku ptaji vickrat (kazdy list a clanek s obalem). K7-6 (kolo 7): spany se pocitaji jen
+# pro texty pribyle od minuleho volani a pripojuji se; tentyz retezec spanu (oba pruchody, vnoreny text jako cast rodice)
+# se deli na slova jen jednou.
+$script:SubstSpanValue = New-Object System.Collections.ArrayList
+$script:SubstSpanWords = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$script:SubstSpanStrings = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$script:SubstSpanDone = 0
 function Get-SubstitutionSpan {
-    # Tytez texty se v jednom behu hooku ptaji vickrat (kazdy list a clanek s obalem) - pocita se znovu jen po novem textu.
-    if ($null -ne $script:SubstSpanValue) { return ,@($script:SubstSpanValue) }
-    $out = New-Object System.Collections.ArrayList
-    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     $prev = Get-ScannerEscape
     try {
-        foreach ($t in @($script:SubstTexts)) {
+        while ($script:SubstSpanDone -lt $script:ParsedTexts.Count -and -not $script:SubstOverflow) {
+            $t = $script:ParsedTexts[$script:SubstSpanDone]
+            $script:SubstSpanDone++
+            if (([string]$t.Text).IndexOfAny([char[]]@('(', '`')) -lt 0) { continue }
             # Slova spanu deli Split-Arguments escapem textu, ze ktereho span je.
             Set-ScannerEscapeChar ([string]$t.Esc)
             foreach ($s in (Find-SubstitutionSpanText ([string]$t.Text) ([string]$t.Esc -ne '`'))) {
+                if (-not $script:SubstSpanStrings.Add([string]$t.Esc + [char]0 + $s)) { continue }
                 # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
                 $w = Split-Arguments $s
-                if ($w.Count -ge 2 -and $keys.Add(($w -join [string][char]0))) { [void]$out.Add($w) }
+                if ($w.Count -ge 2 -and $script:SubstSpanWords.Add(($w -join [string][char]0))) { [void]$script:SubstSpanValue.Add($w) }
             }
         }
     } finally {
         Set-ScannerEscapeChar $prev
     }
-    $script:SubstSpanValue = $out
-    return ,@($out)
+    return ,@($script:SubstSpanValue)
 }
 
 function Join-SubstitutionToken($Tokens) {
@@ -1278,6 +1313,8 @@ function Join-SubstitutionToken($Tokens) {
     $i = 0
     while ($i -lt $arr.Count) {
         $best = 0
+        # K7-1: porovnani tokenu se vsemi spany je dalsi ctverec (tokeny x spany) - pocita se do tehoz stropu.
+        if (-not (Add-SubstitutionWork $spans.Count)) { $spans = @() }
         foreach ($w in $spans) {
             $k = $w.Count
             if ($k -le $best -or ($i + $k) -gt $arr.Count) { continue }

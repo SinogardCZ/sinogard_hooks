@@ -414,6 +414,8 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
         $cmdText = ([string]$row.cmd).Replace('{PLUGIN_ROOT}', $rootFwd)
         # TASK-179 kolo 6 (K6-4): `{REP}` = `repText` opakovany `repCount`krat (patologicky dlouhy prikaz bez tisicu znaku ve fixture).
         if ($cmdText.Contains('{REP}')) { $cmdText = $cmdText.Replace('{REP}', ([string]$row.repText * [int]$row.repCount)) }
+        # K7-1 (kolo 7): druhe opakovani (`{REP2}`) pro vnorene UZAVRENE zavorky - otviraci v `{REP}`, zaviraci v `{REP2}`.
+        if ($cmdText.Contains('{REP2}')) { $cmdText = $cmdText.Replace('{REP2}', ([string]$row.repText2 * [int]$row.repCount2)) }
         $tool = [string]$row.tool
         $values = @{}
         if (@('Write', 'Edit', 'Read') -contains $tool) {
@@ -462,6 +464,8 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
         }
         # TASK-179 kolo 6 (K6-5): tvar, ktery v auditu byt NESMI (allow radek u tehoz listu, ktery konci ask).
         if ($row.PSObject.Properties['auditAbsentShape']) {
+            # K7-9 (kolo 7): bez jedineho radku auditu by tvrzeni "tvar tam neni" proslo naprazdno (audit se vubec nezapsal).
+            Assert-True ($lines.Count -ge 1) ("{0}: audit nese aspon jeden radek (auditAbsentShape)" -f $label)
             foreach ($l in $lines) {
                 $o = $l | ConvertFrom-Json
                 $bad = [string]$o.shape -match [string]$row.auditAbsentShape -and
@@ -470,8 +474,11 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
             }
         }
         # TASK-179 kolo 6 (K6-4): doba jednoho behu hooku (patologicky dlouhy prikaz nesmi narazit na timeout hooku).
+        # K7-7 (kolo 7): Invoke-Hook beh nad HookCeilingMs jednou opakuje a vraci druhe mereni - `maxMs` do tehoz stropu tedy
+        # zatez stroje neodnese jednim vykyvem; `maxMs` nad stropem by opakovani obeslo, proto se bere mensi z obou.
         if ($row.PSObject.Properties['maxMs']) {
-            Assert-True ([int]$r.Ms -lt [int]$row.maxMs) ("{0}: hook do {1} ms, dostano {2} ms" -f $label, $row.maxMs, $r.Ms)
+            $maxMs = [Math]::Min([int]$row.maxMs, [int]$script:HookCeilingMs)
+            Assert-True ([int]$r.Ms -lt $maxMs) ("{0}: hook do {1} ms, dostano {2} ms" -f $label, $maxMs, $r.Ms)
         }
         if ($row.PSObject.Properties['auditShape']) {
             $hit = $null

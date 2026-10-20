@@ -503,7 +503,8 @@ aby si je nikdo nemusel objevit sám.
     nezná, čte **oběma způsoby** (s hodnotou i bez), takže budoucí volba nic neschová; tělo heredocu a roury se posoudí pro
     každé čtení obalu a platí nejpřísnější verdikt. Hostitel se bere z **vnitřního**
     příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`; průchozí `-e PGHOST` bere hodnotu z téhož
-    příkazu — prefix `PGHOST=…`, `export`, `$env:PGHOST = …`; `--env-file` a hodnotu ze session hook nevidí → místní = `ask`),
+    příkazu — prefix `PGHOST=…`, `export`, `$env:PGHOST = …`, i v dekódovaném `-EncodedCommand`; `--env-file` a hodnotu ze
+    session hook nevidí → místní = `ask`),
     **nikdy z voleb obalu** (`-H` enginu, `run -h` = jméno kontejneru) — s jednou výjimkou z 0.3.0: `dotnet ef database
     drop|update` se jako dřív posuzuje i nad **celým** příkazem obalu, takže tam volba obalu `-h` / `--host` může vyjít jako
     vzdálený hostitel a dát `deny` (přísněji, ne tišeji; uvolnění by měnilo verdikt 0.3.0). Jiná CLI, která spouštějí
@@ -518,7 +519,9 @@ aby si je nikdo nemusel objevit sám.
     platí zákaz `allow` z `gate.dbDestroyLocal` a hostitel z `-e` obalu. Cíl kontejneru zapsaný substitucí (`$(docker ps -q)`,
     zpětné apostrofy, závorka PowerShellu) se čte jako jeden token (slepuje se jen uzavřená substituce z textu, který
     hook rozebírá — hlavní příkaz, tělo vnořeného shellu i dekódované `-EncodedCommand`, každý svými pravidly escapu;
-    závorky se párují bez ohledu na uvozovky i s nimi; kvotovaná závorka v hodnotě volby cíl nespolkne); zkratky dlouhých voleb `podman-compose` (argparse,
+    závorky se párují bez ohledu na uvozovky i s nimi; kvotovaná závorka v hodnotě volby cíl nespolkne; rozbor substitucí má
+    strop práce na jeden běh hooku — po jeho překročení cíl nemusí být přečtený celý a příkaz s destruktivním DB literálem
+    dostane `ask`); zkratky dlouhých voleb `podman-compose` (argparse,
     `--entry` = `--entrypoint`) se rozvinou, je-li zkratka jednoznačná. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
     Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `ask`.
     Heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem = `ask` (volání `truncate(` není SQL;

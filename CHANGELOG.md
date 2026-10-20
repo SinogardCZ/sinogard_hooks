@@ -18,7 +18,7 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | třída tvaru | 0.3.0 | 0.3.1 |
 |---|---|---|
 | `docker\|podman exec\|run … <kontejner> psql\|sqlcmd … -c/-Q "<destruktivní SQL>"`, `dropdb`, `dotnet ef database drop`, `sqllocaldb delete` uvnitř — místní | ticho | `ask` (podle `gate.dbDestroyLocal`; `deny` → `deny`) |
-| totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`, průchozí `-e PGHOST` s hodnotou v témže příkazu) | ticho | `deny` |
+| totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`, průchozí `-e PGHOST` s hodnotou v témže příkazu, i v dekódovaném `-EncodedCommand`) | ticho | `deny` |
 | `podman-remote` (tentýž klient podmana) | ticho | jako řádky výše |
 | cíl kontejneru substitucí (`$(docker ps -q)`, zpětné apostrofy, `(docker ps -q)` v PowerShellu), zkratky dlouhých voleb `podman-compose` | ticho | jako řádky výše |
 | heredoc do shellu v `docker exec -i c sh` (tvar, který 0.3.0 rozbalovala): s přepisem `gate.dbDestroyLocal = allow` | ticho | `ask` (tvar v kontejneru nikdy `allow`) |
@@ -33,6 +33,7 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 | heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | beze změny; navíc destruktivní DB literál v těle → `ask` |
 | `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (místní `ask`, vzdálený `deny`) |
 | `-EncodedCommand` v kontejneru, které nejde dekódovat nebo dává prázdný text (i bez DB textu) | ticho | `ask` |
+| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `ask` |
 | cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
 
 Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`).
@@ -46,7 +47,11 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
   `-EncodedCommand` v kontejneru, viz řádek tabulky výše); sada `secrets` + kontrolní řádky `tests/fixtures/task179-secrets.json` (8) zelené.
 - Tentýž SQL bez kontejneru, tělo heredocu a roura do `docker exec -i … psql -h …` (už v 0.3.0 `deny`), `scripts/…ps1`
   spuštěný souborem (README omezení 1): beze změny.
-- Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru.
+- Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru. Obal,
+  který hook čte víckrát (neznámá volba, tělo heredocu a roury pro každé čtení), zapíše událost tolikrát, kolikrát ji nese
+  jeho nejbohatší čtení — ne jednou za každé čtení; jiný výskyt v témže příkazu se počítá zvlášť.
+- Heredoc do interpretu v `docker exec` (tvar 0.3.0) s destruktivním voláním interpretu nese dál id tvaru
+  `interpreterDestructive` i tehdy, když tělo má navíc destruktivní DB literál.
 - Coreutils `truncate` a volání `truncate(` (`os.truncate`, `f.truncate()`) v kódu interpretu nejsou SQL `TRUNCATE` → ticho.
 - `dotnet ef database drop|update` v obalu: DB pravidlo dál posuzuje i celý příkaz obalu jako v 0.3.0 (přísnější verdikt
   zůstává; README omezení 11).
@@ -57,13 +62,14 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (188 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kol 1–6 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
+`tests/fixtures/task179-gate.json` (200 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
+nálezy `/code-review` kol 1–7 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
 59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad předchozí verzí opravy. Invariant 1152 → 1337 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury
-a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí), `auditShapeCount` (počet řádků
-auditu), `maxMs` (doba jednoho běhu hooku) a `{REP}` + `repText` / `repCount` (dlouhý příkaz bez tisíců znaků ve fixtuře;
-takový řádek nejde do invariantu).
+fází nad předchozí verzí opravy. Invariant 1152 → 1343 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury
+a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
+řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady s jeho jedním
+opakováním) a `{REP}` / `{REP2}` + `repText` / `repCount` / `repText2` / `repCount2` (dlouhý příkaz bez tisíců znaků ve
+fixtuře; takový řádek nejde do invariantu).
 
 ### Meze TASK-161 přecházejí na 0.3.2
 
