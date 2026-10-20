@@ -413,9 +413,9 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
         }
         # Radek s projektovym prepisem nebo rezimem meri JINY stav nez invariant (ten bezi
         # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim. Radek s `{REP}` / `{REP2}` (K8-9) nese
-        # nerozvinuty zastupny text.
+        # nerozvinuty zastupny text - pozna se podle `repText` (K9-7: predpona `{REP` by vyradila i literal jako `{REPO}`).
         if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode'] -and
-            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}') -and -not ([string]$row.cmd).Contains('{REP')) {
+            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}') -and -not $row.PSObject.Properties['repText']) {
             $kind = if (@('Write', 'Edit', 'Read') -contains [string]$row.tool) { 'path' } else { 'cmd' }
             Add-CollectedCase $HookName $kind ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
         }

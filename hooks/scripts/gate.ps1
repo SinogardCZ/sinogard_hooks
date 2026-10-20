@@ -180,6 +180,8 @@ function Get-UnwrappedReadings($Unwrapped) {
 # zalozena v takovem rozboru je proto `<skupina vnejsiho cteni>.<poradi v nem>` - n-ta skupina tela ma v kazdem vnejsim cteni
 # tyz klic a Invoke-LeafVerdict ji vede pod cestou vnejsiho cteni. Jinak by kazde vnejsi cteni zalozilo novou skupinu
 # a udalost tela by se zapsala tolikrat, kolik cteni ma vnejsi obal.
+# K9-2/K9-3 (kolo 9, zamitnuto): poradi je pozicni - lisi-li se vnejsi cteni POCTEM listu, ktere telo rozebiraji znovu,
+# muze se udalost zapsat vickrat (soucet maxim po pozicich >= maximum souctu). Jen nadpocet, nikdy chybejici radek; verdikt beze zmeny.
 $script:ReadingGroupSeq = 0
 $script:ReadingGroupLocal = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
 function New-ReadingGroup {
@@ -1881,7 +1883,7 @@ function Test-DatabaseRule($Leaf, $Config) {
         # nastavitelne projektovym prepisem `gate.dbDestroyLocal`; vychozi `ask` = 0.2.0.
         # Obsah prepisu uz zkontrolovalo H-c (neplatny klic = vychozi hodnota, nikdy allow).
         $dl = Get-Field $gate 'dbDestroyLocal'
-        $dlDecision = [string](Get-Field $dl 'decision' 'ask')
+        $dlDecision = Get-DbDestroyLocalDecision $gate
         if ($dlDecision -eq 'deny') { return (New-DbDestroyLocalDenied $shapes) }
         # TASK-179 (AOPT-O26): tvar uvnitr kontejneru nikdy `allow` - ani kdyz jeho vnitrni text je doslova povoleny statement.
         # K3-2 (kolo 3): totez pro tvar v kontejneru, ktery rozbalil starsi pruchod (`docker exec -i c sh <<EOF`) - NoAllow.
@@ -2049,6 +2051,11 @@ function New-ContainerOpaqueAsk($Shapes) {
 function New-DbDestroyLocalDenied($Shapes) {
     return @{ Id = 'dbDestroyLocalDenied'; Decision = 'deny'
               Shape = (Get-Field $Shapes 'dbDestroyLocalDenied' 'DB (gate.dbDestroyLocal = deny)') }
+}
+
+# K9-5 (kolo 9): rozhodnuti prepisu gate.dbDestroyLocal cte jedno misto (Test-DatabaseRule i zaloha po stropu prace).
+function Get-DbDestroyLocalDecision($Gate) {
+    return [string](Get-Field (Get-Field $Gate 'dbDestroyLocal') 'decision' 'ask')
 }
 
 # $InContainer = $true: vnitrni listy jsou v kontejneru (jen DB pravidlo, Test-ContainerLeaf). $false: telo tvaru 0.3.0
@@ -2322,14 +2329,15 @@ foreach ($leaf in $leaves) {
 # a vnitrni prikaz obalu nemusely byt prectene cele. Je-li v nekterem rozebiranem textu destruktivni DB literal, ptame se.
 # K8-2 (kolo 8): hostitel takoveho prikazu neni prectany = mistni (jako pruchozi `-e PGHOST` bez hodnoty, CR-3) - plati
 # `gate.dbDestroyLocal`: `deny` z prepisu zustava `deny`, jinak `ask` (`allow` v kontejneru nikdy, AOPT-O26).
-if ($null -eq $decision -and $script:SubstOverflow) {
+# K9-1 (kolo 9): zaloha bezi i po `ask` jineho listu - `deny` z prepisu by jinak prebil drivejsi dotaz; `ask` nic neprebiji.
+if ($script:SubstOverflow -and ($null -eq $decision -or $decision.Decision -ne 'deny')) {
     foreach ($pt in @($script:ParsedTexts)) {
         if (Test-DbDestructiveText ([string]$pt.Text)) {
             $ovGate = Get-Field $config 'gate'
             $ovShapes = Get-Field $ovGate 'shapes'
-            if ([string](Get-Field (Get-Field $ovGate 'dbDestroyLocal') 'decision' 'ask') -eq 'deny') {
+            if ((Get-DbDestroyLocalDecision $ovGate) -eq 'deny') {
                 $decision = New-DbDestroyLocalDenied $ovShapes
-            } else {
+            } elseif ($null -eq $decision) {
                 $decision = New-ContainerOpaqueAsk $ovShapes
             }
             break
