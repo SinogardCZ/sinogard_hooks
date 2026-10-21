@@ -394,6 +394,10 @@ function ConvertTo-NormalPath([string]$Path) {
 # `C:\src` ve Split-Arguments by se zmenilo na `C:src` a shoda na chranene cesty by
 # prestala platit - tenhle escape resi VYHRADNE stav uvozovek, nic jineho.
 $script:ScannerEscape = '\'
+# CR-S8 (TASK-179, kolo 3 /code-review): Bash i PowerShell maji komentar `#` (PowerShell i `<# ... #>`), cmd ne. Skener
+# o komentari nevedel, takze apostrof v nem (`# don't` + novy radek + `git reset --hard`) otevrel "retezec" az do konce
+# prikazu a dalsi statementy se uz nerozdelily -> allow. Uvnitr `cmd /c` se komentar necte (`echo # & rd /s /q x`).
+$script:ScannerComments = $true
 
 function Set-ScannerEscape([string]$ToolName) {
     if ($ToolName -eq 'PowerShell') { $script:ScannerEscape = '`' } else { $script:ScannerEscape = '\' }
@@ -552,6 +556,20 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
         }
         if ($c -eq '"') { $inDouble = -not $inDouble; [void]$buf.Append($c); $i++; continue }
         if ($inDouble) { [void]$buf.Append($c); $i++; continue }
+
+        # CR-S8: komentar mimo uvozovky - `#` na zacatku slova do konce radku (konec radku zustava separatorem),
+        # v PowerShellu i blok `<# ... #>`. `${#x}`, `a#b`, `--format=#%h` komentar nejsou (pred `#` neni bily znak).
+        if ($script:ScannerComments) {
+            if ($c -eq '#' -and ($i -eq 0 -or [char]::IsWhiteSpace($Text[$i - 1]) -or $Text[$i - 1] -eq ';')) {
+                while ($i -lt $n -and $Text[$i] -ne "`n" -and $Text[$i] -ne "`r") { $i++ }
+                continue
+            }
+            if ($esc -eq '`' -and $c -eq '<' -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '#') {
+                $end = $Text.IndexOf('#>', $i + 2)
+                $i = if ($end -lt 0) { $n } else { $end + 2 }
+                continue
+            }
+        }
 
         # $( ... ) se nedeli - je to jeden vyraz, ktery se rozebira zvlast.
         if ($c -eq '$' -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '(') {

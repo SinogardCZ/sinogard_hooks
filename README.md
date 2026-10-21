@@ -236,11 +236,13 @@ klient připojí). Každé nalezené jméno musí sedět. Nečitelné (`deny`): 
 dynamické SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`), SQL s komentářem (`/**/`, `--`), trojdílné jméno objektu
 (i `[a].[my schema].[c]`; vedlejší účinek: tečky v textu SQL jako `'A. B. C'`), seznam jmen v `DROP DATABASE a, b`, příkaz
 `sqlcmd` (`:connect`, `:r`, `!!` …), SQL ze souboru nebo stdin vedle viditelného (`-f`, `--file`, `-fx`, `-i`, `-ix`,
-`--input-file`, `<`; u `dropdb` jsou `-f`/`-i` volby `--force`/`--interactive`), hostitel z prostředí (`PGHOST`,
-`PGHOSTADDR`, `PGSERVICE`, `SQLCMDSERVER` v příkazu; načtení souboru `. x` / `source x`, `SetEnvironmentVariable`,
-`Set-Item`/`New-Item` na `env:`, `export`/`declare` se substitucí; nemístní hodnota v prostředí hooku — PG* u
-psql/pgcli/dropdb, `SQLCMDSERVER` u sqlcmd; výslovné `-h`/`-S` přebije `PGHOST`/`SQLCMDSERVER`, ne `PGHOSTADDR` ani
-`PGSERVICE`; `PGHOST` s cestou k socketu je místní), pgcli s DSN, `sqllocaldb delete`, tvar uvnitř kontejneru (`AOPT-O26`).
+`--input-file`, `<`; u `dropdb` jsou `-f`/`-i` volby `--force`/`--interactive`), zkratka dlouhé volby psql/dropdb
+(`--fil=`, `--ho=`), escape `]]` / `""` ve jménu, jiný příkaz v téže řádce než `cd`, výpis, další volání SQL klienta nebo
+`export` s literálem (skript, `eval`, `source`, `Set-Content` …), hostitel z prostředí (`PGHOST`, `PGHOSTADDR`,
+`PGSERVICE`, `SQLCMDSERVER` v příkazu; `SetEnvironmentVariable`; nemístní hodnota v prostředí hooku — `SQLCMDSERVER`
+u sqlcmd, PG* u psql/pgcli/dropdb, u jiného klienta z `gate.sqlClients` obojí; výslovné `-h`/`-S`/`host=` v argumentech
+přebije `PGHOST`/`SQLCMDSERVER`, ne `PGHOSTADDR` ani `PGSERVICE`; `PGHOST` je místní, jen když je každá položka
+seznamu cesta k socketu nebo místní hostitel), pgcli s DSN, `sqllocaldb delete`, tvar uvnitř kontejneru (`AOPT-O26`).
 **Mez:** proměnnou nastavenou profilem shellu (`~/.bashrc`), který načte jen nástroj Bash a ne proces hooku, hook
 nevidí — „bez hostitele = místní" pak neplatí; kdo má v profilu `PGHOST` na vzdálený server, ať v projektu nastaví
 `gate.dbDestroyLocal` na `deny`. Přepis smí `databases` jen **zúžit** (s `decision: deny` se vzory nečtou); `decision`

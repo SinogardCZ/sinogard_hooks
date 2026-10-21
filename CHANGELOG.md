@@ -82,6 +82,22 @@ služby ne. `PGHOST` s cestou k socketu je místní (CR-R8). Testy čištění p
 Vědomě beze změny: `service=` / `hostaddr=` v conninfo končí `deny` už dnes, protože řetězec s mezerou je nečitelné jméno
 (CR-R5, změřeno, hlídají řádky). Tečky v textu SQL (`'A. B. C'`) jsou nečitelné ve směru `deny` (CR-R9). Profil shellu,
 který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, README).
+
+**Třetí kolo `/code-review` nad CR-R (CR-S, skupina `CR-S`):**
+- **Komentáře v příkazech (CR-S8).** Skener příkazů nově zná komentář `#` (Bash i PowerShell) a `<# … #>` (PowerShell).
+  Apostrof v komentáři (`# don't` + nový řádek + `git reset --hard`) dosud otevřel „řetězec“ až do konce příkazu. Další
+  příkazy se pak vůbec nerozebraly a prošly tichem, a to v gate i v secrets, **i v nasazené 0.3.0**. Uvnitř `cmd /c` se
+  komentář nečte, protože cmd ho nezná.
+- **Rozbor `… | iex` (CR-S1, S4, S8).** Literály se berou z textu, který se právě rozebírá, ne z celého příkazu (vnořený
+  `pwsh -c "'x' | iex"`). Čte je tokenizer PowerShellu a každý se rozebere jen jednou. Holé `iex` uvnitř rozebíraného
+  literálu je `depth` (deny), takže rozbor už neroste exponenciálně (dřív 9–69 s → timeout hooku).
+- **`allow` z `gate.dbDestroyLocal` (CR-S2, S5, S6).** Ostatní příkazy v téže řádce musí patřit do krátké množiny, která
+  prostředí nemění: `cd`, výpis, další volání SQL klienta, `export` s literálem. Výčet tvarů z CR-R7 třídu nezavřel
+  (`./setenv.ps1`, `eval`, `if …; then . x; fi`), proto ho nahradila tato množina. Výslovný hostitel se čte jen
+  z argumentů, ne z textu SQL. Zkratky dlouhých voleb psql/dropdb (`--fil=`, `--ho=`; getopt_long) vedou k `deny`.
+- **Proměnné prostředí hooku (CR-S3, S10).** `PGHOST` se seznamem (`/tmp,db.firma.cz`) je místní, jen když je místní
+  každá položka. Klient z `gate.sqlClients`, kterého hook nezná, čte z prostředí hooku PG* i `SQLCMDSERVER`.
+- **Ostatní (CR-S7, S9).** Volby psql `-Ufred`, `-dfoo` nejsou soubor SQL. Escape `]]` / `""` ve jménu je nečitelný → `deny`.
 Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)
