@@ -1533,6 +1533,19 @@ if ($script:CmdTools -contains $toolName) {
     $command = [string](Get-Field $toolInput 'command' '')
     if ([string]::IsNullOrWhiteSpace($command)) { Write-HookStderr $script:InternalMessage; exit 2 }
     $decision = Test-SecretCommand $command $config
+    # CR-U (TASK-179, kola 5 a 6): prikaz s `#` jeste jednou BEZ komentare (cteni 0.3.0) - kde `#` komentarem neni, muze
+    # cteni s komentarem videt mene. Z druheho cteni plati jen `deny` (audit ztlumen).
+    if (($null -eq $decision -or $decision.Decision -ne 'deny') -and $command.IndexOf('#') -ge 0) {
+        $script:CommentAware = $false
+        $script:AuditMuted = $true
+        try {
+            $plain = Test-SecretCommand $command $config
+            if ($null -ne $plain -and $plain.Decision -eq 'deny') { $decision = $plain }
+        } finally {
+            $script:CommentAware = $true
+            $script:AuditMuted = $false
+        }
+    }
 } else {
     $path = [string](Get-Field $toolInput 'file_path' '')
     if ($path -eq '') { $path = [string](Get-Field $toolInput 'notebook_path' '') }

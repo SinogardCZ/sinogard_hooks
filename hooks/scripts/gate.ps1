@@ -581,6 +581,24 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     foreach ($sub in (Split-CommandLine $pl.Rest @('&'))) {
         foreach ($l in (Get-CommandLeaf $sub $Depth)) { [void]$out.Add($l) }
     }
+    # CR-V2 (TASK-179, kolo 6): statement, ktery zacina VYRAZEM (`[Environment]::X(...) + (psql ...)`), Get-CommandLeaf
+    # nerozebira (Test-ExpressionStatement) - prikaz v zavorce se nespustil pres zadne pravidlo (i v 0.3.0). V PowerShellu
+    # proto rozhoduje i parser PowerShellu: kazdy prikaz (CommandAst), jehoz text zadny list nema, se rozebere navic.
+    # Prikaz s blokem skriptu (`& { ... }`, `ForEach-Object { ... }`) se preskoci - jeho vnitrni prikazy jsou vlastni
+    # CommandAst a blok uz rozebral Get-CommandLeaf.
+    if ((Get-ScannerEscape) -eq '`') {
+        $raws = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($l in $out) { [void]$raws.Add(([string]$l.Raw).Trim()) }
+        $tk = $null; $pe = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($pl.Rest, [ref]$tk, [ref]$pe)
+        $cmds = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true))
+        foreach ($ca in $cmds) {
+            $ct = $ca.Extent.Text.Trim()
+            if (-not $raws.Add($ct)) { continue }
+            if ($null -ne $ca.Find({ param($a) $a -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true)) { continue }
+            foreach ($l in (Get-CommandLeaf $ct ($Depth + 1))) { [void]$out.Add($l) }
+        }
+    }
     foreach ($b in $hd.Bodies) {
         [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
                           Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
@@ -775,12 +793,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         return $out
     }
 
+    # CR-U2 + CR-V1 (TASK-179, kola 5 a 6): pred prikazem muze stat prirazeni i presmerovani v libovolnem poradi a bez
+    # mezery mezi presmerovanimi (`>out X=1 rm -rf src`, `2>/dev/null>out rm -rf src`, `<>f`, `>|f`, `<<<x`, `>nul rd ...`
+    # v cmd) - jinak by exe vyslo `>out` a zadne pravidlo nesedlo. Zbyde-li na zacatku `<` nebo `>`, tvar je nerozebratelny.
     $stripped = [regex]::Replace($trimmed,
-        '^\s*([A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|''[^'']*''|\S*)\s+)+', '')
-    # CR-U2 (TASK-179, kolo 5): presmerovani muze stat PRED prikazem (`>nul rd /s /q src` v cmd, `>out rm -rf x` v Bashi) -
-    # jinak by exe vyslo `>nul` a zadne pravidlo nesedlo.
-    $stripped = [regex]::Replace($stripped,
-        '^\s*([0-9]?(?:>>?|<)&?\s*(?:"[^"]*"|''[^'']*''|[^\s<>]+)\s+)+', '')
+        '^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|''[^'']*''|\S*)\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*(?:"[^"]*"|''[^'']*''|[^\s<>]+)\s*)+', '')
+    if ($stripped.Trim() -eq '' -and $trimmed -match '^\s*[0-9]*[<>&]') { return $out }
+    if ($stripped -match '^\s*[<>]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
 
     # PowerShellove PRIRAZENI `$x = <prikaz>` neni volani promenne v pozici prikazu.
     # Bez teto vetve bral Test-Unexpandable `$out` jako promennou v pozici prikazu
@@ -1271,7 +1290,8 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
 # jmena promenne hostitele v textu (i po odstraneni escapu a uvozovek) a s prazdnymi
 # PGHOST, PGHOSTADDR, PGSERVICE, PGSERVICEFILE, SQLCMDSERVER a PSQLRC v prostredi hooku. Cokoli jineho = deny (jako kazdy
 # jiny necitelny tvar). Mez: profil shellu a existujici ~/.psqlrc hook nevidi (README).
-$script:DbHostEnvNames = @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'SQLCMDSERVER', 'PSQLRC')
+# CR-V5 (kolo 6): i PGSYSCONFDIR (systemovy psqlrc a pg_service.conf z jineho adresare).
+$script:DbHostEnvNames = @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'SQLCMDSERVER', 'PSQLRC')
 function Test-DbAllowContext($Leaf, [string]$HostExe) {
     foreach ($n in $script:DbHostEnvNames) {
         if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($n))) { return $false }
@@ -1281,7 +1301,15 @@ function Test-DbAllowContext($Leaf, [string]$HostExe) {
     if ($cmd -match $rx -or ($cmd -replace '[\\`''"]', '') -match $rx) { return $false }
     # Jediny statement (telo heredocu se nepocita): drivejsi statement muze zmenit prostredi i bez listu (`$env:X = ...`,
     # `[Environment]::SetEnvironmentVariable(...)`).
-    if (@(Split-Statement ([string](Split-Heredoc $cmd).Rest)).Count -ne 1) { return $false }
+    # CR-V4 (kolo 6): `&>soubor` je v Bashi presmerovani, ne oddelovac statementu (v cmd oddelovac je - list za nim pak
+    # neprojde kontrolou listu nize).
+    $rest = [regex]::Replace([string](Split-Heredoc $cmd).Rest, '&>>?\s*(?:"[^"]*"|''[^'']*''|[^\s;&|]+)', ' ')
+    $stmts = @(Split-Statement $rest)
+    if ($stmts.Count -ne 1) { return $false }
+    # CR-V2 (kolo 6): statement JE ten prikaz - ne vyraz, ve kterem prikaz stoji (`[Environment]::X(...) + (psql ...)`).
+    $leafText = if ([string](Get-LeafField $Leaf 'Kind' '') -eq 'heredoc') { [string](Get-LeafField $Leaf 'Outer' '') } else { [string]$Leaf.Raw }
+    $norm = { param($s) ([regex]::Replace([string]$s, '&>>?\s*(?:"[^"]*"|''[^'']*''|[^\s;&|]+)|<<-?\s*([''"]?)[A-Za-z_][A-Za-z0-9_]*\1', ' ') -replace '\s+', ' ').Trim() }
+    if ((& $norm $stmts[0]) -cne (& $norm $leafText)) { return $false }
     # Kazdy list prikazu je tentyz SQL klient nebo telo heredocu pro nej - roura (`| cat`), substituce, zpetne apostrofy
     # i komentar (vlastni segment) pridavaji jiny list.
     $found = $false
@@ -2494,6 +2522,11 @@ foreach ($leaf in $leaves) {
 if (($null -eq $decision -or $decision.Decision -ne 'deny') -and $command.IndexOf('#') -ge 0) {
     $script:CommentAware = $false
     $script:AuditMuted = $true
+    # CR-V6 (kolo 6): druhe cteni dostane vlastni rozpocet prace na substituce (prvni ho mohlo vycerpat); preteceni plati
+    # z obou cteni.
+    $overflow1 = $script:SubstOverflow
+    $script:SubstWork = 0
+    $script:SubstOverflow = $false
     try {
         Set-ScannerEscape $toolName
         $plainLeaves = @(Get-CommandLineLeaves $command 0)
@@ -2505,6 +2538,7 @@ if (($null -eq $decision -or $decision.Decision -ne 'deny') -and $command.IndexO
     } finally {
         $script:CommentAware = $true
         $script:AuditMuted = $false
+        $script:SubstOverflow = $overflow1 -or $script:SubstOverflow
     }
 }
 

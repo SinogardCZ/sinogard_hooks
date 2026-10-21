@@ -133,6 +133,24 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   **Zúžení potvrdila Amber jako `A179-O7`**: `allow` z `gate.dbDestroyLocal` platí v 0.3.1 jen pro samostatný příkaz
   jednoho SQL klienta bez proměnných hostitele. Složený tvar se jménem ve vzoru končí novým tvarem
   `gate:dbDestroyLocalCompound`. Jeho hláška jmenuje povolený tvar (`psql -d <db> -c "…"` nebo `dropdb <db>`).
+  Zúžení platí i pro SQL rourou (`echo "TRUNCATE t" | psql -d gsd_dev` → `deny`).
+
+**Šesté kolo `/code-review` nad CR-U (CR-V, skupina `CR-V`):**
+- **Příkaz uvnitř výrazu PowerShellu (CR-V2, chyba i v 0.3.0).** Statement, který začíná výrazem, třeba
+  `[IO.Path]::GetTempPath() + (git reset --hard)` nebo `[Environment]::X(...) + (psql …)`, gate nerozebíral a příkaz
+  v závorce prošel tichem. V PowerShellu teď rozhoduje i parser PowerShellu: každý příkaz (`CommandAst`), jehož text
+  žádný list nemá, se rozebere navíc. `allow` z `gate.dbDestroyLocal` navíc vyžaduje, aby statement byl přesně ten DB
+  příkaz.
+- **Přesměrování a přiřazení před příkazem (CR-V1).** Strhávají se v libovolném pořadí a bez mezery
+  (`>out X=1 rm …`, `2>/dev/null>out rm …`, `<>f`, `>|f`, `<<<x`). Zbytek `<`/`>` na začátku je nerozebíratelný → `deny`.
+- **Ostatní (CR-V3 až V9).**
+  - Blokový komentář mezi statementy (hlavička `<# .SYNOPSIS … #>`) zákaz nespouští.
+  - `&>soubor` v Bashi neruší jednoduchost DB příkazu.
+  - Proměnná `PGSYSCONFDIR` patří mezi proměnné hostitele.
+  - Druhé čtení bez komentáře má vlastní rozpočet práce a dělá ho i hook secrets.
+  - Sada nuluje všech sedm proměnných hostitele.
+  - Rekurzivní sjednocení ve `Split-CommandLine` zmizelo.
+
 - **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
   - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
   - `${#x}` není komentář.

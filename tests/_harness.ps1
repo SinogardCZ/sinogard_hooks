@@ -222,7 +222,8 @@ function Invoke-HookOnce {
     $psi.EnvironmentVariables['CLAUDE_PLUGIN_DATA'] = ''
     # CR-R8 (TASK-179, 0.3.1): pravidlo DB cte hostitele i z prostredi hooku (PGHOST, PGHOSTADDR, PGSERVICE,
     # SQLCMDSERVER) - tataz trida "hodnota z okoli". Pripad si je nastavuje sam (`env` radku fixtury).
-    foreach ($k in @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'SQLCMDSERVER')) { $psi.EnvironmentVariables[$k] = '' }
+    # CR-V7 (kolo 6): vsechny promenne, ktere `allow` z gate.dbDestroyLocal vyzaduje prazdne (gate.ps1, DbHostEnvNames).
+    foreach ($k in @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'SQLCMDSERVER', 'PSQLRC')) { $psi.EnvironmentVariables[$k] = '' }
 
     if ($Environment) {
         foreach ($k in $Environment.Keys) { $psi.EnvironmentVariables[$k] = [string]$Environment[$k] }

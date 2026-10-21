@@ -403,8 +403,8 @@ $script:ScannerEscape = '\'
 # Zacatek komentare: `#` na zacatku textu nebo za bilym znakem ci `; | & ( {`; v PowerShellu i `<#`. Vraci delku
 # uvozujiciho tokenu (0 = neni komentar).
 # Kde `#` komentarem NENI (cmd, `${x:- #}`, zpetne apostrofy) a za nim je otevrena uvozovka pres konec radku, mohlo by
-# cteni s komentarem videt i MENE nez cteni bez nej. Split-CommandLine, Get-Substitution, Get-BacktickSubstitution
-# a Get-ScriptBlockBodies proto vraceji SJEDNOCENI obou cteni ($script:CommentAware) - komentar muze rozbor jen rozsirit.
+# cteni s komentarem videt i MENE nez cteni bez nej. Oba hooky (gate.ps1, secrets.ps1) proto prikaz s `#` rozeberou jeste
+# jednou BEZ komentare ($script:CommentAware = $false, cteni 0.3.0) a z druheho cteni berou jen `deny`.
 $script:CommentAware = $true
 $script:BlockCommentSplit = $false
 
@@ -610,6 +610,12 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
                 $body = $Text.Substring($i, $ce - $i)
                 $sepIn = $false
                 foreach ($s in $seps) { if ($s.Length -gt 0 -and $body.IndexOf($s, [System.StringComparison]::Ordinal) -ge 0) { $sepIn = $true; break } }
+                # CR-V3 (kolo 6): komentar mezi statementy (hlavicka `<# .SYNOPSIS ... #>`, `git status <# a; b #>`) nic
+                # nedeli - pred nim na radku nic neni, nebo za nim do konce radku nic neni.
+                $after = $Text.Substring($ce)
+                $nl = $after.IndexOfAny([char[]]@("`n", "`r"))
+                $tail = if ($nl -ge 0) { $after.Substring(0, $nl) } else { $after }
+                if ($sepIn -and ($buf.ToString().Trim() -eq '' -or $tail.Trim() -eq '' -or $tail.Trim().StartsWith(';'))) { $sepIn = $false }
                 if (-not $sepIn) { [void]$buf.Append(' '); $i = $ce; continue }
                 # CR-U1 (kolo 5): s oddelovacem uvnitr (`git reset <# ; #> --hard`) ho zadne cteni nesestavi zpet jako
                 # PowerShell (komentar = bily znak), a v cmd `<#` komentarem neni. Hook gate takovy prikaz zakaze (depth).
@@ -816,14 +822,6 @@ function Split-CommandLine([string]$Command, [string[]]$KeepSeparators = @()) {
     $result = New-Object System.Collections.ArrayList
     foreach ($seg in (Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r") $KeepSeparators)) {
         [void]$result.Add($seg)
-    }
-    # CR-T/CR-U (kola 4 a 5): i segmenty cteni BEZ komentare (viz $script:CommentAware), vcetne substituci - komentar muze
-    # rozbor jen rozsirit. (Hook gate navic rozebira cely prikaz obema ctenimi, gate.ps1 hlavni beh.)
-    if ($script:CommentAware -and $Command.IndexOf('#') -ge 0) {
-        $script:CommentAware = $false
-        try { $plain = @(Split-CommandLine $Command $KeepSeparators) }
-        finally { $script:CommentAware = $true }
-        foreach ($seg in $plain) { if ($result -cnotcontains $seg) { [void]$result.Add($seg) } }
     }
 
     # Substituce se rozebiraji navic - `echo $(git branch -D x)` je i to vnitrni.
