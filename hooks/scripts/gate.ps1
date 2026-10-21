@@ -777,6 +777,10 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $stripped = [regex]::Replace($trimmed,
         '^\s*([A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|''[^'']*''|\S*)\s+)+', '')
+    # CR-U2 (TASK-179, kolo 5): presmerovani muze stat PRED prikazem (`>nul rd /s /q src` v cmd, `>out rm -rf x` v Bashi) -
+    # jinak by exe vyslo `>nul` a zadne pravidlo nesedlo.
+    $stripped = [regex]::Replace($stripped,
+        '^\s*([0-9]?(?:>>?|<)&?\s*(?:"[^"]*"|''[^'']*''|[^\s<>]+)\s+)+', '')
 
     # PowerShellove PRIRAZENI `$x = <prikaz>` neni volani promenne v pozici prikazu.
     # Bez teto vetve bral Test-Unexpandable `$out` jako promennou v pozici prikazu
@@ -1260,148 +1264,47 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
 # neznamy; v prostredi hooku rozhoduje hodnota (`PGSERVICE` vzdy - hostitele nese soubor sluzby).
 # (CR-R5, kolo 2: conninfo `service=` / `hostaddr=` konci deny uz dnes - retezec conninfo s mezerou je necitelne jmeno DB;
 # zmereno nad 002b863, hlidaji radky CR-R5.)
-# CR-R7 + CR-S5 (kola 2 a 3): prostredi meni i prikaz, ve kterem jmeno promenne doslova neni. Vycet tvaru (`. x`,
-# `source x`, `export $x`) tridu nezavrel (`./setenv.ps1`, `eval`, `if ...; then . x; fi`, `Set-Content ('en'+'v:...')`), proto
-# rozhoduje Test-DbEnvNeutralLeaves: kazdy DALSI list prikazu musi byt z kratke mnoziny, ktera prostredi nemeni. Tady zustava
-# jen to, co list nema: volani .NET bez listu (`[Environment]::SetEnvironmentVariable`, `SessionState`, `PSVariable`).
-# Zbytek (profil shellu, ktery hook nevidi) = README.
-# CR-R8 + CR-S3/S10: hodnota v prostredi hooku plati pro klienta, ktery ji cte (sqlcmd jen SQLCMDSERVER, psql/pgcli/dropdb jen
-# PG*, jiny klient z `gate.sqlClients` obe); explicitni hostitel v argumentech (`-h`, `-S`, `host=`, URI; Test-ExplicitDbHost)
-# prebije PGHOST / SQLCMDSERVER (PGHOSTADDR ani soubor sluzby ne); PGHOST je mistni, jen kdyz je KAZDA polozka seznamu
-# (`/tmp,db.firma.cz`) cesta k socketu nebo mistni hostitel.
-# CR-T8 (kolo 4): jmeno se hleda i po odstraneni escapu a uvozovek (`PGHO\ST`, `PG"HOST"` shell slepi na PGHOST) a patri
-# k nim i PSQLRC (startovni soubor psql muze `\c` prepnout server).
-function Test-DbHostFromEnvironment([string]$Text, $LocalHosts, [string]$HostExe, [bool]$HasExplicitHost) {
-    $names = '(?i)(PGHOST|PGHOSTADDR|PGSERVICE|PGSERVICEFILE|SQLCMDSERVER|PSQLRC)'
-    if ($Text -match ('\b' + $names + '\b') -or ($Text -replace '[\\`''"]', '') -match $names) { return $true }
-    if ($Text -match '(?i)\bSetEnvironmentVariable\b|\bSessionState\b|\bPSVariable\b') { return $true }
-    $exe = $HostExe.ToLowerInvariant()
-    if ($exe -ne 'sqlcmd') {
-        if (-not [string]::IsNullOrWhiteSpace($env:PGSERVICE)) { return $true }
-        $v = [string]$env:PGHOSTADDR
-        if (-not [string]::IsNullOrWhiteSpace($v) -and -not (Test-LocalHost $v $LocalHosts)) { return $true }
-        $v = [string]$env:PGHOST
-        if (-not $HasExplicitHost -and -not [string]::IsNullOrWhiteSpace($v)) {
-            foreach ($h in $v.Split(',')) {
-                $h = $h.Trim()
-                if (-not $h.StartsWith('/') -and -not (Test-LocalHost $h $LocalHosts)) { return $true }
-            }
-        }
+# CR-U (kolo 5, konec "zaplatovani"): kola CR-R az CR-T hledala, ktere OSTATNI statementy prikazu a ktere hodnoty prostredi
+# hooku hostitele nemeni (vycty tvaru, mnozina neutralnich prikazu, explicitni hostitel prebijejici PGHOST, seznam PGHOST
+# se socketem ...) - a kazde kolo nasel dalsi obchvat. `allow` z gate.dbDestroyLocal proto plati jen pro JEDNODUCHY prikaz
+# (Test-DbAllowContext): jediny statement, jehoz vsechny listy jsou tentyz SQL klient (nebo telo heredocu pro nej), bez
+# jmena promenne hostitele v textu (i po odstraneni escapu a uvozovek) a s prazdnymi
+# PGHOST, PGHOSTADDR, PGSERVICE, PGSERVICEFILE, SQLCMDSERVER a PSQLRC v prostredi hooku. Cokoli jineho = deny (jako kazdy
+# jiny necitelny tvar). Mez: profil shellu a existujici ~/.psqlrc hook nevidi (README).
+$script:DbHostEnvNames = @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'SQLCMDSERVER', 'PSQLRC')
+function Test-DbAllowContext($Leaf, [string]$HostExe) {
+    foreach ($n in $script:DbHostEnvNames) {
+        if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($n))) { return $false }
     }
-    if (@('psql', 'pgcli', 'dropdb') -cnotcontains $exe) {
-        $v = [string]$env:SQLCMDSERVER
-        if (-not $HasExplicitHost -and -not [string]::IsNullOrWhiteSpace($v) -and -not (Test-LocalHost $v $LocalHosts)) { return $true }
+    $cmd = [string]$script:FullCommand
+    $rx = '(?i)(?<![A-Za-z0-9_])(' + ($script:DbHostEnvNames -join '|') + ')(?![A-Za-z0-9_])'
+    if ($cmd -match $rx -or ($cmd -replace '[\\`''"]', '') -match $rx) { return $false }
+    # Jediny statement (telo heredocu se nepocita): drivejsi statement muze zmenit prostredi i bez listu (`$env:X = ...`,
+    # `[Environment]::SetEnvironmentVariable(...)`).
+    if (@(Split-Statement ([string](Split-Heredoc $cmd).Rest)).Count -ne 1) { return $false }
+    # Kazdy list prikazu je tentyz SQL klient nebo telo heredocu pro nej - roura (`| cat`), substituce, zpetne apostrofy
+    # i komentar (vlastni segment) pridavaji jiny list.
+    $found = $false
+    foreach ($l in @($script:AllLeaves)) {
+        if ([object]::ReferenceEquals($l, $Leaf)) { $found = $true; continue }
+        $kind = [string](Get-LeafField $l 'Kind' '')
+        $e = if ($kind -eq 'heredoc') { [string](Get-LeafField $l 'OuterExe' '') } else { [string](Get-LeafField $l 'Exe' '') }
+        if ($e.ToLowerInvariant() -cne $HostExe) { return $false }
     }
-    return $false
-}
-
-# CR-T9/T10 (kolo 4): JEDEN rozbor argumentu SQL klienta pro Test-ExplicitDbHost i Test-AbbreviatedDbOption - volby
-# s hodnotou podle tabulky klienta (hodnota volby neni argument: `-v "a= host=localhost"`, `-o x`), `-q` je u psql --quiet
-# bez hodnoty. Vraci @{ Opts = @(@{ Name; Value }); Pos = @(...) }. Dlouha volba: `--x=v` nebo `--x v` (je-li v tabulce).
-$script:DbClientValueOpts = @{
-    'psql'   = @('-c', '-d', '-f', '-h', '-p', '-U', '-v', '-o', '-L', '-T', '-F', '-R', '-P',
-                 '--command', '--dbname', '--file', '--host', '--port', '--username', '--set', '--variable', '--output',
-                 '--log-file', '--table-attr', '--field-separator', '--record-separator', '--pset')
-    'pgcli'  = @('-c', '-d', '-h', '-p', '-U', '-D', '--command', '--dbname', '--host', '--port', '--username', '--user', '--dsn')
-    'dropdb' = @('-h', '-p', '-U', '--host', '--port', '--username', '--maintenance-db')
-    'sqlcmd' = @('-S', '-d', '-U', '-P', '-Q', '-q', '-i', '-o', '-v', '-H', '-l', '-t', '-h', '-s', '-w', '-a', '-c', '-f',
-                 '-m', '-V', '-K', '-F', '-y', '-Y')
-}
-function Get-DbClientOptions($Leaf, [string]$HostExe) {
-    $argv = @()
-    if ([string](Get-LeafField $Leaf 'Kind' '') -eq 'leaf') {
-        $argv = @(Get-LeafField $Leaf 'Args' @())
-    } else {
-        # Telo heredocu: argumenty nese uvozujici prikaz - od jmena klienta dal.
-        $all = @(Split-Arguments ([string](Get-LeafField $Leaf 'Outer' '')))
-        $ci = -1
-        for ($k = 0; $k -lt $all.Count; $k++) { if ((Get-ExecutableName ([string]$all[$k])) -eq $HostExe) { $ci = $k; break } }
-        if ($ci -ge 0) { $argv = @($all | Select-Object -Skip ($ci + 1)) }
-    }
-    $vals = @($script:DbClientValueOpts[$HostExe])
-    $opts = New-Object System.Collections.ArrayList
-    $pos = New-Object System.Collections.ArrayList
-    for ($i = 0; $i -lt $argv.Count; $i++) {
-        $t = [string]$argv[$i]
-        if ($t.StartsWith('--') -and $t.Length -gt 2) {
-            $eq = $t.IndexOf('=')
-            if ($eq -gt 0) { [void]$opts.Add(@{ Name = $t.Substring(0, $eq); Value = $t.Substring($eq + 1) }); continue }
-            $v = $null
-            if ($vals -ccontains $t -and ($i + 1) -lt $argv.Count) { $i++; $v = [string]$argv[$i] }
-            [void]$opts.Add(@{ Name = $t; Value = $v }); continue
-        }
-        if ($t.StartsWith('-') -and $t.Length -ge 2) {
-            $f = $t.Substring(0, 2)
-            if ($vals -ccontains $f) {
-                $v = if ($t.Length -gt 2) { $t.Substring(2) } elseif (($i + 1) -lt $argv.Count) { $i++; [string]$argv[$i] } else { '' }
-                [void]$opts.Add(@{ Name = $f; Value = $v }); continue
-            }
-            [void]$opts.Add(@{ Name = $t; Value = $null }); continue
-        }
-        [void]$pos.Add($t)
-    }
-    return @{ Opts = $opts; Pos = $pos }
-}
-
-# CR-S2 + CR-T9 (kola 3 a 4): explicitni hostitel jen z ARGUMENTU klienta - volba hostitele (`-h`, `--host`, u sqlcmd `-S`),
-# nebo conninfo / URI v miste jmena DB (`-d`, `--dbname`, `--maintenance-db`, `--dsn`, pozicni argument). Text SQL
-# (`-c "SELECT 'host=localhost'"`) ani hodnota jine volby (`-v "a= host=localhost"`) hostitelem nejsou.
-function Test-ExplicitDbHost($Leaf, [string]$HostExe) {
-    $o = Get-DbClientOptions $Leaf $HostExe
-    $hostOpts = if ($HostExe -eq 'sqlcmd') { @('-S') } else { @('-h', '--host') }
-    $connInfo = '(?i)(?:^|\s)host\s*=|^postgres(?:ql)?://'
-    foreach ($x in $o.Opts) {
-        if ($hostOpts -ccontains [string]$x.Name) { return $true }
-        if (@('-d', '--dbname', '--maintenance-db', '-D', '--dsn') -ccontains [string]$x.Name -and [string]$x.Value -match $connInfo) { return $true }
-    }
-    foreach ($p in $o.Pos) { if ([string]$p -match $connInfo) { return $true } }
-    return $false
+    return $found
 }
 
 # CR-S6 (kolo 3): psql a dropdb ctou dlouhe volby pres getopt_long, ktery bere i jednoznacnou ZKRATKU (`--fil=x` = `--file`,
 # `--ho=prod` = `--host`). Zkratka volby, ktera nese hostitele, jmeno DB, soubor nebo SQL, = argumenty necitelne -> bez `allow`.
 function Test-AbbreviatedDbOption($Leaf, [string]$HostExe) {
     if (@('psql', 'dropdb') -cnotcontains $HostExe) { return $false }
-    foreach ($x in (Get-DbClientOptions $Leaf $HostExe).Opts) {
-        $nm = [string]$x.Name
-        if (-not $nm.StartsWith('--')) { continue }
-        $name = $nm.Substring(2).ToLowerInvariant()
+    foreach ($m in [regex]::Matches(([string]$Leaf.Raw + ' ' + [string](Get-LeafField $Leaf 'Outer' '')), '(?:^|\s)--([A-Za-z][A-Za-z-]*)')) {
+        $name = $m.Groups[1].Value.ToLowerInvariant()
         foreach ($full in @('host', 'port', 'dbname', 'file', 'command', 'maintenance-db')) {
             if ($name.Length -lt $full.Length -and $full.StartsWith($name)) { return $true }
         }
     }
     return $false
-}
-
-# CR-S5 (kolo 3): ostatni listy prikazu nemeni prostredi - zmena adresare, vypis, dalsi volani SQL klienta, telo SQL
-# (heredoc), `export` s literalni hodnotou. Literalni PowerShellove prirazeni (`$env:PGPASSWORD = 'x'`) list nema; jmeno
-# promenne hostitele v textu chyti Test-DbHostFromEnvironment. Cokoli jineho (skript, `eval`, `source`, `Set-Content`) = hostitel
-# neznamy, `allow` neplati.
-# CR-T1/T7/T8 (kolo 4): (T7) mnozina pokryva i bezne prikazy kolem testovaci DB (`createdb`, `pg_restore`, `| cat`,
-# `Select-String`); (T8) list s presmerovanim do souboru neutralni neni (`printf ... > ~/.psqlrc`) - povolene je jen
-# `2>&1`, `> /dev/null`, `> $null`, `> nul`; (T1) list, ktery v seznamu prikazu neni (vnoreny rozbor - telo heredocu
-# do shellu `bash <<EOF`, kontejner), allow nema: jeho sousedni statementy tenhle seznam nevidi.
-$script:DbEnvNeutralExe = @('cd', 'set-location', 'sl', 'chdir', 'pushd', 'popd', 'push-location', 'pop-location',
-                            'echo', 'write-host', 'write-output', 'printf', 'cat', 'type', 'get-content', 'head', 'tail',
-                            'more', 'grep', 'findstr', 'select-string', 'sort', 'sort-object', 'wc', 'measure-object',
-                            'out-null', 'out-host', 'out-string', 'format-table', 'format-list', 'select-object',
-                            'where-object', 'createdb', 'pg_restore', 'pg_dump', 'pg_isready', 'true', 'false')
-function Test-DbEnvNeutralLeaves($Leaf) {
-    $found = $false
-    foreach ($l in @($script:AllLeaves)) {
-        if ([object]::ReferenceEquals($l, $Leaf)) { $found = $true; continue }
-        $kind = [string](Get-LeafField $l 'Kind' '')
-        # Telo heredocu: SQL pro klienta, nebo skript pro shell v podprocesu (prostredi rodice nezmeni).
-        if ($kind -eq 'heredoc') { continue }
-        if ($kind -ne 'leaf') { return $false }
-        $e = ([string](Get-LeafField $l 'Exe' '')).ToLowerInvariant()
-        $neutral = ($script:DbEnvNeutralExe -ccontains $e) -or ($script:SqlClients -ccontains $e) -or
-                   ($e -eq 'export' -and [string]$l.Raw -notmatch '[\$`(]')
-        if (-not $neutral) { return $false }
-        $redir = [regex]::Replace([string]$l.Raw, '[0-9*]?>>?\s*(?:&\d|\$null\b|/dev/null\b|nul\b)', '', 'IgnoreCase')
-        if ($redir -match '>') { return $false }
-    }
-    return $found
 }
 
 # ZOPT-Q102 + A179-O3 (Q10), 0.3.1: jmena databazi, kterych se destruktivni operace nad MISTNIM hostitelem tyka. Do 0.3.0
@@ -2106,11 +2009,10 @@ function Test-DatabaseRule($Leaf, $Config) {
         }
         # Z117-Q20 + A179-O3 (Q10): `sqllocaldb delete` smaze instanci se VSEMI databazemi - nikdy allow.
         # CR-Q3 (/code-review 0.3.1): SQL ze souboru nebo stdin (`-f`, `-i`, `<`) vedle viditelneho nevidime - jmeno DB,
-        # ke ktere se pripoji (`\c`, `:connect`), nejde precist. CR-Q7: hostitel z promenne prostredi (`PGHOST`,
-        # `SQLCMDSERVER`, `PGSERVICE`) v prikazu nebo v prostredi hooku - "bez hostitele = mistni" pak neplati.
+        # ke ktere se pripoji (`\c`, `:connect`), nejde precist. CR-Q7 + CR-U: jen jednoduchy prikaz s cistym prostredim
+        # (Test-DbAllowContext) - jinak "bez hostitele = mistni" neplati.
         $hostExeL = $hostExe.ToLowerInvariant()
-        if (-not $localDbDelete -and -not $sqlFromFile -and (Test-DbEnvNeutralLeaves $Leaf) -and
-            -not (Test-DbHostFromEnvironment ([string]$script:FullCommand + ' ' + $hostText) $localHosts $hostExeL (Test-ExplicitDbHost $Leaf $hostExeL)) -and
+        if (-not $localDbDelete -and -not $sqlFromFile -and (Test-DbAllowContext $Leaf $hostExeL) -and
             -not (Test-AbbreviatedDbOption $Leaf $hostExeL)) {
             $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExe.ToLowerInvariant()
             if ($null -ne $names -and (Test-DbNamesAllowed $names @(Get-Field $dl 'databases' @()))) {
@@ -2570,14 +2472,36 @@ $script:CodeInterpreters = @(Get-Field (Get-Field $config 'gate') 'codeInterpret
 $script:FullCommand = $command
 if ($toolName -eq 'PowerShell') { $script:LiteralAssign = Get-LiteralAssignment $command }
 $leaves = Get-CommandLineLeaves $command 0
-# CR-S5 (TASK-179, kolo 3): `allow` z gate.dbDestroyLocal vyzaduje, aby ostatni statementy prikazu prostredi nemenily.
+# CR-U (TASK-179, kolo 5): `allow` z gate.dbDestroyLocal posuzuje cely seznam listu (Test-DbAllowContext).
 $script:AllLeaves = @($leaves)
+# CR-U1: blokovy komentar s oddelovacem uvnitr nejde sestavit zpet - nerozebratelny tvar (`depth`, A179-O1: deny).
+if ($script:BlockCommentSplit) { $leaves = @($leaves) + @(New-OpaqueLeaf $command 'depth') }
 
 foreach ($leaf in $leaves) {
     $r = Invoke-LeafVerdict $leaf $config $false
     if ($null -eq $r) { continue }
     if ($r.Decision -eq 'deny') { $decision = $r; break }
     if ($null -eq $decision) { $decision = $r }
+}
+
+# CR-S8/CR-T/CR-U (kola 3 az 5): prikaz s `#` se rozebere jeste jednou BEZ komentare (cteni 0.3.0) - kde `#` komentarem
+# neni (cmd, `${...}`, zpetne apostrofy), muze cteni s komentarem videt mene. Z druheho cteni plati jen `deny` (bez auditu);
+# komentar tak rozbor jen rozsiri.
+if (($null -eq $decision -or $decision.Decision -ne 'deny') -and $command.IndexOf('#') -ge 0) {
+    $script:CommentAware = $false
+    $script:AuditMuted = $true
+    try {
+        Set-ScannerEscape $toolName
+        $plainLeaves = @(Get-CommandLineLeaves $command 0)
+        $script:AllLeaves = $plainLeaves
+        foreach ($leaf in $plainLeaves) {
+            $r = Invoke-LeafVerdict $leaf $config $false
+            if ($null -ne $r -and $r.Decision -eq 'deny') { $decision = $r; break }
+        }
+    } finally {
+        $script:CommentAware = $true
+        $script:AuditMuted = $false
+    }
 }
 
 # K7-1 (TASK-179, kolo 7): rozbor substituci v obalu kontejneru narazil na strop prace (_common.ps1, SubstWorkBudget) - cil

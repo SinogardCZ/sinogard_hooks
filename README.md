@@ -237,16 +237,14 @@ dynamické SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`), SQL s komentáře
 (i `[a].[my schema].[c]`; vedlejší účinek: tečky v textu SQL jako `'A. B. C'`), seznam jmen v `DROP DATABASE a, b`, příkaz
 `sqlcmd` (`:connect`, `:r`, `!!` …), SQL ze souboru nebo stdin vedle viditelného (`-f`, `--file`, `-fx`, `-i`, `-ix`,
 `--input-file`, `<`; u `dropdb` jsou `-f`/`-i` volby `--force`/`--interactive`), zkratka dlouhé volby psql/dropdb
-(`--fil=`, `--ho=`), escape `]]` / `""` ve jménu, jiný příkaz v téže řádce než `cd`, výpis a filtr výstupu (`cat`,
-`Select-String` …), `createdb`/`pg_restore`, další volání SQL klienta nebo `export` s literálem (skript, `eval`, `source`,
-`Set-Content`, přesměrování do souboru `> ~/.psqlrc` …), DB příkaz rozebraný vnořeně (tělo `bash <<EOF`), hostitel
-z prostředí (`PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `SQLCMDSERVER`, `PSQLRC` v příkazu i se escapem `PGHO\ST`;
-`SetEnvironmentVariable`; nemístní hodnota v prostředí hooku — `SQLCMDSERVER`
-u sqlcmd, PG* u psql/pgcli/dropdb, u jiného klienta z `gate.sqlClients` obojí; výslovné `-h`/`-S`/`host=` v argumentech
-přebije `PGHOST`/`SQLCMDSERVER`, ne `PGHOSTADDR` ani `PGSERVICE`; `PGHOST` je místní, jen když je každá položka
-seznamu cesta k socketu nebo místní hostitel), pgcli s DSN, `sqllocaldb delete`, tvar uvnitř kontejneru (`AOPT-O26`).
+(`--fil=`, `--ho=`), escape `]]` / `""` ve jménu, pgcli s DSN, `sqllocaldb delete`, tvar uvnitř kontejneru (`AOPT-O26`).
+**`allow` jen pro JEDNODUCHÝ příkaz (CR-U, TASK-179):** jediný statement, jehož všechny listy jsou tentýž SQL klient
+(nebo tělo heredocu pro něj) — žádný další příkaz (`cd x; …`, `dropdb x && createdb x`, `$env:PGPASSWORD = …; …`),
+roura (`| cat`), komentář ani substituce; v textu příkazu žádné jméno `PGHOST`, `PGHOSTADDR`, `PGSERVICE`,
+`PGSERVICEFILE`, `SQLCMDSERVER`, `PSQLRC` (ani se escapem `PGHO\ST`) a v prostředí hooku jsou všechny prázdné. `2>&1`
+a prefix `PGPASSWORD=x psql …` (Bash) jednoduchost neruší. Cokoli jiného → `deny`.
 **Mez:** proměnnou nastavenou profilem shellu (`~/.bashrc`), který načte jen nástroj Bash a ne proces hooku, ani
-existující `~/.psqlrc` s `\c` na jiný server hook nevidí — „bez hostitele = místní" pak neplatí; kdo má v profilu `PGHOST` na vzdálený server, ať v projektu nastaví
+existující `~/.psqlrc` s `\c` na jiný server hook nevidí — „bez hostitele = místní" pak neplatí; kdo má v profilu `PGHOST` na vzdálený server nebo `~/.psqlrc` s `\c`, ať v projektu nastaví
 `gate.dbDestroyLocal` na `deny`. Přepis smí `databases` jen **zúžit** (s `decision: deny` se vzory nečtou); `decision`
 `allow` | `deny`; `hosts` se nečte.
 

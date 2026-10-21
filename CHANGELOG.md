@@ -121,6 +121,21 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
     do souboru (`printf … > ~/.psqlrc`) neutrální není, povolené jsou jen `2>&1`, `> /dev/null`, `> $null` a `> nul`.
   - Jméno proměnné se hledá i po odstranění escapů a uvozovek (`PGHO\ST`), nově i `PSQLRC`.
   - Argumenty SQL klienta čte jeden rozbor podle tabulky voleb s hodnotou: hodnota `-v` není hostitel, `psql -q` hodnotu nebere.
+
+**Páté kolo `/code-review` nad CR-T (CR-U, skupina `CR-U`) — konec záplatování:**
+- **`allow` z `gate.dbDestroyLocal` jen pro jednoduchý příkaz (CR-U3, U5, U6, U10).** Kola CR-R až CR-T hledala, které
+  okolní příkazy a hodnoty prostředí hostitele nemění: výčty tvarů, množinu neutrálních příkazů, výslovného hostitele
+  přebíjejícího `PGHOST`, `PGHOST` se socketem. Každé kolo našlo další obchvat. Nově platí: jediný statement, všechny listy
+  jsou tentýž SQL klient (nebo tělo heredocu pro něj), v textu žádné jméno proměnné hostitele (ani se escapem) a
+  `PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `PGSERVICEFILE`, `SQLCMDSERVER` a `PSQLRC` v prostředí hooku prázdné. `cd x; …`,
+  `dropdb x && createdb x`, `… | cat` a `… # komentář` tedy končí `deny`, `2>&1` a prefix `PGPASSWORD=x` ne. Kód
+  rozboru argumentů, množiny neutrálních příkazů a pravidel pro hodnoty proměnných z kola CR-S a CR-T zmizel.
+- **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
+  - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
+  - `${#x}` není komentář.
+  - `&>` je v cmd oddělovač (`echo hi &>nul rd …`) a přesměrování před příkazem (`>nul rd …`, `>out rm …`) se strhává.
+  - Sjednocení čtení s komentářem a bez něj místo čtyř kopií: hook gate rozebere příkaz s `#` podruhé bez komentáře
+    a z druhého čtení bere jen `deny` (bez auditu), `Split-CommandLine` sjednocuje segmenty pro secrets.
 Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)

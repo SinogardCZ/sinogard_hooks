@@ -406,6 +406,7 @@ $script:ScannerEscape = '\'
 # cteni s komentarem videt i MENE nez cteni bez nej. Split-CommandLine, Get-Substitution, Get-BacktickSubstitution
 # a Get-ScriptBlockBodies proto vraceji SJEDNOCENI obou cteni ($script:CommentAware) - komentar muze rozbor jen rozsirit.
 $script:CommentAware = $true
+$script:BlockCommentSplit = $false
 
 function Get-CommentStart([string]$Text, [int]$I) {
     if (-not $script:CommentAware) { return 0 }
@@ -414,7 +415,9 @@ function Get-CommentStart([string]$Text, [int]$I) {
     if ($c -ne '#') { return 0 }
     if ($I -eq 0) { return 1 }
     $p = $Text[$I - 1]
-    if ([char]::IsWhiteSpace($p) -or ';|&({'.IndexOf($p) -ge 0) { return 1 }
+    if ([char]::IsWhiteSpace($p) -or ';|&('.IndexOf($p) -ge 0) { return 1 }
+    # CR-U4 (kolo 5): `{#` je komentar jen v PowerShellu a ne v `${#x}` (delka retezce v Bashi, jmeno promenne v PowerShellu).
+    if ($p -eq '{' -and $script:ScannerEscape -eq '`' -and -not ($I -ge 2 -and $Text[$I - 2] -eq '$')) { return 1 }
     return 0
 }
 
@@ -476,21 +479,6 @@ function Test-BlockOpenPosition([string]$Text, [int]$Index) {
 # text mezi koncem predchoziho bloku a jeho zavorkou. Kontrolni skupina (vyrok 2
 # Amber 2026-09-12): `if ($x) { git status } else { git log }` NESMI skoncit dotazem.
 function Get-ScriptBlockBodies([string]$Text) {
-    # CR-T (kolo 4): sjednoceni cteni s komentarem a bez nej (viz $script:CommentAware); `Whole` z cteni s komentarem.
-    $a = Get-ScriptBlockBodiesCore $Text
-    if (-not $script:CommentAware -or ([string]$Text).IndexOf('#') -lt 0) { return $a }
-    $script:CommentAware = $false
-    try { $b = Get-ScriptBlockBodiesCore $Text } finally { $script:CommentAware = $true }
-    foreach ($x in $b.Blocks) {
-        $dup = $false
-        foreach ($y in $a.Blocks) { if ([string]$y.Body -ceq [string]$x.Body -and [string]$y.Head -ceq [string]$x.Head) { $dup = $true; break } }
-        if (-not $dup) { [void]$a.Blocks.Add($x) }
-    }
-    if ($a.Blocks.Count -ne 1) { $a.Whole = $false }
-    return $a
-}
-
-function Get-ScriptBlockBodiesCore([string]$Text) {
     $blocks = New-Object System.Collections.ArrayList
     $t = ([string]$Text).Trim()
     if ($t.Length -lt 2) { return @{ Blocks = $blocks; Whole = $false } }
@@ -623,6 +611,9 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
                 $sepIn = $false
                 foreach ($s in $seps) { if ($s.Length -gt 0 -and $body.IndexOf($s, [System.StringComparison]::Ordinal) -ge 0) { $sepIn = $true; break } }
                 if (-not $sepIn) { [void]$buf.Append(' '); $i = $ce; continue }
+                # CR-U1 (kolo 5): s oddelovacem uvnitr (`git reset <# ; #> --hard`) ho zadne cteni nesestavi zpet jako
+                # PowerShell (komentar = bily znak), a v cmd `<#` komentarem neni. Hook gate takovy prikaz zakaze (depth).
+                $script:BlockCommentSplit = $true
             }
             [void]$out.Add($buf.ToString()); [void]$buf.Clear()
             while ($i -lt $ce) {
@@ -669,11 +660,9 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
                 $hit = $s; break
             }
         }
-        # CR-T7 (kolo 4): `&` v presmerovani (`2>&1`, `<&3`, `&>/dev/null`) neni oddelovac - `psql ... 2>&1 | cat` se
-        # rozpadlo na list `1`, ktery pravidlo DB nepoznalo jako neutralni.
-        if ($hit -ceq '&' -and (($i -gt 0 -and '<>'.IndexOf($Text[$i - 1]) -ge 0) -or (($i + 1) -lt $n -and $Text[$i + 1] -eq '>'))) {
-            $hit = $null
-        }
+        # CR-T7 (kolo 4): `&` v duplikaci deskriptoru (`2>&1`, `<&3`) neni oddelovac - `psql ... 2>&1` se rozpadlo na list
+        # `1`. CR-U2 (kolo 5): `&>` ano - v cmd `echo hi &>nul rd /s /q src` spusti `rd`.
+        if ($hit -ceq '&' -and $i -gt 0 -and '<>'.IndexOf($Text[$i - 1]) -ge 0) { $hit = $null }
         if ($null -ne $hit) {
             [void]$out.Add($buf.ToString()); [void]$buf.Clear()
             # -ccontains: porovnani separatoru je ordinalni jako vsude jinde ve skeneru.
@@ -731,17 +720,6 @@ function Find-CloseParen([string]$Text, [int]$Start) {
 
 # Obsah vsech `$( ... )` v textu (kvotove korektne, vcetne zanoreni).
 function Get-Substitution([string]$Text) {
-    # CR-T (kolo 4): sjednoceni cteni s komentarem a bez nej (viz $script:CommentAware).
-    $a = Get-SubstitutionCore $Text
-    if (-not $script:CommentAware -or ([string]$Text).IndexOf('#') -lt 0) { return ,@($a) }
-    $script:CommentAware = $false
-    try { $b = Get-SubstitutionCore $Text } finally { $script:CommentAware = $true }
-    $out = New-Object System.Collections.ArrayList
-    foreach ($x in @($a) + @($b)) { if ($out -cnotcontains $x) { [void]$out.Add($x) } }
-    return ,@($out)
-}
-
-function Get-SubstitutionCore([string]$Text) {
     $out = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
 
@@ -839,10 +817,11 @@ function Split-CommandLine([string]$Command, [string[]]$KeepSeparators = @()) {
     foreach ($seg in (Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r") $KeepSeparators)) {
         [void]$result.Add($seg)
     }
-    # CR-T (kolo 4): i segmenty cteni BEZ komentare (viz $script:CommentAware) - komentar muze rozbor jen rozsirit.
+    # CR-T/CR-U (kola 4 a 5): i segmenty cteni BEZ komentare (viz $script:CommentAware), vcetne substituci - komentar muze
+    # rozbor jen rozsirit. (Hook gate navic rozebira cely prikaz obema ctenimi, gate.ps1 hlavni beh.)
     if ($script:CommentAware -and $Command.IndexOf('#') -ge 0) {
         $script:CommentAware = $false
-        try { $plain = @(Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r") $KeepSeparators) }
+        try { $plain = @(Split-CommandLine $Command $KeepSeparators) }
         finally { $script:CommentAware = $true }
         foreach ($seg in $plain) { if ($result -cnotcontains $seg) { [void]$result.Add($seg) } }
     }
@@ -870,17 +849,6 @@ function Split-CommandLine([string]$Command, [string[]]$KeepSeparators = @()) {
 # jejich stav nesleduje. Pod PowerShellovym escapem (zpetny apostrof) vraci prazdno:
 # tam zadna substituce zpetnymi apostrofy neexistuje.
 function Get-BacktickSubstitution([string]$Text) {
-    # CR-T (kolo 4): sjednoceni cteni s komentarem a bez nej (viz $script:CommentAware).
-    $a = Get-BacktickSubstitutionCore $Text
-    if (-not $script:CommentAware -or ([string]$Text).IndexOf('#') -lt 0) { return ,@($a) }
-    $script:CommentAware = $false
-    try { $b = Get-BacktickSubstitutionCore $Text } finally { $script:CommentAware = $true }
-    $out = New-Object System.Collections.ArrayList
-    foreach ($x in @($a) + @($b)) { if ($out -cnotcontains $x) { [void]$out.Add($x) } }
-    return ,@($out)
-}
-
-function Get-BacktickSubstitutionCore([string]$Text) {
     $out = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
     $esc = $script:ScannerEscape
@@ -1078,7 +1046,10 @@ function Write-OverrideRejectedAudit([string]$ToolName, $Config, [string]$Sessio
 # nic a hook mlci; evidence nesmi byt duvod, proc brana spadne.
 $script:AuditReadingCount = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
 $script:AuditGroupMax = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
+$script:AuditMuted = $false
 function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision, $Config) {
+    # CR-U (kolo 5): druhe cteni prikazu bez komentare (gate.ps1) hleda jen `deny` - radky auditu by se zapsaly dvakrat.
+    if ($script:AuditMuted) { return }
     try {
         # T36-Q7 = A (Tom, 8. 9.): v `bypassPermissions` nad pluginem uz zadna vrstva
         # neni - audit tam znamena "proslo bez druhe kontroly", ne "rozhodne to
