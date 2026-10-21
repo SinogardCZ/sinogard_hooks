@@ -586,17 +586,21 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     # proto rozhoduje i parser PowerShellu: kazdy prikaz (CommandAst), jehoz text zadny list nema, se rozebere navic.
     # Prikaz s blokem skriptu (`& { ... }`, `ForEach-Object { ... }`) se preskoci - jeho vnitrni prikazy jsou vlastni
     # CommandAst a blok uz rozebral Get-CommandLeaf.
-    if ((Get-ScannerEscape) -eq '`') {
+    # CR-W5/W6 (kolo 7): jen kdyz text zavorku ma (prikaz ve vyrazu bez ni nestoji); porovnani textu bez operatoru
+    # spusteni a obalovych zavorek (`& x`, `(x)`); hloubka se nezvysuje (prikaz ve vyrazu je na teze urovni jako statement).
+    # List z parseru nese `FromAst` - Test-DbAllowContext ho bere jako slozeny tvar (prikaz uvnitr vyrazu).
+    if ((Get-ScannerEscape) -eq '`' -and $pl.Rest.IndexOf('(') -ge 0) {
+        $normCmd = { param($s) $t = ([string]$s).Trim(); while ($t -match '^\((.*)\)$') { $t = $Matches[1].Trim() }; ($t -replace '^[&.]\s+', '').Trim() }
         $raws = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-        foreach ($l in $out) { [void]$raws.Add(([string]$l.Raw).Trim()) }
+        foreach ($l in $out) { [void]$raws.Add((& $normCmd $l.Raw)) }
         $tk = $null; $pe = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseInput($pl.Rest, [ref]$tk, [ref]$pe)
         $cmds = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true))
         foreach ($ca in $cmds) {
             $ct = $ca.Extent.Text.Trim()
-            if (-not $raws.Add($ct)) { continue }
+            if (-not $raws.Add((& $normCmd $ct))) { continue }
             if ($null -ne $ca.Find({ param($a) $a -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true)) { continue }
-            foreach ($l in (Get-CommandLeaf $ct ($Depth + 1))) { [void]$out.Add($l) }
+            foreach ($l in (Get-CommandLeaf $ct $Depth)) { $l['FromAst'] = $true; [void]$out.Add($l) }
         }
     }
     foreach ($b in $hd.Bodies) {
@@ -1292,34 +1296,35 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
 # jiny necitelny tvar). Mez: profil shellu a existujici ~/.psqlrc hook nevidi (README).
 # CR-V5 (kolo 6): i PGSYSCONFDIR (systemovy psqlrc a pg_service.conf z jineho adresare).
 $script:DbHostEnvNames = @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'SQLCMDSERVER', 'PSQLRC')
+# CR-W4 (kolo 7): vraci PRICINU (prazdny retezec = allow smi) - promenna v prostredi hooku ma vlastni hlasku, protoze
+# samostatny prikaz, ktery hlaska slozeneho tvaru doporucuje, by tam nepomohl.
 function Test-DbAllowContext($Leaf, [string]$HostExe) {
     foreach ($n in $script:DbHostEnvNames) {
-        if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($n))) { return $false }
+        if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($n))) { return ('env:' + $n) }
     }
+    if ([bool](Get-LeafField $Leaf 'FromAst' $false)) { return 'compound' }
     $cmd = [string]$script:FullCommand
     $rx = '(?i)(?<![A-Za-z0-9_])(' + ($script:DbHostEnvNames -join '|') + ')(?![A-Za-z0-9_])'
-    if ($cmd -match $rx -or ($cmd -replace '[\\`''"]', '') -match $rx) { return $false }
+    if ($cmd -match $rx -or ($cmd -replace '[\\`''"]', '') -match $rx) { return 'compound' }
     # Jediny statement (telo heredocu se nepocita): drivejsi statement muze zmenit prostredi i bez listu (`$env:X = ...`,
     # `[Environment]::SetEnvironmentVariable(...)`).
     # CR-V4 (kolo 6): `&>soubor` je v Bashi presmerovani, ne oddelovac statementu (v cmd oddelovac je - list za nim pak
     # neprojde kontrolou listu nize).
     $rest = [regex]::Replace([string](Split-Heredoc $cmd).Rest, '&>>?\s*(?:"[^"]*"|''[^'']*''|[^\s;&|]+)', ' ')
     $stmts = @(Split-Statement $rest)
-    if ($stmts.Count -ne 1) { return $false }
-    # CR-V2 (kolo 6): statement JE ten prikaz - ne vyraz, ve kterem prikaz stoji (`[Environment]::X(...) + (psql ...)`).
-    $leafText = if ([string](Get-LeafField $Leaf 'Kind' '') -eq 'heredoc') { [string](Get-LeafField $Leaf 'Outer' '') } else { [string]$Leaf.Raw }
-    $norm = { param($s) ([regex]::Replace([string]$s, '&>>?\s*(?:"[^"]*"|''[^'']*''|[^\s;&|]+)|<<-?\s*([''"]?)[A-Za-z_][A-Za-z0-9_]*\1', ' ') -replace '\s+', ' ').Trim() }
-    if ((& $norm $stmts[0]) -cne (& $norm $leafText)) { return $false }
+    if ($stmts.Count -ne 1) { return 'compound' }
     # Kazdy list prikazu je tentyz SQL klient nebo telo heredocu pro nej - roura (`| cat`), substituce, zpetne apostrofy
-    # i komentar (vlastni segment) pridavaji jiny list.
+    # i komentar (vlastni segment) pridavaji jiny list. CR-V2 + CR-W6: prikaz uvnitr vyrazu PowerShellu
+    # (`[Environment]::X(...) + (psql ...)`) dohleda parser jako list `FromAst` - ten allow nema (vyse).
     $found = $false
     foreach ($l in @($script:AllLeaves)) {
         if ([object]::ReferenceEquals($l, $Leaf)) { $found = $true; continue }
         $kind = [string](Get-LeafField $l 'Kind' '')
         $e = if ($kind -eq 'heredoc') { [string](Get-LeafField $l 'OuterExe' '') } else { [string](Get-LeafField $l 'Exe' '') }
-        if ($e.ToLowerInvariant() -cne $HostExe) { return $false }
+        if ($e.ToLowerInvariant() -cne $HostExe) { return 'compound' }
     }
-    return $found
+    if (-not $found) { return 'compound' }
+    return ''
 }
 
 # CR-S6 (kolo 3): psql a dropdb ctou dlouhe volby pres getopt_long, ktery bere i jednoznacnou ZKRATKU (`--fil=x` = `--file`,
@@ -2043,11 +2048,17 @@ function Test-DatabaseRule($Leaf, $Config) {
         if (-not $localDbDelete -and -not $sqlFromFile -and -not (Test-AbbreviatedDbOption $Leaf $hostExeL)) {
             $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExeL
             if ($null -ne $names -and (Test-DbNamesAllowed $names @(Get-Field $dl 'databases' @()))) {
-                if (Test-DbAllowContext $Leaf $hostExeL) {
+                $why = Test-DbAllowContext $Leaf $hostExeL
+                if ($why -eq '') {
                     # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
                     # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
                     Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
                     return $null
+                }
+                # CR-W4: promenna hostitele v prostredi hooku - hlaska jmenuje promennou (jmeno, ne hodnotu).
+                if ($why.StartsWith('env:')) {
+                    return @{ Id = 'dbDestroyLocalEnv'; Decision = 'deny'
+                              Shape = (([string](Get-Field $shapes 'dbDestroyLocalEnv' 'DB {name}')).Replace('{name}', $why.Substring(4))) }
                 }
                 # A179-O7 (Amber 2026-10-21): jmena sedi, ale prikaz neni jednoduchy - hlaska jmenuje povoleny tvar.
                 return @{ Id = 'dbDestroyLocalCompound'; Decision = 'deny'
@@ -2519,27 +2530,20 @@ foreach ($leaf in $leaves) {
 # CR-S8/CR-T/CR-U (kola 3 az 5): prikaz s `#` se rozebere jeste jednou BEZ komentare (cteni 0.3.0) - kde `#` komentarem
 # neni (cmd, `${...}`, zpetne apostrofy), muze cteni s komentarem videt mene. Z druheho cteni plati jen `deny` (bez auditu);
 # komentar tak rozbor jen rozsiri.
-if (($null -eq $decision -or $decision.Decision -ne 'deny') -and $command.IndexOf('#') -ge 0) {
-    $script:CommentAware = $false
-    $script:AuditMuted = $true
-    # CR-V6 (kolo 6): druhe cteni dostane vlastni rozpocet prace na substituce (prvni ho mohlo vycerpat); preteceni plati
-    # z obou cteni.
-    $overflow1 = $script:SubstOverflow
-    $script:SubstWork = 0
-    $script:SubstOverflow = $false
-    try {
+# CR-W (kolo 7): protokol druheho cteni je v _common.ps1 (Invoke-PlainCommentReading), spolecny se secrets.ps1.
+if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
+    $pr = Invoke-PlainCommentReading {
         Set-ScannerEscape $toolName
         $plainLeaves = @(Get-CommandLineLeaves $command 0)
         $script:AllLeaves = $plainLeaves
-        foreach ($leaf in $plainLeaves) {
-            $r = Invoke-LeafVerdict $leaf $config $false
-            if ($null -ne $r -and $r.Decision -eq 'deny') { $decision = $r; break }
+        foreach ($pleaf in $plainLeaves) {
+            $pv = Invoke-LeafVerdict $pleaf $config $false
+            if ($null -ne $pv -and $pv.Decision -eq 'deny') { return $pv }
         }
-    } finally {
-        $script:CommentAware = $true
-        $script:AuditMuted = $false
-        $script:SubstOverflow = $overflow1 -or $script:SubstOverflow
+        return $null
     }
+    if ($null -ne $pr.Result) { $decision = $pr.Result }
+    elseif ($pr.Overflow) { $decision = Invoke-LeafVerdict (New-OpaqueLeaf $command 'depth') $config $false }
 }
 
 # K7-1 (TASK-179, kolo 7): rozbor substituci v obalu kontejneru narazil na strop prace (_common.ps1, SubstWorkBudget) - cil

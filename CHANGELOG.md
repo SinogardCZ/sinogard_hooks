@@ -151,6 +151,19 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   - Sada nuluje všech sedm proměnných hostitele.
   - Rekurzivní sjednocení ve `Split-CommandLine` zmizelo.
 
+**Sedmé kolo `/code-review` nad CR-V (CR-W, skupina `CR-W`):** toto kolo nenašlo žádný potvrzený obchvat.
+- **Regrese CR-V2 (W1, W6).** Porovnání textu statementu s listem zakázalo i jednoduché příkazy v obalu, například
+  `sudo -u postgres dropdb x`, `env PGPASSWORD=x psql …`, `bash -c "psql …"` a `(psql …)`. Příkaz uvnitř výrazu teď
+  pozná přímo parser: list z parseru nese příznak `FromAst` a `allow` nemá. Porovnávání textu zmizelo.
+- **Hláška u proměnné v prostředí hooku (W4).** Nový tvar `gate:dbDestroyLocalEnv` jmenuje proměnnou (jen jméno,
+  ne hodnotu). Hláška složeného tvaru by tu radila přesně ten příkaz, který agent napsal.
+- **Druhé čtení bez komentáře (W2, W3, W8).** Pro gate i secrets je to jedna funkce (`Invoke-PlainCommentReading`).
+  Spouští se i u zakódovaného příkazu (`-EncodedCommand`), protože dekódované tělo `#` mít může. Rozpočet práce se
+  nenuluje a hook tak drží timeout. Když druhé čtení na rozpočet narazí, výsledek je `deny`.
+- **Parser PowerShellu (W5).** Běží jen tam, kde text má závorku, a nezvyšuje hloubku. Při porovnání ignoruje `&` a obalové závorky.
+- **Vědomě beze změny (W7).** Segment, který je jen přesměrováním (`>soubor`), nemá list. `allow` pro DB ho odmítne
+  kontrolou počtu statementů.
+
 - **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
   - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
   - `${#x}` není komentář.

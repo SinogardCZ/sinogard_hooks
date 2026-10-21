@@ -244,7 +244,9 @@ roura (`| cat`, i SQL rourou `echo … | psql`), komentář, substituce ani výr
 příkazu žádné jméno `PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `SQLCMDSERVER`, `PSQLRC`
 (ani se escapem `PGHO\ST`) a v prostředí hooku jsou všechny prázdné. `2>&1`, `&>/dev/null` (Bash) a prefix
 `PGPASSWORD=x psql …` (Bash) jednoduchost neruší. Cokoli jiného → `deny`; se jménem ve vzoru jako tvar
-`gate:dbDestroyLocalCompound`, jehož hláška jmenuje povolený tvar (`psql -d <db> -c "…"` / `dropdb <db>`; `A179-O7`).
+`gate:dbDestroyLocalCompound`, jehož hláška jmenuje povolený tvar (`psql -d <db> -c "…"` / `dropdb <db>`; `A179-O7`);
+s proměnnou hostitele v prostředí hooku jako `gate:dbDestroyLocalEnv` (hláška jmenuje proměnnou). Obal bez dalšího
+příkazu (`sudo -u postgres dropdb x`, `env PGPASSWORD=x psql …`, `bash -c "psql …"`, `(psql …)`) jednoduchost neruší.
 **Mez:** proměnnou nastavenou profilem shellu (`~/.bashrc`), který načte jen nástroj Bash a ne proces hooku, ani
 existující `~/.psqlrc` s `\c` na jiný server hook nevidí — „bez hostitele = místní" pak neplatí; kdo má v profilu `PGHOST` na vzdálený server nebo `~/.psqlrc` s `\c`, ať v projektu nastaví
 `gate.dbDestroyLocal` na `deny`. Přepis smí `databases` jen **zúžit** (s `decision: deny` se vzory nečtou); `decision`

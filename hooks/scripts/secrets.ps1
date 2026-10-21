@@ -1535,16 +1535,10 @@ if ($script:CmdTools -contains $toolName) {
     $decision = Test-SecretCommand $command $config
     # CR-U (TASK-179, kola 5 a 6): prikaz s `#` jeste jednou BEZ komentare (cteni 0.3.0) - kde `#` komentarem neni, muze
     # cteni s komentarem videt mene. Z druheho cteni plati jen `deny` (audit ztlumen).
-    if (($null -eq $decision -or $decision.Decision -ne 'deny') -and $command.IndexOf('#') -ge 0) {
-        $script:CommentAware = $false
-        $script:AuditMuted = $true
-        try {
-            $plain = Test-SecretCommand $command $config
-            if ($null -ne $plain -and $plain.Decision -eq 'deny') { $decision = $plain }
-        } finally {
-            $script:CommentAware = $true
-            $script:AuditMuted = $false
-        }
+    # CR-W8 (kolo 7): spolecny protokol s gate.ps1 (_common.ps1, Invoke-PlainCommentReading).
+    if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
+        $pr = Invoke-PlainCommentReading { Test-SecretCommand $command $config }
+        if ($null -ne $pr.Result -and $pr.Result.Decision -eq 'deny') { $decision = $pr.Result }
     }
 } else {
     $path = [string](Get-Field $toolInput 'file_path' '')

@@ -408,6 +408,23 @@ $script:ScannerEscape = '\'
 $script:CommentAware = $true
 $script:BlockCommentSplit = $false
 
+# CR-W2/W3/W8 (TASK-179, kolo 7): druhe cteni prikazu BEZ komentare - jeden protokol pro gate.ps1 i secrets.ps1. Spousti se,
+# kdyz prikaz obsahuje `#` nebo nese zakodovany text (`-EncodedCommand <base64>` - dekodovane telo `#` mit muze, prikaz ne).
+# Rozpocet prace na substituce se NEnuluje (strop jednoho behu hooku drzi timeout 10 s); narazi-li druhe cteni na strop,
+# volajici rozhodne `deny` (Overflow). Z druheho cteni plati jen `deny`, audit je ztlumeny.
+function Test-NeedsPlainReading([string]$Command) {
+    return ($Command.IndexOf('#') -ge 0 -or $Command -match '(?i)(?:^|\s)-e[a-z]*\s+[''"]?[A-Za-z0-9+/=]{16,}')
+}
+function Invoke-PlainCommentReading([scriptblock]$Body) {
+    $prevAware = $script:CommentAware
+    $prevMuted = $script:AuditMuted
+    $ov = $script:SubstOverflow
+    $script:CommentAware = $false
+    $script:AuditMuted = $true
+    try { $r = & $Body } finally { $script:CommentAware = $prevAware; $script:AuditMuted = $prevMuted }
+    return @{ Result = $r; Overflow = ($script:SubstOverflow -and -not $ov) }
+}
+
 function Get-CommentStart([string]$Text, [int]$I) {
     if (-not $script:CommentAware) { return 0 }
     $c = $Text[$I]
@@ -597,8 +614,8 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
 
         # CR-S8/CR-T (kola 3 a 4): komentar - text zustava, uvozovky a zavorky v nem nejsou specialni, oddelovace na nejvyssi
         # urovni dal deli (viz Get-CommentStart). Komentar je VLASTNI segment (`<# it's #> git reset --hard` -> `<# it's #>`
-        # a `git reset --hard`); Split-CommandLine pridava i segmenty cteni bez komentare, takze `Remove-Item <# x #> -Recurse
-        # src` zustane videt i cely. Uvnitr `$( ... )` / `{ ... }` se komentar opise cely (deli ho az rozbor tela).
+        # a `git reset --hard`); druhe cteni bez komentare (Invoke-PlainCommentReading v gate.ps1 a secrets.ps1) vidi i cely
+        # `Remove-Item <# x; #> -Recurse src`. Uvnitr `$( ... )` / `{ ... }` se komentar opise cely (deli ho az rozbor tela).
         $cl = Get-CommentStart $Text $i
         if ($cl -gt 0) {
             $ce = Get-CommentEnd $Text $i $cl
