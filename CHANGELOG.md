@@ -65,6 +65,23 @@ vzory mimo strop (dřív odmítnut → výchozí `allow`, CR-Q5). Zpřísněná 
 audit téhož příkazu (CR-Q6). `iex` bez argumentu s destruktivním literálem v příkazu = `deny` jako `iex '…'` (CR-Q9, Q5;
 bez literálu dál `A179-O4`). Vědomě beze změny: přejmenované klíče přepisu (CR-Q8, migrace výše; na stroji žádný přepis
 není) a nečtené `gate.dbDestroyLocal.hosts` (CR-Q10, popsáno výše).
+
+**Druhé kolo `/code-review` nad CR-Q (CR-R, skupina `CR-R`):** SQL s komentářem (`/**/`, `--`) je pro lokální destruktivní
+operaci nečitelné → `deny`. Komentář před čárkou seznamu nebo mezi částmi jména obcházel CR-Q1b i CR-Q2 (CR-R1, CR-R2).
+Trojdílné jméno se pozná i s mezerou v závorkách nebo uvozovkách (CR-R2). SQL ze souboru se pozná i z `--file=x`, `--file x`,
+slepeného `-fx` (psql/pgcli) a z `-ix` / `--input-file` (sqlcmd) (CR-R3). U `dropdb` přestaly `-f` (`--force`) a `-i`
+(`--interactive`) znamenat soubor, takže `dropdb -f gsd_test_1` je zase ticho + audit (CR-R4, regrese CR-Q3).
+`… | iex` rozebere každý řetězcový literál příkazu stejně jako `iex '…'` (plný rozbor místo hledání tokenů). Lze tak zachytit
+`'rm -r -fo C:\x' | iex`, a destruktivní text mimo literál (`git log --grep "reset --hard"; 'git status' | iex`) už nevede
+k zákazu (CR-R6, CR-R10). Hostitele z prostředí mění i příkaz bez doslovného jména proměnné, proto vede k `deny`
+načtení souboru (`. ./x`, `source x`), `SetEnvironmentVariable`, `Set-Item`/`New-Item` na `env:` a `export`/`declare`
+se substitucí (CR-R7). Hodnota z prostředí hooku se týká jen klienta, který ji čte: PG* platí pro psql/pgcli/dropdb
+a `SQLCMDSERVER` pro sqlcmd. Výslovný hostitel v příkazu přebije `PGHOST` i `SQLCMDSERVER`, `PGHOSTADDR` ani soubor
+služby ne. `PGHOST` s cestou k socketu je místní (CR-R8). Testy čištění prostředí hooku: sada nuluje PG*/`SQLCMDSERVER`,
+řádek fixtury je nastaví polem `env` (takový řádek nejde do invariantu).
+Vědomě beze změny: `service=` / `hostaddr=` v conninfo končí `deny` už dnes, protože řetězec s mezerou je nečitelné jméno
+(CR-R5, změřeno, hlídají řádky). Tečky v textu SQL (`'A. B. C'`) jsou nečitelné ve směru `deny` (CR-R9). Profil shellu,
+který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, README).
 Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)

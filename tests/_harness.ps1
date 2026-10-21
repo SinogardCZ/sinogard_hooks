@@ -220,6 +220,9 @@ function Invoke-HookOnce {
     # urcuje sam parametrem -Environment.
     $psi.EnvironmentVariables['CLAUDE_PROJECT_DIR'] = $script:EmptyProjectDir
     $psi.EnvironmentVariables['CLAUDE_PLUGIN_DATA'] = ''
+    # CR-R8 (TASK-179, 0.3.1): pravidlo DB cte hostitele i z prostredi hooku (PGHOST, PGHOSTADDR, PGSERVICE,
+    # SQLCMDSERVER) - tataz trida "hodnota z okoli". Pripad si je nastavuje sam (`env` radku fixtury).
+    foreach ($k in @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'SQLCMDSERVER')) { $psi.EnvironmentVariables[$k] = '' }
 
     if ($Environment) {
         foreach ($k in $Environment.Keys) { $psi.EnvironmentVariables[$k] = [string]$Environment[$k] }
@@ -423,7 +426,7 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
         # by vyradila i literal jako `{REPO}`; K10-4: vlastnost `repText` by nepoznala radek jen s `{REP2}`).
         $cmdRaw = [string]$row.cmd
         if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode'] -and
-            -not $row.PSObject.Properties['cwd'] -and -not $cmdRaw.Contains('{PLUGIN_ROOT}') -and
+            -not $row.PSObject.Properties['cwd'] -and -not $row.PSObject.Properties['env'] -and -not $cmdRaw.Contains('{PLUGIN_ROOT}') -and
             -not $cmdRaw.Contains('{REP}') -and -not $cmdRaw.Contains('{REP2}')) {
             $kind = if (@('Write', 'Edit', 'Read') -contains [string]$row.tool) { 'path' } else { 'cmd' }
             Add-CollectedCase $HookName $kind ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
@@ -464,6 +467,10 @@ function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
             [void][System.IO.Directory]::CreateDirectory((Join-Path $dir '.claude'))
             [System.IO.File]::WriteAllText((Join-Path $dir '.claude/sinogard-hooks.json'), $ov, ([System.Text.UTF8Encoding]::new($false)))
             $envh['CLAUDE_PROJECT_DIR'] = $dir
+        }
+        # CR-R8 (TASK-179): prostredi procesu hooku (`env` = objekt jmeno -> hodnota); radek s nim do invariantu nejde.
+        if ($row.PSObject.Properties['env']) {
+            foreach ($p in $row.env.PSObject.Properties) { $envh[$p.Name] = [string]$p.Value }
         }
         $auditDir = Join-Path $script:TempDir ('t117a-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
         $envh['CLAUDE_PLUGIN_DATA'] = $auditDir

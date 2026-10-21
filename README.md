@@ -233,11 +233,18 @@ a zapíše audit `gate:dbDestroyLocal`; cokoli jiného → `deny`. Jména se čt
 `dbname=`, URI, `Database=`/`Initial Catalog=`, `PGDATABASE=`, první poziční argument `psql`, cíl `dropdb`, jméno
 v `DROP DATABASE` (u `DROP DATABASE`/`dropdb`/`ef database drop` rozhoduje **rušená** databáze, ne údržbová, ke které se
 klient připojí). Každé nalezené jméno musí sedět. Nečitelné (`deny`): žádné jméno, proměnná, `USE`, meta-příkaz psql,
-dynamické SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`), trojdílné jméno objektu (i `[a].[b].[c]`), seznam jmen
-v `DROP DATABASE a, b`, příkaz `sqlcmd` (`:connect`, `:r`, `!!` …), SQL ze souboru nebo stdin vedle viditelného, hostitel
-z proměnné prostředí (`PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `SQLCMDSERVER` v příkazu; nemístní hodnota v prostředí hooku),
-pgcli s DSN, `sqllocaldb delete`, tvar uvnitř kontejneru (`AOPT-O26`). Přepis smí `databases` jen **zúžit** (s `decision:
-deny` se vzory nečtou); `decision` `allow` | `deny`; `hosts` se nečte.
+dynamické SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`), SQL s komentářem (`/**/`, `--`), trojdílné jméno objektu
+(i `[a].[my schema].[c]`; vedlejší účinek: tečky v textu SQL jako `'A. B. C'`), seznam jmen v `DROP DATABASE a, b`, příkaz
+`sqlcmd` (`:connect`, `:r`, `!!` …), SQL ze souboru nebo stdin vedle viditelného (`-f`, `--file`, `-fx`, `-i`, `-ix`,
+`--input-file`, `<`; u `dropdb` jsou `-f`/`-i` volby `--force`/`--interactive`), hostitel z prostředí (`PGHOST`,
+`PGHOSTADDR`, `PGSERVICE`, `SQLCMDSERVER` v příkazu; načtení souboru `. x` / `source x`, `SetEnvironmentVariable`,
+`Set-Item`/`New-Item` na `env:`, `export`/`declare` se substitucí; nemístní hodnota v prostředí hooku — PG* u
+psql/pgcli/dropdb, `SQLCMDSERVER` u sqlcmd; výslovné `-h`/`-S` přebije `PGHOST`/`SQLCMDSERVER`, ne `PGHOSTADDR` ani
+`PGSERVICE`; `PGHOST` s cestou k socketu je místní), pgcli s DSN, `sqllocaldb delete`, tvar uvnitř kontejneru (`AOPT-O26`).
+**Mez:** proměnnou nastavenou profilem shellu (`~/.bashrc`), který načte jen nástroj Bash a ne proces hooku, hook
+nevidí — „bez hostitele = místní" pak neplatí; kdo má v profilu `PGHOST` na vzdálený server, ať v projektu nastaví
+`gate.dbDestroyLocal` na `deny`. Přepis smí `databases` jen **zúžit** (s `decision: deny` se vzory nečtou); `decision`
+`allow` | `deny`; `hosts` se nečte.
 
 ℹ️ **Do 0.3.0** platilo: výchozí `{"decision":"ask","databases":[],"hosts":[]}` = chování 0.2.0. `deny` → lokální
 destruktivní operace `deny`. **`allow` = hook MLČÍ a zapíše audit `gate:dbDestroyLocal`**

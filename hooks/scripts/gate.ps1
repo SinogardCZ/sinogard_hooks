@@ -1079,8 +1079,16 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($rest.Count -gt 0 -and (Test-ParameterPrefix ($rest[0].ToLowerInvariant()) 'command')) { $skip = 1 }
             $inner = (Join-CommandString ($rest | Select-Object -Skip $skip))
             if ($inner -eq '') {
-                [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = $exe; GitConfig = @()
-                                  PipeText = [string]$script:FullCommand })
+                [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = $exe; GitConfig = @() })
+                # CR-Q9 + CR-R6/R10 (/code-review 0.3.1): text z roury muze byt literal v prikazu (`'git reset --hard' | iex`).
+                # Kazdy retezcovy literal prikazu se proto rozebere jako `iex '<literal>'` (Q5) - plny rozbor, ne hledani
+                # tokenu (`'rm -r -fo C:\x' | iex`), a jen literaly, ne zbytek prikazu (`git log --grep "reset --hard"`).
+                # Producent bez literalu (`irm url | iex`, `Get-Content x | iex`) zustava A179-O4: ticho + audit.
+                foreach ($lm in [regex]::Matches([string]$script:FullCommand, '''((?:[^'']|'''')*)''|"((?:[^"`]|`.)*)"')) {
+                    $lit = if ($lm.Groups[1].Success) { $lm.Groups[1].Value.Replace("''", "'") } else { $lm.Groups[2].Value }
+                    if ($lit.Trim() -eq '') { continue }
+                    foreach ($l in (Get-InvokedLeaves $lit '' $Depth)) { [void]$out.Add($l) }
+                }
                 return $out
             }
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni - `iex $cmd` zustava ask.
@@ -1228,11 +1236,27 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
 # nenese promenna prostredi: prirazeni v drivejsim statementu (`$env:PGHOST=...; psql ...`, `export PGHOST=...`) list
 # nevidi a hodnotu z prostredi procesu (zdedi ji i spousteny prikaz) taky ne. Jmeno promenne v textu prikazu = hostitel
 # neznamy; v prostredi hooku rozhoduje hodnota (`PGSERVICE` vzdy - hostitele nese soubor sluzby).
-function Test-DbHostFromEnvironment([string]$Text, $LocalHosts) {
+# (CR-R5, kolo 2: conninfo `service=` / `hostaddr=` konci deny uz dnes - retezec conninfo s mezerou je necitelne jmeno DB;
+# zmereno nad 002b863, hlidaji radky CR-R5.) CR-R7: prostredi meni i prikaz,
+# ve kterem jmeno promenne doslova neni - nacteni souboru (`. ./prod.env`, `source x`), `SetEnvironmentVariable`,
+# `Set-Item`/`New-Item` na `env:`, `export`/`declare` se substituci. Zbytek (profil shellu, ktery hook nevidi) = README.
+# CR-R8: hodnota v prostredi hooku plati jen pro klienta, ktery ji cte (PG* pro psql/pgcli/dropdb, SQLCMDSERVER pro
+# sqlcmd); explicitni hostitel v prikazu (`-h`, `-S`, `host=`) prebije PGHOST / SQLCMDSERVER (PGHOSTADDR ani soubor
+# sluzby ne); PGHOST s cestou k socketu (`/var/run/postgresql`) je mistni.
+function Test-DbHostFromEnvironment([string]$Text, $LocalHosts, [string]$HostExe, [bool]$HasExplicitHost) {
     if ($Text -match '(?i)\b(PGHOST|PGHOSTADDR|PGSERVICE|PGSERVICEFILE|SQLCMDSERVER)\b') { return $true }
-    if (-not [string]::IsNullOrWhiteSpace($env:PGSERVICE)) { return $true }
-    foreach ($v in @($env:PGHOST, $env:PGHOSTADDR, $env:SQLCMDSERVER)) {
-        if (-not [string]::IsNullOrWhiteSpace($v) -and -not (Test-LocalHost ([string]$v) $LocalHosts)) { return $true }
+    if ($Text -match '(?i)\bSetEnvironmentVariable\b|\b(?:Set-Item|New-Item|si|ni)\b[^;|&\n]*\benv:|(?:^|[;&|({\n"]\s*)(?:\.|source)\s+[^\s;|&]|\b(?:export|declare|typeset)\b[^;|&\n]*[\$`(]') { return $true }
+    $exe = $HostExe.ToLowerInvariant()
+    if (@('psql', 'pgcli', 'dropdb') -ccontains $exe) {
+        if (-not [string]::IsNullOrWhiteSpace($env:PGSERVICE)) { return $true }
+        $v = [string]$env:PGHOSTADDR
+        if (-not [string]::IsNullOrWhiteSpace($v) -and -not (Test-LocalHost $v $LocalHosts)) { return $true }
+        $v = [string]$env:PGHOST
+        if (-not $HasExplicitHost -and -not [string]::IsNullOrWhiteSpace($v) -and -not $v.StartsWith('/') -and
+            -not (Test-LocalHost $v $LocalHosts)) { return $true }
+    } elseif ($exe -eq 'sqlcmd') {
+        $v = [string]$env:SQLCMDSERVER
+        if (-not $HasExplicitHost -and -not [string]::IsNullOrWhiteSpace($v) -and -not (Test-LocalHost $v $LocalHosts)) { return $true }
     }
     return $false
 }
@@ -1258,8 +1282,13 @@ function Get-DbTargetNames($Leaf, [string]$SqlVisible, [string]$NameText, [strin
     if (@('psql', 'pgcli') -ccontains $HostExe -and $SqlVisible -match '\\[A-Za-z!]') { return $null }
     # CR-Q4 (/code-review 0.3.1): prikazy sqlcmd (`:connect` prepne server, `:r` vlozi soubor, `!!` spusti shell).
     if ($SqlVisible -match '(?i)(?:^|[\s"''])(?::(?:connect|r|setvar|on|out|error|reset|ed|list|listvar|perftrace|serverlist|xml|exit|quit)\b|!!)') { return $null }
-    # CR-Q2 (/code-review 0.3.1): i jmena v hranatych zavorkach (`[prod].[dbo].[t]`) a mezery kolem tecek.
-    if ($SqlVisible -match '[\w\]"]\s*\.\s*[\w\[\]"]*\s*\.\s*[\w\["]') { return $null }
+    # CR-R1/R2 (/code-review 0.3.1, kolo 2): komentar SQL (`/**/`, `--`) muze stat mezi jmenem a carkou seznamu
+    # i mezi castmi jmena - SQL s komentarem = necitelne.
+    if ($SqlVisible -match '/\*|--') { return $null }
+    # CR-Q2 + CR-R2 (/code-review 0.3.1): i jmena v hranatych zavorkach nebo uvozovkach (i s mezerou, `[prod].[my schema].[t]`)
+    # a mezery kolem tecek. Vedlejsi ucinek: tecky v textu (`'A. B. C'`, `-S "127.0.0.1"`) = necitelne - smer deny.
+    $part = '(?:\[[^\]]*\]|"[^"]*"|\w+)'
+    if ($SqlVisible -match ($part + '\s*\.\s*(?:' + $part + ')?\s*\.\s*' + $part)) { return $null }
     $q = '(?:"([^"]*)"|''([^'']*)''|([^\s"'';|&]+))'
     $conn = New-Object System.Collections.ArrayList
     $targets = New-Object System.Collections.ArrayList
@@ -1731,8 +1760,17 @@ function Get-SqlText($Leaf, $SqlClients) {
         # `-f x.sql` (psql) a `-i x.sql` (sqlcmd) davaji SQL ze SOUBORU - obsah v prikazu
         # videt neni, takze plati Z3. Signalizuje se zvlastnim tokenem, ktery Test-DatabaseRule
         # cte jako "neznamy rozsah".
-        if ($args2[$i] -cmatch '^(-f|-i)$' -and ($i + 1) -lt $args2.Count) {
-            [void]$parts.Add('__SQL_ZE_SOUBORU__'); $i++
+        # CR-R3 (/code-review 0.3.1, kolo 2): i `--file=x`, `--file x`, slepene `-fx.sql` / `-ix.sql`, skupina `-Xf x`
+        # a `--input-file`. CR-R4: jen u klienta, kde prepinac SQL soubor znamena - u `dropdb` je `-f` --force
+        # a `-i` --interactive (`dropdb -f gsd_test_1` je bezne ruseni testovaci DB).
+        $exeL = $exe.ToLowerInvariant()
+        $fileFlag = $null
+        if (@('psql', 'pgcli') -ccontains $exeL) { $fileFlag = '^(-[A-Za-z]*f|--file(=|$))' }
+        elseif ($exeL -eq 'sqlcmd') { $fileFlag = '^(-i|--input-file(=|$))' }
+        elseif ($exeL -ne 'dropdb') { $fileFlag = '^(-f|-i)$' }
+        if ($null -ne $fileFlag -and $args2[$i] -cmatch $fileFlag) {
+            [void]$parts.Add('__SQL_ZE_SOUBORU__')
+            if ($args2[$i] -cmatch '^(-[A-Za-z]*f|-i|--file|--input-file)$' -and ($i + 1) -lt $args2.Count) { $i++ }
         }
     }
 
@@ -1924,7 +1962,7 @@ function Test-DatabaseRule($Leaf, $Config) {
         # ke ktere se pripoji (`\c`, `:connect`), nejde precist. CR-Q7: hostitel z promenne prostredi (`PGHOST`,
         # `SQLCMDSERVER`, `PGSERVICE`) v prikazu nebo v prostredi hooku - "bez hostitele = mistni" pak neplati.
         if (-not $localDbDelete -and -not $sqlFromFile -and
-            -not (Test-DbHostFromEnvironment ([string]$script:FullCommand + ' ' + $hostText) $localHosts)) {
+            -not (Test-DbHostFromEnvironment ([string]$script:FullCommand + ' ' + $hostText) $localHosts $hostExe (@($dbHosts).Count -gt 0))) {
             $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExe.ToLowerInvariant()
             if ($null -ne $names -and (Test-DbNamesAllowed $names @(Get-Field $dl 'databases' @()))) {
                 # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
@@ -2202,14 +2240,6 @@ function Test-Leaf($Leaf, $Config) {
         return (Resolve-OpaqueDecision ([string](Get-LeafField $Leaf 'Why' 'unknown')) `
                                        ([string]$Leaf.Raw) `
                                        ([string](Get-LeafField $Leaf 'Body' '')) $Config)
-    }
-
-    # CR-Q9 (/code-review 0.3.1): `iex` bez argumentu spusti text z roury - destruktivni literal v prikazu = Q5
-    # (`'git reset --hard' | iex` jako `iex 'git reset --hard'`); bez literalu A179-O4 (ticho + audit).
-    $pipeText = [string](Get-LeafField $Leaf 'PipeText' '')
-    if ($pipeText -ne '') {
-        $dv = Get-RawDestructiveVerdict $pipeText $Config
-        if ($null -ne $dv) { return $dv }
     }
 
     # Nalez Ada N21: prikaz jako ARGUMENT vzdaleneho shellu. `ssh host "rm -rf /"` se
