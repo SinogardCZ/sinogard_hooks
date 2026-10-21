@@ -495,15 +495,11 @@ function Get-RestTokens($Tokens) {
 function Get-NestedShellLeaf([string]$Inner, [string]$ShellTool, [int]$Depth) {
     $out = New-Object System.Collections.ArrayList
     $prev = Get-ScannerEscape
-    $prevComments = $script:ScannerComments
     Set-ScannerEscape $ShellTool
-    # CR-S8: Bash i PowerShell komentar maji - i kdyz je obal vnoreny v `cmd /c`.
-    $script:ScannerComments = $true
     try {
         foreach ($l in (Get-CommandLineLeaves $Inner ($Depth + 1))) { [void]$out.Add($l) }
     } finally {
         Set-ScannerEscapeChar $prev
-        $script:ScannerComments = $prevComments
     }
     return $out
 }
@@ -1075,12 +1071,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni (`cmd /c %X%` zustava ask,
             # `cmd /c "echo %PATH% && dir"` uz ne). Nalez Ada N19: cely retez pruchodu.
-            # CR-S8: cmd komentar `#` nezna - `cmd /c "echo # & rd /s /q src"` rd spusti.
-            $prevComments = $script:ScannerComments
-            $script:ScannerComments = $false
-            try {
-                foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
-            } finally { $script:ScannerComments = $prevComments }
+            # CR-T (kolo 4): cmd komentar `#` nezna - `cmd /c "echo # & rd /s /q src"` rd spusti. Komentar ve skeneru nic
+            # nezahazuje a oddelovace v nem dal deli (_common.ps1, Get-CommentStart), takze `rd` je videt i tady.
+            foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(iex|invoke-expression)$' {
@@ -1276,8 +1269,11 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
 # PG*, jiny klient z `gate.sqlClients` obe); explicitni hostitel v argumentech (`-h`, `-S`, `host=`, URI; Test-ExplicitDbHost)
 # prebije PGHOST / SQLCMDSERVER (PGHOSTADDR ani soubor sluzby ne); PGHOST je mistni, jen kdyz je KAZDA polozka seznamu
 # (`/tmp,db.firma.cz`) cesta k socketu nebo mistni hostitel.
+# CR-T8 (kolo 4): jmeno se hleda i po odstraneni escapu a uvozovek (`PGHO\ST`, `PG"HOST"` shell slepi na PGHOST) a patri
+# k nim i PSQLRC (startovni soubor psql muze `\c` prepnout server).
 function Test-DbHostFromEnvironment([string]$Text, $LocalHosts, [string]$HostExe, [bool]$HasExplicitHost) {
-    if ($Text -match '(?i)\b(PGHOST|PGHOSTADDR|PGSERVICE|PGSERVICEFILE|SQLCMDSERVER)\b') { return $true }
+    $names = '(?i)(PGHOST|PGHOSTADDR|PGSERVICE|PGSERVICEFILE|SQLCMDSERVER|PSQLRC)'
+    if ($Text -match ('\b' + $names + '\b') -or ($Text -replace '[\\`''"]', '') -match $names) { return $true }
     if ($Text -match '(?i)\bSetEnvironmentVariable\b|\bSessionState\b|\bPSVariable\b') { return $true }
     $exe = $HostExe.ToLowerInvariant()
     if ($exe -ne 'sqlcmd') {
@@ -1299,23 +1295,66 @@ function Test-DbHostFromEnvironment([string]$Text, $LocalHosts, [string]$HostExe
     return $false
 }
 
-# CR-S2 (kolo 3): explicitni hostitel jen z ARGUMENTU klienta - ne z textu SQL (`-c "SELECT 'host=localhost'"`), ktery
-# Get-DbHosts nad surovym listem cte taky. Hodnoty `-c` / `--command` / `-Q` / `-q` se preskakuji.
-function Test-ExplicitDbHost($Leaf, [string]$HostExe) {
+# CR-T9/T10 (kolo 4): JEDEN rozbor argumentu SQL klienta pro Test-ExplicitDbHost i Test-AbbreviatedDbOption - volby
+# s hodnotou podle tabulky klienta (hodnota volby neni argument: `-v "a= host=localhost"`, `-o x`), `-q` je u psql --quiet
+# bez hodnoty. Vraci @{ Opts = @(@{ Name; Value }); Pos = @(...) }. Dlouha volba: `--x=v` nebo `--x v` (je-li v tabulce).
+$script:DbClientValueOpts = @{
+    'psql'   = @('-c', '-d', '-f', '-h', '-p', '-U', '-v', '-o', '-L', '-T', '-F', '-R', '-P',
+                 '--command', '--dbname', '--file', '--host', '--port', '--username', '--set', '--variable', '--output',
+                 '--log-file', '--table-attr', '--field-separator', '--record-separator', '--pset')
+    'pgcli'  = @('-c', '-d', '-h', '-p', '-U', '-D', '--command', '--dbname', '--host', '--port', '--username', '--user', '--dsn')
+    'dropdb' = @('-h', '-p', '-U', '--host', '--port', '--username', '--maintenance-db')
+    'sqlcmd' = @('-S', '-d', '-U', '-P', '-Q', '-q', '-i', '-o', '-v', '-H', '-l', '-t', '-h', '-s', '-w', '-a', '-c', '-f',
+                 '-m', '-V', '-K', '-F', '-y', '-Y')
+}
+function Get-DbClientOptions($Leaf, [string]$HostExe) {
     $argv = @()
     if ([string](Get-LeafField $Leaf 'Kind' '') -eq 'leaf') {
         $argv = @(Get-LeafField $Leaf 'Args' @())
     } else {
-        $argv = @(Split-Arguments ([string](Get-LeafField $Leaf 'Outer' '')))
+        # Telo heredocu: argumenty nese uvozujici prikaz - od jmena klienta dal.
+        $all = @(Split-Arguments ([string](Get-LeafField $Leaf 'Outer' '')))
+        $ci = -1
+        for ($k = 0; $k -lt $all.Count; $k++) { if ((Get-ExecutableName ([string]$all[$k])) -eq $HostExe) { $ci = $k; break } }
+        if ($ci -ge 0) { $argv = @($all | Select-Object -Skip ($ci + 1)) }
     }
-    $hostFlag = if ($HostExe -eq 'sqlcmd') { '^-S' } else { '^(-h|--host(=|$))' }
+    $vals = @($script:DbClientValueOpts[$HostExe])
+    $opts = New-Object System.Collections.ArrayList
+    $pos = New-Object System.Collections.ArrayList
     for ($i = 0; $i -lt $argv.Count; $i++) {
         $t = [string]$argv[$i]
-        if ($t -cmatch '^(-c|--command|-Q|-q)$') { $i++; continue }
-        if ($t -cmatch '^--command=') { continue }
-        if ($t -cmatch $hostFlag) { return $true }
-        if ($t -match '(?i)(?:^|\s)host\s*=|postgres(?:ql)?://') { return $true }
+        if ($t.StartsWith('--') -and $t.Length -gt 2) {
+            $eq = $t.IndexOf('=')
+            if ($eq -gt 0) { [void]$opts.Add(@{ Name = $t.Substring(0, $eq); Value = $t.Substring($eq + 1) }); continue }
+            $v = $null
+            if ($vals -ccontains $t -and ($i + 1) -lt $argv.Count) { $i++; $v = [string]$argv[$i] }
+            [void]$opts.Add(@{ Name = $t; Value = $v }); continue
+        }
+        if ($t.StartsWith('-') -and $t.Length -ge 2) {
+            $f = $t.Substring(0, 2)
+            if ($vals -ccontains $f) {
+                $v = if ($t.Length -gt 2) { $t.Substring(2) } elseif (($i + 1) -lt $argv.Count) { $i++; [string]$argv[$i] } else { '' }
+                [void]$opts.Add(@{ Name = $f; Value = $v }); continue
+            }
+            [void]$opts.Add(@{ Name = $t; Value = $null }); continue
+        }
+        [void]$pos.Add($t)
     }
+    return @{ Opts = $opts; Pos = $pos }
+}
+
+# CR-S2 + CR-T9 (kola 3 a 4): explicitni hostitel jen z ARGUMENTU klienta - volba hostitele (`-h`, `--host`, u sqlcmd `-S`),
+# nebo conninfo / URI v miste jmena DB (`-d`, `--dbname`, `--maintenance-db`, `--dsn`, pozicni argument). Text SQL
+# (`-c "SELECT 'host=localhost'"`) ani hodnota jine volby (`-v "a= host=localhost"`) hostitelem nejsou.
+function Test-ExplicitDbHost($Leaf, [string]$HostExe) {
+    $o = Get-DbClientOptions $Leaf $HostExe
+    $hostOpts = if ($HostExe -eq 'sqlcmd') { @('-S') } else { @('-h', '--host') }
+    $connInfo = '(?i)(?:^|\s)host\s*=|^postgres(?:ql)?://'
+    foreach ($x in $o.Opts) {
+        if ($hostOpts -ccontains [string]$x.Name) { return $true }
+        if (@('-d', '--dbname', '--maintenance-db', '-D', '--dsn') -ccontains [string]$x.Name -and [string]$x.Value -match $connInfo) { return $true }
+    }
+    foreach ($p in $o.Pos) { if ([string]$p -match $connInfo) { return $true } }
     return $false
 }
 
@@ -1323,14 +1362,10 @@ function Test-ExplicitDbHost($Leaf, [string]$HostExe) {
 # `--ho=prod` = `--host`). Zkratka volby, ktera nese hostitele, jmeno DB, soubor nebo SQL, = argumenty necitelne -> bez `allow`.
 function Test-AbbreviatedDbOption($Leaf, [string]$HostExe) {
     if (@('psql', 'dropdb') -cnotcontains $HostExe) { return $false }
-    $argv = @()
-    if ([string](Get-LeafField $Leaf 'Kind' '') -eq 'leaf') { $argv = @(Get-LeafField $Leaf 'Args' @()) }
-    else { $argv = @(Split-Arguments ([string](Get-LeafField $Leaf 'Outer' ''))) }
-    for ($i = 0; $i -lt $argv.Count; $i++) {
-        $t = [string]$argv[$i]
-        if ($t -cmatch '^(-c|-Q|-q)$') { $i++; continue }
-        if ($t -notmatch '^--([A-Za-z][A-Za-z-]*)') { continue }
-        $name = $Matches[1].ToLowerInvariant()
+    foreach ($x in (Get-DbClientOptions $Leaf $HostExe).Opts) {
+        $nm = [string]$x.Name
+        if (-not $nm.StartsWith('--')) { continue }
+        $name = $nm.Substring(2).ToLowerInvariant()
         foreach ($full in @('host', 'port', 'dbname', 'file', 'command', 'maintenance-db')) {
             if ($name.Length -lt $full.Length -and $full.StartsWith($name)) { return $true }
         }
@@ -1342,21 +1377,31 @@ function Test-AbbreviatedDbOption($Leaf, [string]$HostExe) {
 # (heredoc), `export` s literalni hodnotou. Literalni PowerShellove prirazeni (`$env:PGPASSWORD = 'x'`) list nema; jmeno
 # promenne hostitele v textu chyti Test-DbHostFromEnvironment. Cokoli jineho (skript, `eval`, `source`, `Set-Content`) = hostitel
 # neznamy, `allow` neplati.
+# CR-T1/T7/T8 (kolo 4): (T7) mnozina pokryva i bezne prikazy kolem testovaci DB (`createdb`, `pg_restore`, `| cat`,
+# `Select-String`); (T8) list s presmerovanim do souboru neutralni neni (`printf ... > ~/.psqlrc`) - povolene je jen
+# `2>&1`, `> /dev/null`, `> $null`, `> nul`; (T1) list, ktery v seznamu prikazu neni (vnoreny rozbor - telo heredocu
+# do shellu `bash <<EOF`, kontejner), allow nema: jeho sousedni statementy tenhle seznam nevidi.
 $script:DbEnvNeutralExe = @('cd', 'set-location', 'sl', 'chdir', 'pushd', 'popd', 'push-location', 'pop-location',
-                            'echo', 'write-host', 'write-output', 'printf')
+                            'echo', 'write-host', 'write-output', 'printf', 'cat', 'type', 'get-content', 'head', 'tail',
+                            'more', 'grep', 'findstr', 'select-string', 'sort', 'sort-object', 'wc', 'measure-object',
+                            'out-null', 'out-host', 'out-string', 'format-table', 'format-list', 'select-object',
+                            'where-object', 'createdb', 'pg_restore', 'pg_dump', 'pg_isready', 'true', 'false')
 function Test-DbEnvNeutralLeaves($Leaf) {
+    $found = $false
     foreach ($l in @($script:AllLeaves)) {
-        if ([object]::ReferenceEquals($l, $Leaf)) { continue }
+        if ([object]::ReferenceEquals($l, $Leaf)) { $found = $true; continue }
         $kind = [string](Get-LeafField $l 'Kind' '')
+        # Telo heredocu: SQL pro klienta, nebo skript pro shell v podprocesu (prostredi rodice nezmeni).
         if ($kind -eq 'heredoc') { continue }
         if ($kind -ne 'leaf') { return $false }
         $e = ([string](Get-LeafField $l 'Exe' '')).ToLowerInvariant()
-        if ($script:DbEnvNeutralExe -ccontains $e) { continue }
-        if ($script:SqlClients -ccontains $e) { continue }
-        if ($e -eq 'export' -and [string]$l.Raw -notmatch '[\$`(]') { continue }
-        return $false
+        $neutral = ($script:DbEnvNeutralExe -ccontains $e) -or ($script:SqlClients -ccontains $e) -or
+                   ($e -eq 'export' -and [string]$l.Raw -notmatch '[\$`(]')
+        if (-not $neutral) { return $false }
+        $redir = [regex]::Replace([string]$l.Raw, '[0-9*]?>>?\s*(?:&\d|\$null\b|/dev/null\b|nul\b)', '', 'IgnoreCase')
+        if ($redir -match '>') { return $false }
     }
-    return $true
+    return $found
 }
 
 # ZOPT-Q102 + A179-O3 (Q10), 0.3.1: jmena databazi, kterych se destruktivni operace nad MISTNIM hostitelem tyka. Do 0.3.0
@@ -1425,6 +1470,8 @@ function Get-DbTargetNames($Leaf, [string]$SqlVisible, [string]$NameText, [strin
         for ($i = $ci + 1; $i -lt $argv.Count; $i++) {
             $t = [string]$argv[$i]
             if ($HostExe -eq 'pgcli' -and $t -cmatch '^(-D|--dsn)(=|$)') { return $null }
+            # CR-T7 (kolo 4): presmerovani (`2>&1`, `> out.txt`, `< in`) neni pozicni argument klienta.
+            if ($t -match '^[0-9*&]?[<>]') { if ($t -match '^[0-9*&]?[<>]+&?$') { $i++ }; continue }
             if ($t -cmatch $flags) { $i++; continue }
             if ($t.StartsWith('-')) { continue }
             [void]$pos.Add($t)

@@ -20,8 +20,11 @@ s řádky kódu a měření dnešních zaseknutí: `predavka-task-179/2026-10-20
 Skener příkazů neznal komentář. Apostrof v komentáři (`# don't` na řádku před dalším příkazem, případně `<# it's #>`)
 otevřel „řetězec“, který trval až do konce příkazu. Další příkazy se proto nerozebraly a prošly tichem, a to v gate
 (`git reset --hard`, `rm -rf …`) i v secrets (`cat .env`). Chyba se změřila v nasazené 0.3.0 i ve verzích 0.2.0 a 0.1.9
-(cache pluginu, PowerShell, 2026-10-21). Od 0.3.1 skener zná komentář `#` (Bash i PowerShell) a `<# … #>` (PowerShell); uvnitř `cmd /c` se komentář nečte,
-protože cmd ho nezná. Případy hlídá skupina `CR-S` v `tests/fixtures/task179-gate.json` a `task179-secrets.json`.
+(cache pluginu, PowerShell, 2026-10-21). Od 0.3.1 skener zná komentář `#` (Bash i PowerShell) a `<# … #>` (PowerShell), ale z textu ho **nic
+nezahazuje**. V komentáři jen uvozovky a závorky přestanou být speciální. Oddělovače (`;`, `&`, `|`, konec řádku) dál
+dělí příkaz a skener navíc spojí výsledek čtení s komentářem i bez něj (CR-T). Tam, kde `#` komentářem není (cmd,
+`${x:- #}`, zpětné apostrofy), tak skener vidí víc příkazů, ne méně. Cenou je, že `;` uvnitř komentáře taky dělí,
+třeba `true # pak ; rm -rf x` → `deny`. Případy hlídá skupina `CR-S` v `tests/fixtures/task179-gate.json` a `task179-secrets.json`.
 
 ### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
 
@@ -94,8 +97,8 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
 **Třetí kolo `/code-review` nad CR-R (CR-S, skupina `CR-S`):**
 - **Komentáře v příkazech (CR-S8).** Skener příkazů nově zná komentář `#` (Bash i PowerShell) a `<# … #>` (PowerShell).
   Apostrof v komentáři (`# don't` + nový řádek + `git reset --hard`) dosud otevřel „řetězec“ až do konce příkazu. Další
-  příkazy se pak vůbec nerozebraly a prošly tichem, a to v gate i v secrets, **i v nasazené 0.3.0**. Uvnitř `cmd /c` se
-  komentář nečte, protože cmd ho nezná.
+  příkazy se pak vůbec nerozebraly a prošly tichem, a to v gate i v secrets, **i v nasazené 0.3.0**. Tvar opravy z tohoto
+  kola (zahazování komentáře) nahradilo kolo CR-T.
 - **Rozbor `… | iex` (CR-S1, S4, S8).** Literály se berou z textu, který se právě rozebírá, ne z celého příkazu (vnořený
   `pwsh -c "'x' | iex"`). Čte je tokenizer PowerShellu a každý se rozebere jen jednou. Holé `iex` uvnitř rozebíraného
   literálu je `depth` (deny), takže rozbor už neroste exponenciálně (dřív 9–69 s → timeout hooku).
@@ -106,6 +109,18 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
 - **Proměnné prostředí hooku (CR-S3, S10).** `PGHOST` se seznamem (`/tmp,db.firma.cz`) je místní, jen když je místní
   každá položka. Klient z `gate.sqlClients`, kterého hook nezná, čte z prostředí hooku PG* i `SQLCMDSERVER`.
 - **Ostatní (CR-S7, S9).** Volby psql `-Ufred`, `-dfoo` nejsou soubor SQL. Escape `]]` / `""` ve jménu je nečitelný → `deny`.
+
+**Čtvrté kolo `/code-review` nad CR-S (CR-T, skupina `CR-T`):**
+- **Komentář podruhé (CR-T2 až T6).** První oprava komentář zahazovala, a kde `#` komentářem není, zahodila i spouštěný
+  příkaz: `Start-Process cmd '/c echo # & rd …'`, `cmd /c "echo # & type .env"` v secrets, `` `true # x`; rm … ``,
+  `${x:- #}; rm …`. Komentář teď nic nezahazuje (viz Bezpečnost výše). Začíná i hned za `|`, `&`, `(`, `{` a uvnitř bloku
+  `{ }` a substituce `$( )` se v něm nepočítají závorky.
+- **`allow` z `gate.dbDestroyLocal` (CR-T1, T7 až T10).**
+  - DB příkaz rozebraný vnořeně, například v těle `bash <<EOF`, `allow` nemá. Jeho sousední statementy hook nevidí.
+  - Neutrální příkazy kolem testovací DB nově zahrnují `createdb`, `pg_restore`, `| cat`, `Select-String` a podobné. Přesměrování
+    do souboru (`printf … > ~/.psqlrc`) neutrální není, povolené jsou jen `2>&1`, `> /dev/null`, `> $null` a `> nul`.
+  - Jméno proměnné se hledá i po odstranění escapů a uvozovek (`PGHO\ST`), nově i `PSQLRC`.
+  - Argumenty SQL klienta čte jeden rozbor podle tabulky voleb s hodnotou: hodnota `-v` není hostitel, `psql -q` hodnotu nebere.
 Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)

@@ -394,10 +394,42 @@ function ConvertTo-NormalPath([string]$Path) {
 # `C:\src` ve Split-Arguments by se zmenilo na `C:src` a shoda na chranene cesty by
 # prestala platit - tenhle escape resi VYHRADNE stav uvozovek, nic jineho.
 $script:ScannerEscape = '\'
-# CR-S8 (TASK-179, kolo 3 /code-review): Bash i PowerShell maji komentar `#` (PowerShell i `<# ... #>`), cmd ne. Skener
-# o komentari nevedel, takze apostrof v nem (`# don't` + novy radek + `git reset --hard`) otevrel "retezec" az do konce
-# prikazu a dalsi statementy se uz nerozdelily -> allow. Uvnitr `cmd /c` se komentar necte (`echo # & rd /s /q x`).
-$script:ScannerComments = $true
+# CR-S8 + CR-T1..T6 (TASK-179, kola 3 a 4 /code-review): Bash i PowerShell maji komentar `#` (PowerShell i `<# ... #>`).
+# Skener o nem nevedel, takze apostrof v komentari (`# don't` + novy radek + `git reset --hard`) otevrel "retezec" az do
+# konce prikazu a dalsi statementy se nerozdelily -> allow (i v 0.3.0). Prvni oprava (kolo 3) komentar ZAHAZOVALA - a kde
+# `#` komentarem neni (cmd, `${a #}`, zpetne apostrofy), zahodila i spousteny prikaz. Od kola 4 komentar NIC NEZAHAZUJE:
+# v nem jen uvozovky (a zavorky) prestanou byt specialni, oddelovace dal deli a text zustava. Kde `#` komentarem neni,
+# skener tak vidi VIC prikazu, ne mene (smer deny).
+# Zacatek komentare: `#` na zacatku textu nebo za bilym znakem ci `; | & ( {`; v PowerShellu i `<#`. Vraci delku
+# uvozujiciho tokenu (0 = neni komentar).
+# Kde `#` komentarem NENI (cmd, `${x:- #}`, zpetne apostrofy) a za nim je otevrena uvozovka pres konec radku, mohlo by
+# cteni s komentarem videt i MENE nez cteni bez nej. Split-CommandLine, Get-Substitution, Get-BacktickSubstitution
+# a Get-ScriptBlockBodies proto vraceji SJEDNOCENI obou cteni ($script:CommentAware) - komentar muze rozbor jen rozsirit.
+$script:CommentAware = $true
+
+function Get-CommentStart([string]$Text, [int]$I) {
+    if (-not $script:CommentAware) { return 0 }
+    $c = $Text[$I]
+    if ($c -eq '<' -and $script:ScannerEscape -eq '`' -and ($I + 1) -lt $Text.Length -and $Text[$I + 1] -eq '#') { return 2 }
+    if ($c -ne '#') { return 0 }
+    if ($I -eq 0) { return 1 }
+    $p = $Text[$I - 1]
+    if ([char]::IsWhiteSpace($p) -or ';|&({'.IndexOf($p) -ge 0) { return 1 }
+    return 0
+}
+
+# Konec komentare od pozice $I: radkovy konci PRED koncem radku, blokovy (`<#`) ZA `#>`. Vraci index prvniho znaku za
+# komentarem (u radkoveho = konec radku, ten dal deli).
+function Get-CommentEnd([string]$Text, [int]$I, [int]$StartLen) {
+    if ($StartLen -eq 2) {
+        $e = $Text.IndexOf('#>', $I + 2)
+        if ($e -lt 0) { return $Text.Length }
+        return $e + 2
+    }
+    $j = $I
+    while ($j -lt $Text.Length -and $Text[$j] -ne "`n" -and $Text[$j] -ne "`r") { $j++ }
+    return $j
+}
 
 function Set-ScannerEscape([string]$ToolName) {
     if ($ToolName -eq 'PowerShell') { $script:ScannerEscape = '`' } else { $script:ScannerEscape = '\' }
@@ -444,6 +476,21 @@ function Test-BlockOpenPosition([string]$Text, [int]$Index) {
 # text mezi koncem predchoziho bloku a jeho zavorkou. Kontrolni skupina (vyrok 2
 # Amber 2026-09-12): `if ($x) { git status } else { git log }` NESMI skoncit dotazem.
 function Get-ScriptBlockBodies([string]$Text) {
+    # CR-T (kolo 4): sjednoceni cteni s komentarem a bez nej (viz $script:CommentAware); `Whole` z cteni s komentarem.
+    $a = Get-ScriptBlockBodiesCore $Text
+    if (-not $script:CommentAware -or ([string]$Text).IndexOf('#') -lt 0) { return $a }
+    $script:CommentAware = $false
+    try { $b = Get-ScriptBlockBodiesCore $Text } finally { $script:CommentAware = $true }
+    foreach ($x in $b.Blocks) {
+        $dup = $false
+        foreach ($y in $a.Blocks) { if ([string]$y.Body -ceq [string]$x.Body -and [string]$y.Head -ceq [string]$x.Head) { $dup = $true; break } }
+        if (-not $dup) { [void]$a.Blocks.Add($x) }
+    }
+    if ($a.Blocks.Count -ne 1) { $a.Whole = $false }
+    return $a
+}
+
+function Get-ScriptBlockBodiesCore([string]$Text) {
     $blocks = New-Object System.Collections.ArrayList
     $t = ([string]$Text).Trim()
     if ($t.Length -lt 2) { return @{ Blocks = $blocks; Whole = $false } }
@@ -463,6 +510,9 @@ function Get-ScriptBlockBodies([string]$Text) {
         if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
         if ($c -eq '"') { $inDouble = -not $inDouble; $i++; continue }
         if ($inDouble) { $i++; continue }
+        # CR-T (kolo 4): zavorka ani uvozovka v komentari blok neotevira ani nezavira (`{ # it's` + novy radek + `rm -rf x }`).
+        $cl = Get-CommentStart $t $i
+        if ($cl -gt 0) { $i = Get-CommentEnd $t $i $cl; continue }
         if ($c -eq "'") { $inSingle = $true; $i++; continue }
         if ($c -eq '{') {
             if ($open -lt 0 -and (Test-BlockOpenPosition $t $i)) { $open = $i }
@@ -557,18 +607,39 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
         if ($c -eq '"') { $inDouble = -not $inDouble; [void]$buf.Append($c); $i++; continue }
         if ($inDouble) { [void]$buf.Append($c); $i++; continue }
 
-        # CR-S8: komentar mimo uvozovky - `#` na zacatku slova do konce radku (konec radku zustava separatorem),
-        # v PowerShellu i blok `<# ... #>`. `${#x}`, `a#b`, `--format=#%h` komentar nejsou (pred `#` neni bily znak).
-        if ($script:ScannerComments) {
-            if ($c -eq '#' -and ($i -eq 0 -or [char]::IsWhiteSpace($Text[$i - 1]) -or $Text[$i - 1] -eq ';')) {
-                while ($i -lt $n -and $Text[$i] -ne "`n" -and $Text[$i] -ne "`r") { $i++ }
-                continue
+        # CR-S8/CR-T (kola 3 a 4): komentar - text zustava, uvozovky a zavorky v nem nejsou specialni, oddelovace na nejvyssi
+        # urovni dal deli (viz Get-CommentStart). Komentar je VLASTNI segment (`<# it's #> git reset --hard` -> `<# it's #>`
+        # a `git reset --hard`); Split-CommandLine pridava i segmenty cteni bez komentare, takze `Remove-Item <# x #> -Recurse
+        # src` zustane videt i cely. Uvnitr `$( ... )` / `{ ... }` se komentar opise cely (deli ho az rozbor tela).
+        $cl = Get-CommentStart $Text $i
+        if ($cl -gt 0) {
+            $ce = Get-CommentEnd $Text $i $cl
+            if ($depth -gt 0 -or $brace -gt 0) {
+                [void]$buf.Append($Text.Substring($i, $ce - $i)); $i = $ce; continue
             }
-            if ($esc -eq '`' -and $c -eq '<' -and ($i + 1) -lt $n -and $Text[$i + 1] -eq '#') {
-                $end = $Text.IndexOf('#>', $i + 2)
-                $i = if ($end -lt 0) { $n } else { $end + 2 }
-                continue
+            # Blokovy komentar BEZ oddelovace uvnitr je v PowerShellu bily znak (`cat <# x #> .env` = `cat .env`).
+            if ($cl -eq 2) {
+                $body = $Text.Substring($i, $ce - $i)
+                $sepIn = $false
+                foreach ($s in $seps) { if ($s.Length -gt 0 -and $body.IndexOf($s, [System.StringComparison]::Ordinal) -ge 0) { $sepIn = $true; break } }
+                if (-not $sepIn) { [void]$buf.Append(' '); $i = $ce; continue }
             }
+            [void]$out.Add($buf.ToString()); [void]$buf.Clear()
+            while ($i -lt $ce) {
+                $hit = $null
+                foreach ($s in $seps) {
+                    if ($s.Length -gt 0 -and ($ce - $i) -ge $s.Length -and
+                        [string]::CompareOrdinal($Text, $i, $s, 0, $s.Length) -eq 0) { $hit = $s; break }
+                }
+                if ($null -ne $hit) {
+                    [void]$out.Add($buf.ToString()); [void]$buf.Clear()
+                    if ($KeepSeparators -ccontains $hit) { [void]$buf.Append($hit) }
+                    $i += $hit.Length; continue
+                }
+                [void]$buf.Append($Text[$i]); $i++
+            }
+            [void]$out.Add($buf.ToString()); [void]$buf.Clear()
+            continue
         }
 
         # $( ... ) se nedeli - je to jeden vyraz, ktery se rozebira zvlast.
@@ -597,6 +668,11 @@ function Split-UnquotedCore([string]$Text, [string[]]$Separators, [bool]$HonorEs
                 [string]::CompareOrdinal($Text, $i, $s, 0, $s.Length) -eq 0) {
                 $hit = $s; break
             }
+        }
+        # CR-T7 (kolo 4): `&` v presmerovani (`2>&1`, `<&3`, `&>/dev/null`) neni oddelovac - `psql ... 2>&1 | cat` se
+        # rozpadlo na list `1`, ktery pravidlo DB nepoznalo jako neutralni.
+        if ($hit -ceq '&' -and (($i -gt 0 -and '<>'.IndexOf($Text[$i - 1]) -ge 0) -or (($i + 1) -lt $n -and $Text[$i + 1] -eq '>'))) {
+            $hit = $null
         }
         if ($null -ne $hit) {
             [void]$out.Add($buf.ToString()); [void]$buf.Clear()
@@ -642,6 +718,9 @@ function Find-CloseParen([string]$Text, [int]$Start) {
         if ($c -eq $esc -and ($j + 1) -lt $n) { $j += 2; continue }
         if ($c -eq '"') { $inDouble = -not $inDouble; $j++; continue }
         if ($inDouble) { $j++; continue }
+        # CR-T (kolo 4): zavorka ani uvozovka v komentari se nepocita (`$( # it's)` + novy radek + `rm -rf x )`).
+        $cl = Get-CommentStart $Text $j
+        if ($cl -gt 0) { $j = Get-CommentEnd $Text $j $cl; continue }
         if ($c -eq "'") { $inSingle = $true; $j++; continue }
         if ($c -eq '(') { $depth++ }
         elseif ($c -eq ')') { $depth-- }
@@ -652,6 +731,17 @@ function Find-CloseParen([string]$Text, [int]$Start) {
 
 # Obsah vsech `$( ... )` v textu (kvotove korektne, vcetne zanoreni).
 function Get-Substitution([string]$Text) {
+    # CR-T (kolo 4): sjednoceni cteni s komentarem a bez nej (viz $script:CommentAware).
+    $a = Get-SubstitutionCore $Text
+    if (-not $script:CommentAware -or ([string]$Text).IndexOf('#') -lt 0) { return ,@($a) }
+    $script:CommentAware = $false
+    try { $b = Get-SubstitutionCore $Text } finally { $script:CommentAware = $true }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($x in @($a) + @($b)) { if ($out -cnotcontains $x) { [void]$out.Add($x) } }
+    return ,@($out)
+}
+
+function Get-SubstitutionCore([string]$Text) {
     $out = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
 
@@ -660,17 +750,25 @@ function Get-Substitution([string]$Text) {
     $n = $Text.Length
     $inSingle = $false
     $inDouble = $false
+    # CR-T (kolo 4): konec komentare (-1 = mimo komentar). V komentari uvozovky nejsou specialni, `$( ... )` se hleda dal
+    # (kde `#` komentarem neni, vidime vic).
+    $cmtEnd = -1
     while ($i -lt $n) {
         $c = $Text[$i]
+        if ($cmtEnd -ge 0 -and $i -ge $cmtEnd) { $cmtEnd = -1 }
         if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
         # `\$(...)` v Bashi substituci NEPROVEDE (nalez Amber G1, tataz trida).
         if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
+        if ($cmtEnd -lt 0 -and -not $inDouble) {
+            $cl = Get-CommentStart $Text $i
+            if ($cl -gt 0) { $cmtEnd = Get-CommentEnd $Text $i $cl }
+        }
         # Nalez Amber I3: apostrof UVNITR dvojitych uvozovek neni uvozovka, ale znak.
         # `echo "it's $(git reset --hard)"` otevrel "retezec" na apostrofu a substituce
         # se uz nenasla -> allow. Stav dvojitych uvozovek se proto sleduje taky - ale
         # jen kvuli apostrofu: substituce se v nich PROVADI, takze se prochazi dal.
-        if ($c -eq '"') { $inDouble = -not $inDouble; $i++; continue }
-        if ($c -eq "'" -and -not $inDouble) { $inSingle = $true; $i++; continue }
+        if ($c -eq '"' -and $cmtEnd -lt 0) { $inDouble = -not $inDouble; $i++; continue }
+        if ($c -eq "'" -and -not $inDouble -and $cmtEnd -lt 0) { $inSingle = $true; $i++; continue }
         # V dvojitych uvozovkach se substituce PROVADI, takze se prochazi dal.
         # Procesova substituce `<( ... )` a `>( ... )` je taky spusteny prikaz
         # (nalez Metis 5, kolo 2) - bere se stejne jako `$( ... )`.
@@ -741,6 +839,13 @@ function Split-CommandLine([string]$Command, [string[]]$KeepSeparators = @()) {
     foreach ($seg in (Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r") $KeepSeparators)) {
         [void]$result.Add($seg)
     }
+    # CR-T (kolo 4): i segmenty cteni BEZ komentare (viz $script:CommentAware) - komentar muze rozbor jen rozsirit.
+    if ($script:CommentAware -and $Command.IndexOf('#') -ge 0) {
+        $script:CommentAware = $false
+        try { $plain = @(Split-Unquoted $Command @('&&', '||', ';', '|', '&', "`n", "`r") $KeepSeparators) }
+        finally { $script:CommentAware = $true }
+        foreach ($seg in $plain) { if ($result -cnotcontains $seg) { [void]$result.Add($seg) } }
+    }
 
     # Substituce se rozebiraji navic - `echo $(git branch -D x)` je i to vnitrni.
     foreach ($e in (Get-Substitution $Command)) {
@@ -765,6 +870,17 @@ function Split-CommandLine([string]$Command, [string[]]$KeepSeparators = @()) {
 # jejich stav nesleduje. Pod PowerShellovym escapem (zpetny apostrof) vraci prazdno:
 # tam zadna substituce zpetnymi apostrofy neexistuje.
 function Get-BacktickSubstitution([string]$Text) {
+    # CR-T (kolo 4): sjednoceni cteni s komentarem a bez nej (viz $script:CommentAware).
+    $a = Get-BacktickSubstitutionCore $Text
+    if (-not $script:CommentAware -or ([string]$Text).IndexOf('#') -lt 0) { return ,@($a) }
+    $script:CommentAware = $false
+    try { $b = Get-BacktickSubstitutionCore $Text } finally { $script:CommentAware = $true }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($x in @($a) + @($b)) { if ($out -cnotcontains $x) { [void]$out.Add($x) } }
+    return ,@($out)
+}
+
+function Get-BacktickSubstitutionCore([string]$Text) {
     $out = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrEmpty($Text)) { return ,@() }
     $esc = $script:ScannerEscape
@@ -778,6 +894,17 @@ function Get-BacktickSubstitution([string]$Text) {
         $c = $Text[$i]
         if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $i++; continue }
         if ($c -eq $esc -and ($i + 1) -lt $n) { $i += 2; continue }
+        # CR-T (kolo 4): komentar mimo zpetne apostrofy je preskoci (Bash je v komentari nebere); uvnitr nich konci komentar
+        # i na zaviracim apostrofu (`` `rm -rf x # y` `` - obsah se rozebere).
+        $cl = Get-CommentStart $Text $i
+        if ($cl -gt 0) {
+            $ce = Get-CommentEnd $Text $i $cl
+            if ($start -ge 0) {
+                $bt = $Text.IndexOf('`', $i)
+                if ($bt -ge 0 -and $bt -lt $ce) { $ce = $bt }
+            }
+            $i = $ce; continue
+        }
         if ($c -eq "'" -and $start -lt 0) { $inSingle = $true; $i++; continue }
         if ($c -eq '`') {
             if ($start -lt 0) { $start = $i + 1 }
