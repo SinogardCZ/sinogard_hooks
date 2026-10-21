@@ -2012,14 +2012,18 @@ function Test-DatabaseRule($Leaf, $Config) {
         # ke ktere se pripoji (`\c`, `:connect`), nejde precist. CR-Q7 + CR-U: jen jednoduchy prikaz s cistym prostredim
         # (Test-DbAllowContext) - jinak "bez hostitele = mistni" neplati.
         $hostExeL = $hostExe.ToLowerInvariant()
-        if (-not $localDbDelete -and -not $sqlFromFile -and (Test-DbAllowContext $Leaf $hostExeL) -and
-            -not (Test-AbbreviatedDbOption $Leaf $hostExeL)) {
-            $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExe.ToLowerInvariant()
+        if (-not $localDbDelete -and -not $sqlFromFile -and -not (Test-AbbreviatedDbOption $Leaf $hostExeL)) {
+            $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExeL
             if ($null -ne $names -and (Test-DbNamesAllowed $names @(Get-Field $dl 'databases' @()))) {
-                # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
-                # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
-                Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
-                return $null
+                if (Test-DbAllowContext $Leaf $hostExeL) {
+                    # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
+                    # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
+                    Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
+                    return $null
+                }
+                # A179-O7 (Amber 2026-10-21): jmena sedi, ale prikaz neni jednoduchy - hlaska jmenuje povoleny tvar.
+                return @{ Id = 'dbDestroyLocalCompound'; Decision = 'deny'
+                          Shape = (Get-Field $shapes 'dbDestroyLocalCompound' 'DB') }
             }
         }
         return @{ Id = 'dbDestroyLocal'; Decision = 'deny'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }

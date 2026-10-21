@@ -130,6 +130,9 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   `PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `PGSERVICEFILE`, `SQLCMDSERVER` a `PSQLRC` v prostředí hooku prázdné. `cd x; …`,
   `dropdb x && createdb x`, `… | cat` a `… # komentář` tedy končí `deny`, `2>&1` a prefix `PGPASSWORD=x` ne. Kód
   rozboru argumentů, množiny neutrálních příkazů a pravidel pro hodnoty proměnných z kola CR-S a CR-T zmizel.
+  **Zúžení potvrdila Amber jako `A179-O7`**: `allow` z `gate.dbDestroyLocal` platí v 0.3.1 jen pro samostatný příkaz
+  jednoho SQL klienta bez proměnných hostitele. Složený tvar se jménem ve vzoru končí novým tvarem
+  `gate:dbDestroyLocalCompound`. Jeho hláška jmenuje povolený tvar (`psql -d <db> -c "…"` nebo `dropdb <db>`).
 - **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
   - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
   - `${#x}` není komentář.
