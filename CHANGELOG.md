@@ -164,6 +164,22 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
 - **Vědomě beze změny (W7).** Segment, který je jen přesměrováním (`>soubor`), nemá list. `allow` pro DB ho odmítne
   kontrolou počtu statementů.
 
+**Osmé kolo `/code-review` nad CR-W (CR-X, skupina `CR-X`):**
+- **Moje regrese z CR-W (X1, X2).**
+  - Parser PowerShellu znovu běží vždy. Podmínka „text má závorku“ pouštěla `return git reset --hard` a `throw …`.
+  - CR-W1 dovolil `allow` i v obalu. Obal ale načítá startovní soubory (`BASH_ENV`, profil pwsh, AutoRun cmd,
+    `sudo -i`/`-E`), které mohou nastavit `PGHOST`. Statement proto musí začínat tím SQL klientem. Před klientem smí
+    stát jen přiřazení neškodných proměnných libpq (`PGPASSWORD`, `PGUSER`, `PGDATABASE`, `PGPORT`, `PGCONNECT_TIMEOUT`,
+    `PGAPPNAME`) nebo obalová závorka PowerShellu. `HOME=/x psql …` (přesune `~/.psqlrc`) a `env PGHO\ST=x dropdb …`
+    vedou k `deny`.
+- **Druhé čtení bez komentáře (X3, X5, X6, X7).**
+  - Spouští se, když příkaz obsahuje `#` nebo jmenuje `pwsh`/`powershell`. Regex na `-EncodedCommand` minul mezeru
+    v uvozovkách i slepené uvozovky a zároveň chytal `grep -e …`.
+  - Při přetečení rozpočtu se už nezakazuje celý příkaz. Platí záloha K7-1 pro DB literál, stejně v gate i secrets.
+- **Ostatní (X8, X10).**
+  - Obalová závorka se strhává jen jako jeden pár, `(a) + (b)` se nezdvojí.
+  - U složeného příkazu má hláška složeného tvaru přednost před hláškou o proměnné prostředí.
+
 - **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
   - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
   - `${#x}` není komentář.

@@ -1538,7 +1538,7 @@ if ($script:CmdTools -contains $toolName) {
     # CR-W8 (kolo 7): spolecny protokol s gate.ps1 (_common.ps1, Invoke-PlainCommentReading).
     if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
         $pr = Invoke-PlainCommentReading { Test-SecretCommand $command $config }
-        if ($null -ne $pr.Result -and $pr.Result.Decision -eq 'deny') { $decision = $pr.Result }
+        if ($null -ne $pr -and $pr.Decision -eq 'deny') { $decision = $pr }
     }
 } else {
     $path = [string](Get-Field $toolInput 'file_path' '')

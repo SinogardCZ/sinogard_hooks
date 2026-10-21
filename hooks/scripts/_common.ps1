@@ -408,21 +408,20 @@ $script:ScannerEscape = '\'
 $script:CommentAware = $true
 $script:BlockCommentSplit = $false
 
-# CR-W2/W3/W8 (TASK-179, kolo 7): druhe cteni prikazu BEZ komentare - jeden protokol pro gate.ps1 i secrets.ps1. Spousti se,
-# kdyz prikaz obsahuje `#` nebo nese zakodovany text (`-EncodedCommand <base64>` - dekodovane telo `#` mit muze, prikaz ne).
-# Rozpocet prace na substituce se NEnuluje (strop jednoho behu hooku drzi timeout 10 s); narazi-li druhe cteni na strop,
-# volajici rozhodne `deny` (Overflow). Z druheho cteni plati jen `deny`, audit je ztlumeny.
+# CR-W2/W3/W8 + CR-X3/X5/X6/X7 (TASK-179, kola 7 a 8): druhe cteni prikazu BEZ komentare - jeden protokol pro gate.ps1
+# i secrets.ps1. Spousti se, kdyz prikaz obsahuje `#`, nebo jmenuje pwsh/powershell (zakodovany prikaz `-EncodedCommand` ma
+# po dekodovani `#` mit muze, a jeho tvary - mezera v uvozovkach, slepene uvozovky - regex nad textem nepozna). Rozpocet
+# prace na substituce se NEnuluje (strop jednoho behu hooku drzi timeout 10 s); preteceni plati dal pres SubstOverflow
+# (zaloha K7-1 v gate.ps1 pro DB literal). Z druheho cteni plati jen `deny`, audit je ztlumeny.
 function Test-NeedsPlainReading([string]$Command) {
-    return ($Command.IndexOf('#') -ge 0 -or $Command -match '(?i)(?:^|\s)-e[a-z]*\s+[''"]?[A-Za-z0-9+/=]{16,}')
+    return ($Command.IndexOf('#') -ge 0 -or $Command -match '(?i)\b(?:pwsh|powershell)\b')
 }
 function Invoke-PlainCommentReading([scriptblock]$Body) {
     $prevAware = $script:CommentAware
     $prevMuted = $script:AuditMuted
-    $ov = $script:SubstOverflow
     $script:CommentAware = $false
     $script:AuditMuted = $true
-    try { $r = & $Body } finally { $script:CommentAware = $prevAware; $script:AuditMuted = $prevMuted }
-    return @{ Result = $r; Overflow = ($script:SubstOverflow -and -not $ov) }
+    try { return (& $Body) } finally { $script:CommentAware = $prevAware; $script:AuditMuted = $prevMuted }
 }
 
 function Get-CommentStart([string]$Text, [int]$I) {
@@ -1152,7 +1151,8 @@ function Get-WrapperTail($Argv, [int]$Depth = 0) {
         $tok = [string]$arr[$i]
 
         # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
-        if ($tok -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
+        # CR-X9 (TASK-179, kolo 8): i se jmenem s escapem nebo uvozovkami (`env PGHO\ST=x dropdb ...` - env dostane PGHOST=x).
+        if (($tok -replace '[\\`''"]', '') -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
         if ($tok -match '^-') { $i++; continue }   # osamely prepinac bez znameho obalu
 
         $name = Get-ExecutableName $tok

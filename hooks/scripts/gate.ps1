@@ -586,11 +586,18 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     # proto rozhoduje i parser PowerShellu: kazdy prikaz (CommandAst), jehoz text zadny list nema, se rozebere navic.
     # Prikaz s blokem skriptu (`& { ... }`, `ForEach-Object { ... }`) se preskoci - jeho vnitrni prikazy jsou vlastni
     # CommandAst a blok uz rozebral Get-CommandLeaf.
-    # CR-W5/W6 (kolo 7): jen kdyz text zavorku ma (prikaz ve vyrazu bez ni nestoji); porovnani textu bez operatoru
-    # spusteni a obalovych zavorek (`& x`, `(x)`); hloubka se nezvysuje (prikaz ve vyrazu je na teze urovni jako statement).
+    # CR-W5/W6 (kolo 7): porovnani textu bez operatoru spusteni a obalovych zavorek (`& x`, `(x)`); hloubka se nezvysuje
+    # (prikaz ve vyrazu je na teze urovni jako statement).
     # List z parseru nese `FromAst` - Test-DbAllowContext ho bere jako slozeny tvar (prikaz uvnitr vyrazu).
-    if ((Get-ScannerEscape) -eq '`' -and $pl.Rest.IndexOf('(') -ge 0) {
-        $normCmd = { param($s) $t = ([string]$s).Trim(); while ($t -match '^\((.*)\)$') { $t = $Matches[1].Trim() }; ($t -replace '^[&.]\s+', '').Trim() }
+    # CR-X1 (kolo 8): bez podminky "text ma zavorku" - `return git reset --hard` / `throw ...` prikaz spusti i bez ni.
+    # CR-X8: obalova zavorka se strhava jen jako JEDEN par (`(a) + (b)` ne).
+    if ((Get-ScannerEscape) -eq '`') {
+        $normCmd = {
+            param($s)
+            $t = ([string]$s).Trim()
+            while ($t.StartsWith('(') -and $t.EndsWith(')') -and (Find-CloseParen $t 1) -eq $t.Length) { $t = $t.Substring(1, $t.Length - 2).Trim() }
+            ($t -replace '^[&.]\s+', '').Trim()
+        }
         $raws = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
         foreach ($l in $out) { [void]$raws.Add((& $normCmd $l.Raw)) }
         $tk = $null; $pe = $null
@@ -1298,10 +1305,18 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
 $script:DbHostEnvNames = @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'SQLCMDSERVER', 'PSQLRC')
 # CR-W4 (kolo 7): vraci PRICINU (prazdny retezec = allow smi) - promenna v prostredi hooku ma vlastni hlasku, protoze
 # samostatny prikaz, ktery hlaska slozeneho tvaru doporucuje, by tam nepomohl.
+$script:DbPrefixAssignOk = @('PGPASSWORD', 'PGUSER', 'PGDATABASE', 'PGPORT', 'PGCONNECT_TIMEOUT', 'PGAPPNAME')
 function Test-DbAllowContext($Leaf, [string]$HostExe) {
+    # CR-X10 (kolo 8): nejdriv tvar prikazu, az pak prostredi hooku - hlaska prostredi u slozeneho tvaru by vedla dvakrat.
+    $why = Get-DbCompoundReason $Leaf $HostExe
+    if ($why -ne '') { return $why }
     foreach ($n in $script:DbHostEnvNames) {
         if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($n))) { return ('env:' + $n) }
     }
+    return ''
+}
+
+function Get-DbCompoundReason($Leaf, [string]$HostExe) {
     if ([bool](Get-LeafField $Leaf 'FromAst' $false)) { return 'compound' }
     $cmd = [string]$script:FullCommand
     $rx = '(?i)(?<![A-Za-z0-9_])(' + ($script:DbHostEnvNames -join '|') + ')(?![A-Za-z0-9_])'
@@ -1313,6 +1328,18 @@ function Test-DbAllowContext($Leaf, [string]$HostExe) {
     $rest = [regex]::Replace([string](Split-Heredoc $cmd).Rest, '&>>?\s*(?:"[^"]*"|''[^'']*''|[^\s;&|]+)', ' ')
     $stmts = @(Split-Statement $rest)
     if ($stmts.Count -ne 1) { return 'compound' }
+    # CR-X2 (kolo 8): statement ZACINA tim SQL klientem (pred nim jen obalova zavorka PowerShellu a prirazeni neskodnych
+    # promennych libpq) - obal (`sudo`, `env`, `bash -c`, `pwsh -c`, `cmd /c`) nacita startovni soubory (BASH_ENV, profil,
+    # AutoRun, `sudo -i`), ktere mohou nastavit PGHOST; `HOME=/x` presune ~/.psqlrc.
+    $head = ([string]$stmts[0]).Trim()
+    while ($head.StartsWith('(')) { $head = $head.Substring(1).TrimStart() }
+    while ($head -match '^([A-Za-z_][A-Za-z0-9_]*)=(?:"[^"]*"|''[^'']*''|\S*)\s+(.*)$') {
+        if ($script:DbPrefixAssignOk -cnotcontains $Matches[1]) { return 'compound' }
+        $head = $Matches[2].TrimStart()
+    }
+    # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
+    $first = Split-Arguments $head
+    if ($first.Count -eq 0 -or ([string](Get-ExecutableName ([string]$first[0]))).ToLowerInvariant() -cne $HostExe) { return 'compound' }
     # Kazdy list prikazu je tentyz SQL klient nebo telo heredocu pro nej - roura (`| cat`), substituce, zpetne apostrofy
     # i komentar (vlastni segment) pridavaji jiny list. CR-V2 + CR-W6: prikaz uvnitr vyrazu PowerShellu
     # (`[Environment]::X(...) + (psql ...)`) dohleda parser jako list `FromAst` - ten allow nema (vyse).
@@ -2542,8 +2569,7 @@ if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlai
         }
         return $null
     }
-    if ($null -ne $pr.Result) { $decision = $pr.Result }
-    elseif ($pr.Overflow) { $decision = Invoke-LeafVerdict (New-OpaqueLeaf $command 'depth') $config $false }
+    if ($null -ne $pr) { $decision = $pr }
 }
 
 # K7-1 (TASK-179, kolo 7): rozbor substituci v obalu kontejneru narazil na strop prace (_common.ps1, SubstWorkBudget) - cil
