@@ -302,6 +302,20 @@
     { "group": "Q102-db", "name": "Q10 prepis zuzeny, testovaci DB -> ticho", "tool": "Bash", "cmd": "psql -d gsd_test_abc -c \"DROP TABLE t\"", "override": "@narrow", "expect": "allow" },
     { "group": "Q102-db", "name": "Q10 prepis rozsiruje vzory -> odmitnut, produkcni deny", "tool": "Bash", "cmd": "psql -d gsd_prod -c \"DROP TABLE t\"", "override": "@widen", "expect": "deny" },
     { "group": "Q102-inv", "name": "zdroj invariantu bez pripadu: cesta s U+FFFD z prvniho vydani, hvezdicka v povolene slozce -> ticho + audit (Q4)", "tool": "Bash", "cmd": "rm -rf bin/hl�sen�/*", "expect": "allow" },
-    { "group": "Q102-inv", "name": "zdroj invariantu bez pripadu: CR-P2 vicenasobne prirazeni (druhe poradi) -> deny (Q5)", "tool": "PowerShell", "cmd": "$x = 'echo'; $a, $x = 'b', 'git'; & $x reset --hard", "expect": "deny" }
+    { "group": "Q102-inv", "name": "zdroj invariantu bez pripadu: CR-P2 vicenasobne prirazeni (druhe poradi) -> deny (Q5)", "tool": "PowerShell", "cmd": "$x = 'echo'; $a, $x = 'b', 'git'; & $x reset --hard", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q1b DROP DATABASE se seznamem jmen -> deny", "tool": "PowerShell", "cmd": "sqlcmd -S localhost -Q \"DROP DATABASE gsd_test_1, prod\"", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q1b kontrola: jedno testovaci jmeno -> ticho", "tool": "PowerShell", "cmd": "sqlcmd -S localhost -Q \"DROP DATABASE gsd_test_1\"", "expect": "allow", "auditShape": "^gate:dbDestroyLocal$", "auditDecision": "allow" },
+    { "group": "CR-Q", "name": "CR-Q2 trojdilne jmeno v hranatych zavorkach -> deny", "tool": "PowerShell", "cmd": "sqlcmd -S localhost -d gsd_test_1 -Q \"DROP TABLE [prod].[dbo].[users]\"", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q2 kontrola: dvojdilne jmeno -> ticho", "tool": "PowerShell", "cmd": "sqlcmd -S localhost -d gsd_test_1 -Q \"DROP TABLE [dbo].[users]\"", "expect": "allow" },
+    { "group": "CR-Q", "name": "CR-Q3 viditelne SQL + soubor -f -> deny", "tool": "Bash", "cmd": "psql -d gsd_test_1 -c \"DROP TABLE t\" -f evil.sql", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q3 viditelne SQL + stdin ze souboru -> deny", "tool": "Bash", "cmd": "psql -d gsd_test_1 -c \"DROP TABLE t\" < evil.sql", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q4 sqlcmd :connect v heredocu -> deny", "tool": "Bash", "cmd": "sqlcmd -S localhost -d gsd_test_1 <<EOF\n:connect other-sql\nDROP TABLE users\nEOF", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q4 sqlcmd !! v -Q -> deny", "tool": "PowerShell", "cmd": "sqlcmd -S localhost -d gsd_test_1 -Q \"!!dir\nDROP TABLE users\"", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q5 prepis decision deny se vzorem mimo strop plati (ne odmitnuti -> vychozi allow)", "tool": "Bash", "cmd": "psql -d gsd_test_1 -c \"DROP TABLE t\"", "override": "{\"gate\":{\"dbDestroyLocal\":{\"decision\":\"deny\",\"databases\":[\"hrms_test_*\"]}}}", "expect": "deny", "auditShape": "^gate:dbDestroyLocal", "auditDecision": "deny" },
+    { "group": "CR-Q", "name": "CR-Q7 PGHOST v drivejsim statementu (PowerShell) -> deny", "tool": "PowerShell", "cmd": "$env:PGHOST='db.firma.cz'; psql -d app_dev -c \"TRUNCATE users\"", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q7 export PGHOST (Bash) -> deny", "tool": "Bash", "cmd": "export PGHOST=db.firma.cz; psql -d gsd_dev -c \"TRUNCATE users\"", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q7 SQLCMDSERVER prefix -> deny", "tool": "Bash", "cmd": "SQLCMDSERVER=db.firma.cz sqlcmd -d gsd_dev -Q \"TRUNCATE TABLE users\"", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q9 destruktivni literal v roure do iex -> deny", "tool": "PowerShell", "cmd": "'git reset --hard' | iex", "expect": "deny" },
+    { "group": "CR-Q", "name": "CR-Q9 kontrola: neskodny text v roure do iex -> ticho + audit", "tool": "PowerShell", "cmd": "'git status' | iex", "expect": "allow", "auditShape": "^gate:invoke-expression$", "auditDecision": "allow" }
   ]
 }

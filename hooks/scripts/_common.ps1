@@ -261,6 +261,9 @@ function Test-OverrideValue([string]$Rule, $Value, $Default) {
             # ZOPT-Q102 (0.3.1): `ask` uz neni hodnota; `allow` = jen databaze ve vzorech `databases`, jinak deny.
             $decision = Get-Field $Value 'decision' $null
             if ($null -eq $decision -or @('allow', 'deny') -cnotcontains [string]$decision) { return $false }
+            # CR-Q1 (/code-review 0.3.1): `deny` vzory necte - odmitnuti kvuli vzorum mimo strop by vratilo vychozi `allow`,
+            # tedy UVOLNENI prepisu, ktery bral vse.
+            if ([string]$decision -ceq 'deny') { return $true }
             # A179-O3 (Q10): vychozi vzory testovacich a vyvojovych DB jsou strop - prepis z nich smi jen vybirat
             # (chybejici `databases` = prazdny seznam = zadna DB se nepovoli, tedy zprisneni).
             $dbs = Get-Field $Value 'databases' @()

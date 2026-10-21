@@ -1441,9 +1441,10 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
     }
 
     if (Test-EnvironmentDump $Command) {
-        if ($null -eq $worst) {
-            $worst = New-PolicyVerdict $sec 'envDump' ([string](Get-Field $shapes 'envDump' 'env'))
-        }
+        # CR-Q6 (/code-review 0.3.1): politika `deny` (prepis smi zprisnit) prebije drivejsi audit.
+        $ev = New-PolicyVerdict $sec 'envDump' ([string](Get-Field $shapes 'envDump' 'env'))
+        if ($ev.Decision -eq 'deny') { return $ev }
+        if ($null -eq $worst) { $worst = $ev }
     }
 
     $namePattern = [string](Get-Field $sec 'envVarNamePattern' '(^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)S?(_|$)')
@@ -1461,9 +1462,9 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
         }
     }
     if ($name -ne '') {
-        if ($null -eq $worst) {
-            $worst = New-PolicyVerdict $sec 'envVarRead' (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name)))
-        }
+        $vv = New-PolicyVerdict $sec 'envVarRead' (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name)))
+        if ($vv.Decision -eq 'deny') { return $vv }
+        if ($null -eq $worst) { $worst = $vv }
     }
 
     # Z117-Q27 = B (A117-N16): telo obalu (`bash -c 'cat .env'`, `pwsh -c "Get-Content .env"`) - do 0.3.0 mlcelo,

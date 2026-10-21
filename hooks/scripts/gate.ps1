@@ -1079,7 +1079,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             if ($rest.Count -gt 0 -and (Test-ParameterPrefix ($rest[0].ToLowerInvariant()) 'command')) { $skip = 1 }
             $inner = (Join-CommandString ($rest | Select-Object -Skip $skip))
             if ($inner -eq '') {
-                [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = $exe; GitConfig = @() })
+                [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = $exe; GitConfig = @()
+                                  PipeText = [string]$script:FullCommand })
                 return $out
             }
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni - `iex $cmd` zustava ask.
@@ -1223,6 +1224,19 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
     return $false
 }
 
+# CR-Q7 (/code-review 0.3.1): Test-LocalHost bere chybejiciho hostitele jako mistniho. To plati, jen kdyz hostitele
+# nenese promenna prostredi: prirazeni v drivejsim statementu (`$env:PGHOST=...; psql ...`, `export PGHOST=...`) list
+# nevidi a hodnotu z prostredi procesu (zdedi ji i spousteny prikaz) taky ne. Jmeno promenne v textu prikazu = hostitel
+# neznamy; v prostredi hooku rozhoduje hodnota (`PGSERVICE` vzdy - hostitele nese soubor sluzby).
+function Test-DbHostFromEnvironment([string]$Text, $LocalHosts) {
+    if ($Text -match '(?i)\b(PGHOST|PGHOSTADDR|PGSERVICE|PGSERVICEFILE|SQLCMDSERVER)\b') { return $true }
+    if (-not [string]::IsNullOrWhiteSpace($env:PGSERVICE)) { return $true }
+    foreach ($v in @($env:PGHOST, $env:PGHOSTADDR, $env:SQLCMDSERVER)) {
+        if (-not [string]::IsNullOrWhiteSpace($v) -and -not (Test-LocalHost ([string]$v) $LocalHosts)) { return $true }
+    }
+    return $false
+}
+
 # ZOPT-Q102 + A179-O3 (Q10), 0.3.1: jmena databazi, kterych se destruktivni operace nad MISTNIM hostitelem tyka. Do 0.3.0
 # konila `ask` (H-f povoloval jen uzkou sadu tvaru). Od 0.3.1: VSECHNA jmena precitelna a ve vzorech
 # `gate.dbDestroyLocal.databases` (testovaci a vyvojove DB GSD i HRMS) -> hook mlci + audit; jinak deny. Cte se doslova
@@ -1242,7 +1256,10 @@ function Get-DbTargetNames($Leaf, [string]$SqlVisible, [string]$NameText, [strin
     if ($SqlVisible -match '(?i)\bUSE\b|\bEXEC(UTE)?\b|\bsp_executesql\b|\bdblink') { return $null }
     # Meta-prikaz (`\c`, `\!`) zna jen psql/pgcli - u sqlcmd by `\` v hodnote `-S "(localdb)\X"` (Get-SqlText bere i ji) cetl jako meta.
     if (@('psql', 'pgcli') -ccontains $HostExe -and $SqlVisible -match '\\[A-Za-z!]') { return $null }
-    if ($SqlVisible -match '[\w\]"]\.[\w\["]*\.[\w\["]') { return $null }
+    # CR-Q4 (/code-review 0.3.1): prikazy sqlcmd (`:connect` prepne server, `:r` vlozi soubor, `!!` spusti shell).
+    if ($SqlVisible -match '(?i)(?:^|[\s"''])(?::(?:connect|r|setvar|on|out|error|reset|ed|list|listvar|perftrace|serverlist|xml|exit|quit)\b|!!)') { return $null }
+    # CR-Q2 (/code-review 0.3.1): i jmena v hranatych zavorkach (`[prod].[dbo].[t]`) a mezery kolem tecek.
+    if ($SqlVisible -match '[\w\]"]\s*\.\s*[\w\[\]"]*\s*\.\s*[\w\["]') { return $null }
     $q = '(?:"([^"]*)"|''([^'']*)''|([^\s"'';|&]+))'
     $conn = New-Object System.Collections.ArrayList
     $targets = New-Object System.Collections.ArrayList
@@ -1295,6 +1312,8 @@ function Get-DbTargetNames($Leaf, [string]$SqlVisible, [string]$NameText, [strin
 
     $dropDbRx = 'DROP' + $script:SqlGap + 'DATABASE(?:' + $script:SqlGap + 'IF' + $script:SqlGap + 'EXISTS)?' + $script:SqlGap + '(\[[^\]]+\]|"[^"]+"|[^\s;,()]+)'
     foreach ($m in [regex]::Matches($SqlVisible, $dropDbRx, 'IgnoreCase')) {
+        # CR-Q1b (/code-review 0.3.1): `DROP DATABASE a, b` rusi i dalsi jmena - seznam = necitelne.
+        if ($SqlVisible.Substring($m.Index + $m.Length) -match '^\s*,') { return $null }
         [void]$targets.Add($m.Groups[1].Value.Trim('[', ']', '"'))
     }
     $efDrop = [regex]::IsMatch([string]$Leaf.Raw + ' ' + [string](Get-LeafField $Leaf 'Outer' ''),
@@ -1901,7 +1920,11 @@ function Test-DatabaseRule($Leaf, $Config) {
             return @{ Id = 'dbDestroyContainer'; Decision = 'deny'; Shape = (Get-Field $shapes 'dbDestroyContainer' 'DB') }
         }
         # Z117-Q20 + A179-O3 (Q10): `sqllocaldb delete` smaze instanci se VSEMI databazemi - nikdy allow.
-        if (-not $localDbDelete) {
+        # CR-Q3 (/code-review 0.3.1): SQL ze souboru nebo stdin (`-f`, `-i`, `<`) vedle viditelneho nevidime - jmeno DB,
+        # ke ktere se pripoji (`\c`, `:connect`), nejde precist. CR-Q7: hostitel z promenne prostredi (`PGHOST`,
+        # `SQLCMDSERVER`, `PGSERVICE`) v prikazu nebo v prostredi hooku - "bez hostitele = mistni" pak neplati.
+        if (-not $localDbDelete -and -not $sqlFromFile -and
+            -not (Test-DbHostFromEnvironment ([string]$script:FullCommand + ' ' + $hostText) $localHosts)) {
             $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExe.ToLowerInvariant()
             if ($null -ne $names -and (Test-DbNamesAllowed $names @(Get-Field $dl 'databases' @()))) {
                 # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
@@ -1993,6 +2016,19 @@ function Get-InterpreterDestructiveVerdict([string]$Body, $Config) {
     return $null
 }
 
+function Get-RawDestructiveVerdict([string]$Raw, $Config) {
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+    foreach ($t in @(Get-Field $gate 'rawDestructiveTokens' @())) {
+        $token = [string]$t
+        if ($token -eq '') { continue }
+        if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+            return (New-PolicyVerdict $gate 'opaqueDestructive' (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))))
+        }
+    }
+    return $null
+}
+
 function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
@@ -2016,13 +2052,8 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
     # ZOPT-Q102 (0.3.1): `invoked` sem patri taky - do 0.3.0 koncil `ask` sam, od 0.3.1 je jeho politika `audit`, takze by
     # `$x = 'a'; ${x} = 'git'; & $x reset --hard` (hlava nerozbalena, literal videt) prosel tichem (A179-O3 Q5: deny).
     if (@('variable', 'heredocUnterminated', 'depth', 'invoked') -ccontains $Why -and $Raw -ne '') {
-        foreach ($t in @(Get-Field $gate 'rawDestructiveTokens' @())) {
-            $token = [string]$t
-            if ($token -eq '') { continue }
-            if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-                return (New-PolicyVerdict $gate 'opaqueDestructive' (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))))
-            }
-        }
+        $dv = Get-RawDestructiveVerdict $Raw $Config
+        if ($null -ne $dv) { return $dv }
     }
 
     # ZOPT-Q102 / A179-O3 (0.3.1): politika `gate.opaque.<pricina>` je `audit` nebo `deny`; neznama hodnota nebo pricina
@@ -2171,6 +2202,14 @@ function Test-Leaf($Leaf, $Config) {
         return (Resolve-OpaqueDecision ([string](Get-LeafField $Leaf 'Why' 'unknown')) `
                                        ([string]$Leaf.Raw) `
                                        ([string](Get-LeafField $Leaf 'Body' '')) $Config)
+    }
+
+    # CR-Q9 (/code-review 0.3.1): `iex` bez argumentu spusti text z roury - destruktivni literal v prikazu = Q5
+    # (`'git reset --hard' | iex` jako `iex 'git reset --hard'`); bez literalu A179-O4 (ticho + audit).
+    $pipeText = [string](Get-LeafField $Leaf 'PipeText' '')
+    if ($pipeText -ne '') {
+        $dv = Get-RawDestructiveVerdict $pipeText $Config
+        if ($null -ne $dv) { return $dv }
     }
 
     # Nalez Ada N21: prikaz jako ARGUMENT vzdaleneho shellu. `ssh host "rm -rf /"` se

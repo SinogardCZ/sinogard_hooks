@@ -55,6 +55,16 @@ Přejmenováno: `gate.askPatterns` → `gate.auditPatterns`, `secrets.askPathPat
 `secrets.envFile.otherPolicy` = `trackedAllowElseAudit`; projektový přepis se starým jménem H-c odmítne (platí výchozí).
 ⚠️ Migrace: přepis `gate.opaque` s `depth: audit` (tvar dřívějšího zúžení GSD) je od 0.3.1 uvolnění → celý klíč
 `gate.opaque` odmítnut (platí výchozí, audit `config:overrideRejected:gate.opaque`). Hodnoty `ask` H-c odmítne také.
+
+**Po `/code-review` změny `ZOPT-Q102` (CR-Q, řádky `tests/fixtures/task179-gate.json` / `task179-secrets.json`, skupina `CR-Q`):**
+lokální destruktivní DB operace je `deny` (jméno nečitelné) i se seznamem jmen v `DROP DATABASE a, b` (CR-Q1b), s trojdílným
+jménem v hranatých závorkách (CR-Q2), se SQL ze souboru nebo stdin vedle viditelného (CR-Q3), s příkazem `sqlcmd`
+(`:connect`, `:r`, `!!` …, CR-Q4) a s hostitelem z proměnné prostředí (`PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `SQLCMDSERVER`
+v textu příkazu nebo nemístní hodnota v prostředí hooku, CR-Q7). Přepis `gate.dbDestroyLocal` s `decision: deny` platí i se
+vzory mimo strop (dřív odmítnut → výchozí `allow`, CR-Q5). Zpřísněná politika `envDump` / `envVarRead` přebije dřívější
+audit téhož příkazu (CR-Q6). `iex` bez argumentu s destruktivním literálem v příkazu = `deny` jako `iex '…'` (CR-Q9, Q5;
+bez literálu dál `A179-O4`). Vědomě beze změny: přejmenované klíče přepisu (CR-Q8, migrace výše; na stroji žádný přepis
+není) a nečtené `gate.dbDestroyLocal.hosts` (CR-Q10, popsáno výše).
 Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)
