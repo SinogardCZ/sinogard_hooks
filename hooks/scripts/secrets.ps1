@@ -108,7 +108,7 @@ function ConvertTo-GlobRegex([string]$Glob) {
 # uvnitr jmena deterministicky nerozlisit; audit + pojmenovana mez se spoustecem.
 function Test-GlobAimsAtProtectedPath([string]$GlobNorm, $Sec) {
     if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'denyPathPatterns' @())) { return $true }
-    if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'askPathPatterns' @())) { return $true }
+    if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'auditPathPatterns' @())) { return $true }
     $globBase = Get-BaseName $GlobNorm
     if (Test-AnyPattern $globBase @(Get-Field (Get-Field $Sec 'envFile') 'denyNames' @())) { return $true }
     $literal = ($globBase -replace '[\*\?]', '')
@@ -198,8 +198,7 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # prehodnoceni (fixture adresar u invariantu) nese README.
     if ($AllowGlob -and $norm -match '[\*\?]') {
         if (Test-GlobAimsAtProtectedPath $norm $sec) {
-            return @{ Id = 'wildcardPath'; Decision = 'ask'
-                      Shape = (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)) }
+            return (New-PolicyVerdict $sec 'wildcardPath' (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)))
         }
         $globRegex = '^' + (ConvertTo-GlobRegex $base) + '$'
         foreach ($known in @(Get-Field $sec 'protectedBaseNames' @())) {
@@ -223,8 +222,7 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
         }
         $rel = Get-RelativeToCwd $norm (ConvertTo-NormalPath $script:Cwd)
         if (Test-GitTracked $script:Cwd $rel) { return $null }
-        return @{ Id = 'envFileUntracked'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'envFileUntracked' '{path}')).Replace('{path}', [string]($Path))) }
+        return (New-PolicyVerdict $sec 'envFileUntracked' (([string](Get-Field $shapes 'envFileUntracked' '{path}')).Replace('{path}', [string]($Path))))
     }
 
     # (2) tvrde zakazane tvary
@@ -247,14 +245,13 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
                      $norm -match '(^|/)hooks/(hooks\.json|config/[^/]+)$')
     if ($IsWrite -and ($underRoot -or $relUncertain -or (Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @())) -or
                        (Test-AnyPattern $abs @(Get-Field $sec 'selfProtectPathPatterns' @())))) {
-        return @{ Id = 'selfProtect'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))) }
+        # A179-O3 (Q16): agent nesmi umet vypnout vlastni pojistku - politika `selfProtect` je `deny` a prepis ji uvolnit nesmi.
+        return (New-PolicyVerdict $sec 'selfProtect' (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))))
     }
 
-    # (4) seda zona
-    if (Test-AnyPattern $norm @(Get-Field $sec 'askPathPatterns' @())) {
-        return @{ Id = 'settingsLocal'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'settingsLocal' '{path}')).Replace('{path}', [string]($Path))) }
+    # (4) seda zona - od 0.3.1 (ZOPT-Q102) jen cteni; zapis chyta sebeochrana vyse
+    if (Test-AnyPattern $norm @(Get-Field $sec 'auditPathPatterns' @())) {
+        return (New-PolicyVerdict $sec 'settingsLocal' (([string](Get-Field $shapes 'settingsLocal' '{path}')).Replace('{path}', [string]($Path))))
     }
 
     return $null
@@ -1445,7 +1442,7 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
 
     if (Test-EnvironmentDump $Command) {
         if ($null -eq $worst) {
-            $worst = @{ Id = 'envDump'; Decision = 'ask'; Shape = (Get-Field $shapes 'envDump' 'env') }
+            $worst = New-PolicyVerdict $sec 'envDump' ([string](Get-Field $shapes 'envDump' 'env'))
         }
     }
 
@@ -1465,8 +1462,7 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
     }
     if ($name -ne '') {
         if ($null -eq $worst) {
-            $worst = @{ Id = 'envVarRead'; Decision = 'ask'
-                        Shape = (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name))) }
+            $worst = New-PolicyVerdict $sec 'envVarRead' (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name)))
         }
     }
 
@@ -1480,7 +1476,9 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
                 # obsah neni videt -> ask (fail-closed).
                 $decoded = ConvertFrom-EncodedCommandText $inner
                 if ($decoded -eq '') {
-                    if ($null -eq $worst) { $worst = @{ Id = 'wrapperEncoded'; Decision = 'ask'; Shape = (Get-Field $shapes 'wrapperEncoded' 'pwsh -EncodedCommand') } }
+                    $wv = New-PolicyVerdict $sec 'wrapperEncoded' ([string](Get-Field $shapes 'wrapperEncoded' 'pwsh -EncodedCommand'))
+                    if ($wv.Decision -eq 'deny') { return $wv }
+                    if ($null -eq $worst) { $worst = $wv }
                     continue
                 }
                 $inner = $decoded
@@ -1544,14 +1542,13 @@ if ($script:CmdTools -contains $toolName) {
 
 if ($null -eq $decision) { exit 0 }
 
-# H-b (TASK-117): kazde `ask` a `deny` jde do auditu s ID tvaru - nikdy s cestou ani jmenem.
-Write-GateAudit $toolName ('secrets:' + [string]$decision.Id) ([string]$decision.Decision) $config
-
-$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
-
-if ($decision.Decision -eq 'ask' -and $mode -eq 'bypassPermissions') {
-    $reason = $reason + (Get-Text $config 'bypassSuffix' ' bypass')
-    Write-DenyDecision $reason
+# ZOPT-Q102 (0.3.1): seda zona (`audit`) = hook mlci a zapise radek auditu s ID tvaru; `ask` uz neexistuje.
+if ($decision.Decision -eq 'audit') {
+    Write-GateAudit $toolName ('secrets:' + [string]$decision.Id) 'allow' $config
+    exit 0
 }
-if ($decision.Decision -eq 'deny') { Write-DenyDecision $reason }
-Write-AskDecision $reason
+
+# H-b (TASK-117): kazde `deny` jde do auditu s ID tvaru - nikdy s cestou ani jmenem.
+Write-GateAudit $toolName ('secrets:' + [string]$decision.Id) 'deny' $config
+$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
+Write-DenyDecision $reason

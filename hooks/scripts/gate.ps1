@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  PreToolUse brana par. 6: destruktivni git a DB operace konci deny nebo ask.
+  PreToolUse brana par. 6: destruktivni git a DB operace konci deny; seda zona audit (hook mlci).
 
 .DESCRIPTION
   ASCII-ONLY zdroj (viz _common.ps1). Vsechny lidske texty jsou v
@@ -12,8 +12,9 @@
   (exit 1 = fail-open); lisime se vedome.
 
   deny = JSON permissionDecision "deny" + exit 2 + tyz duvod na stderr.
-  ask  = JSON permissionDecision "ask" + exit 0.
-  jinak = exit 0 bez vystupu (zadne rozhodnuti, plati normalni tok opravneni).
+  jinak = exit 0 bez vystupu (zadne rozhodnuti, plati normalni tok opravneni); seda zona navic zapise radek auditu.
+  ZOPT-Q102 (Tom 2026-10-20, 0.3.1): hook nevraci `ask` nikdy - kazde byvale `ask` ma politiku `audit` nebo `deny`
+  (gate.decisions, gate.opaque, gate.dbDestroyLocal v defaults.json; A179-O3).
 #>
 
 # Trap MUSI byt drive nez dot-source: kdyby _common.ps1 chybelo nebo bylo vadne,
@@ -1069,13 +1070,18 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         '^(iex|invoke-expression)$' {
             # N33 (zuzeny, Ada 8. 9.): `iex` je treti tvar spusteni textu. Literal se
             # ROZEBERE jako u `bash -c '...'` (`iex 'git reset --hard'` -> deny,
-            # `iex 'git status'` -> nic), promenna spadne do `invoked` -> ask.
-            # Pozicni i `-Command` tvar; jine tvary (`"x" | iex`, `iex` bez argumentu)
-            # sem nedojdou a drzi je dal pas `askPatterns.invoke-expression`.
+            # `iex 'git status'` -> nic), promenna spadne do `invoked` (0.3.1: politika gate.opaque.invoked).
+            # Pozicni i `-Command` tvar. `iex` bez argumentu (text z roury, `"x" | iex`) drzi pas
+            # `auditPatterns.invoke-expression` (do 0.3.0 askPatterns).
+            # A179-O4 (Amber 2026-10-20): do 0.3.1 se sem prazdny vnitrek vracel BEZ listu, takze pas nikdy nestrilel a tvar
+            # prosel bez rozhodnuti i bez radku auditu (i v 0.3.0). Holy list ho pasu preda - ticho + audit, zadny deny.
             $skip = 0
             if ($rest.Count -gt 0 -and (Test-ParameterPrefix ($rest[0].ToLowerInvariant()) 'command')) { $skip = 1 }
             $inner = (Join-CommandString ($rest | Select-Object -Skip $skip))
-            if ($inner -eq '') { return $out }
+            if ($inner -eq '') {
+                [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = $exe; GitConfig = @() })
+                return $out
+            }
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni - `iex $cmd` zustava ask.
             foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
@@ -1217,110 +1223,112 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
     return $false
 }
 
-# H-f (Z117-Q19 = A, Tom 2026-10-08 = navrh `01-navrh-allow-list.md` par. 4): `allow` jen
-# pro prikaz, ktery jmeno serveru i databaze NESE SAM - konfigurace projektu se necte (soubor
-# muze nest tajemstvi a mezi kontrolou a behem se muze zmenit). Pokryte tvary:
-#   sqlcmd -S <server> -Q "[ALTER DATABASE [X] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;] DROP DATABASE [X]"
-#          (prepinace jen -S, -Q, -E, -b; jedno jmeno; nalez councilu Codex K5: `EXEC`, dynamicke
-#          SQL, `GO`, `USE`, komentare ani druhy prikaz nikdy allow)
-#   dotnet ef database drop --connection "<server>;<databaze>"   (EF Core 11+, T117-N11)
-# Server = prave jedna hodnota ze synonym, v PEVNE mistni mnozine (M17) i v `hosts` prepisu;
-# databaze = prave jedna hodnota (`Database` / `Initial Catalog`), shoda se vzorem `databases`
-# ukotvena na cele jmeno, bez ohledu na velikost pismen (M14). Dve hodnoty, promenna, roura,
-# presmerovani, prefix promenne prostredi, argument za `--` = nikdy allow (T117-N13, M13, M18).
-function Test-DbDestroyLocalAllowed($Leaf, $DbDestroyLocal) {
-    if ([string](Get-LeafField $Leaf 'Kind' '') -ne 'leaf') { return $false }
-    $raw = [string]$Leaf.Raw
-    if (Test-Unexpandable $raw) { return $false }
-    if ($raw -match '[|<>`]') { return $false }
-    if ($raw -match '^\s*[A-Za-z_][A-Za-z0-9_]*=') { return $false }
-    # List musi byt CELY statement nejvyssi urovne - ne clanek roury, telo bloku ani vnitrek
-    # `bash -c` (skener roury a obaly zplostuje, takze se to overuje nad celym prikazem).
-    $whole = $false
-    foreach ($st in @(Split-Statement $script:FullCommand)) {
-        if (([string]$st).Trim() -ceq $raw.Trim()) { $whole = $true; break }
-    }
-    if (-not $whole) { return $false }
-    $hosts = @(Get-Field $DbDestroyLocal 'hosts' @())
-    $patterns = @(Get-Field $DbDestroyLocal 'databases' @())
-    if ($hosts.Count -eq 0 -or $patterns.Count -eq 0) { return $false }
-
-    $exe = [string]$Leaf.Exe
-    $a = @(Get-LeafField $Leaf 'Args' @())
-    $server = $null
-    $db = $null
-    if ($exe -eq 'sqlcmd') {
-        $sql = $null
-        for ($i = 0; $i -lt $a.Count; $i++) {
-            $t = [string]$a[$i]
-            if ($t -ceq '-S' -or $t -ceq '-Q') {
-                if (($i + 1) -ge $a.Count) { return $false }
-                if ($t -ceq '-S') { if ($null -ne $server) { return $false }; $server = [string]$a[$i + 1] }
-                else { if ($null -ne $sql) { return $false }; $sql = [string]$a[$i + 1] }
-                $i++; continue
+# ZOPT-Q102 + A179-O3 (Q10), 0.3.1: jmena databazi, kterych se destruktivni operace nad MISTNIM hostitelem tyka. Do 0.3.0
+# konila `ask` (H-f povoloval jen uzkou sadu tvaru). Od 0.3.1: VSECHNA jmena precitelna a ve vzorech
+# `gate.dbDestroyLocal.databases` (testovaci a vyvojove DB GSD i HRMS) -> hook mlci + audit; jinak deny. Cte se doslova
+# z textu prikazu - konfigurace projektu ani prostredi procesu ne (soubor muze nest tajemstvi a mezi kontrolou a behem se
+# muze zmenit; H-f). Vraci $null = jmeno nejde precist.
+#   pripojena DB: `-d x` / `-dx` (psql, pgcli, sqlcmd; velikost pismen rozhoduje), `--dbname[=| ]x`, `dbname=x`,
+#                 URI `postgres://.../x`, `Database=x` / `Initial Catalog=x`, `PGDATABASE=x`, prvni pozicni argument psql/pgcli
+#   rusena DB:    `DROP DATABASE [IF EXISTS] x`, pozicni argument `dropdb`, `Database=` u `dotnet ef database drop`
+# U `DROP DATABASE` / `dropdb` / `ef database drop` rozhoduje RUSENA DB (pripojena byva udrzbova, `postgres`); jine
+# destruktivni SQL meni PRIPOJENOU DB - ta musi byt precitelna a ve vzoru taky. Kazde nalezene jmeno musi sedet (navnada
+# `-d gsd_test_x` vedle jineho jmena nepomuze). Necitelne: zadne jmeno; jmeno s promennou, substituci nebo zastupnym
+# znakem; SQL s `USE`, meta-prikazem psql (`\c`, `\!`), dynamickym SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`;
+# nalez councilu Codex K5) nebo trojdilnym jmenem objektu (`db.schema.t`); pgcli s DSN.
+$script:PsqlValueFlags = '^(-c|-d|-f|-h|-p|-U|-v|-o|-L|-T|-F|-R|-P|-D|--command|--dbname|--file|--host|--port|--username|--set|--variable|--output|--log-file|--table-attr|--field-separator|--record-separator|--pset|--dsn)$'
+$script:DropdbValueFlags = '^(-h|-p|-U|--host|--port|--username|--maintenance-db)$'
+function Get-DbTargetNames($Leaf, [string]$SqlVisible, [string]$NameText, [string]$HostExe) {
+    if ($SqlVisible -match '(?i)\bUSE\b|\bEXEC(UTE)?\b|\bsp_executesql\b|\bdblink') { return $null }
+    # Meta-prikaz (`\c`, `\!`) zna jen psql/pgcli - u sqlcmd by `\` v hodnote `-S "(localdb)\X"` (Get-SqlText bere i ji) cetl jako meta.
+    if (@('psql', 'pgcli') -ccontains $HostExe -and $SqlVisible -match '\\[A-Za-z!]') { return $null }
+    if ($SqlVisible -match '[\w\]"]\.[\w\["]*\.[\w\["]') { return $null }
+    $q = '(?:"([^"]*)"|''([^'']*)''|([^\s"'';|&]+))'
+    $conn = New-Object System.Collections.ArrayList
+    $targets = New-Object System.Collections.ArrayList
+    $rx = @(
+        @(('(?:^|\s)-d(?:\s+|(?=["'']))' + $q), 'None'),
+        @('(?:^|\s)-d([^\s"'';|&\-][^\s"'';|&]*)', 'None'),
+        @(('--dbname(?:=|\s+)' + $q), 'IgnoreCase'),
+        @('(?:^|[\s;"''])dbname\s*=\s*([^\s"'';|&]+)', 'IgnoreCase'),
+        @('postgres(?:ql)?://[^/\s"''?]*/([^?\s"''/;|&]+)', 'IgnoreCase'),
+        @('(?:^|[;\s"''])(?:database|initial\s+catalog)\s*=\s*([^;"''\s|&]+)', 'IgnoreCase'),
+        @(('(?:^|[\s;&|(:])PGDATABASE\s*=\s*' + $q), 'IgnoreCase')
+    )
+    foreach ($p in $rx) {
+        foreach ($m in [regex]::Matches($NameText, [string]$p[0], [string]$p[1])) {
+            for ($g = 1; $g -lt $m.Groups.Count; $g++) {
+                if ($m.Groups[$g].Success) { [void]$conn.Add($m.Groups[$g].Value.Trim()); break }
             }
-            if ($t -ceq '-E' -or $t -ceq '-b') { continue }
-            return $false
         }
-        if ($null -eq $server -or $null -eq $sql) { return $false }
-        $m = [regex]::Match($sql, '^\s*(?:ALTER\s+DATABASE\s+\[([A-Za-z0-9_]+)\]\s+SET\s+SINGLE_USER\s+WITH\s+ROLLBACK\s+IMMEDIATE\s*;\s*)?DROP\s+DATABASE\s+\[([A-Za-z0-9_]+)\]\s*;?\s*$', 'IgnoreCase')
-        if (-not $m.Success) { return $false }
-        if ($m.Groups[1].Success -and $m.Groups[1].Value -ne $m.Groups[2].Value) { return $false }
-        $db = $m.Groups[2].Value
+    }
+
+    # ARGV klienta: list nese Exe + Args; telo heredocu a roury nese uvozujici prikaz v `Outer`.
+    $argv = @()
+    if ([string](Get-LeafField $Leaf 'Kind' '') -eq 'leaf') {
+        $argv = @([string]$Leaf.Exe) + @(Get-LeafField $Leaf 'Args' @())
     } else {
-        $i = 0
-        if ($exe -eq 'dotnet') {
-            if ($a.Count -lt 3 -or [string]$a[0] -cne 'ef') { return $false }
-            $i = 1
-        } elseif ($exe -ne 'dotnet-ef') { return $false }
-        if (($i + 1) -ge $a.Count -or [string]$a[$i] -cne 'database' -or [string]$a[$i + 1] -cne 'drop') { return $false }
-        $i += 2
-        $cs = $null
-        $noValue = @('--force', '-f', '--no-build', '--verbose', '-v', '--no-color', '--prefix-output')
-        $withValue = @('--project', '-p', '--startup-project', '-s', '--context', '-c', '--configuration', '--framework')
-        for (; $i -lt $a.Count; $i++) {
-            $t = [string]$a[$i]
-            if ($t -ceq '--connection') {
-                if (($i + 1) -ge $a.Count -or $null -ne $cs) { return $false }
-                $cs = [string]$a[$i + 1]; $i++; continue
-            }
-            if ($t.StartsWith('--connection=')) {
-                if ($null -ne $cs) { return $false }
-                $cs = $t.Substring(13); continue
-            }
-            if ($noValue -ccontains $t) { continue }
-            if ($withValue -ccontains $t) { if (($i + 1) -ge $a.Count) { return $false }; $i++; continue }
-            return $false
+        $argv = @(Split-Arguments ([string](Get-LeafField $Leaf 'Outer' '')))
+    }
+    $ci = -1
+    for ($i = 0; $i -lt $argv.Count; $i++) {
+        if ((Get-ExecutableName ([string]$argv[$i])) -eq $HostExe) { $ci = $i; break }
+    }
+    if ($ci -ge 0 -and @('psql', 'pgcli', 'dropdb') -ccontains $HostExe) {
+        $flags = if ($HostExe -eq 'dropdb') { $script:DropdbValueFlags } else { $script:PsqlValueFlags }
+        $pos = New-Object System.Collections.ArrayList
+        for ($i = $ci + 1; $i -lt $argv.Count; $i++) {
+            $t = [string]$argv[$i]
+            if ($HostExe -eq 'pgcli' -and $t -cmatch '^(-D|--dsn)(=|$)') { return $null }
+            if ($t -cmatch $flags) { $i++; continue }
+            if ($t.StartsWith('-')) { continue }
+            [void]$pos.Add($t)
         }
-        if ([string]::IsNullOrWhiteSpace($cs)) { return $false }
-        if ($cs -match '["'']') { return $false }
-        $servers = New-Object System.Collections.ArrayList
-        $dbs = New-Object System.Collections.ArrayList
-        foreach ($part in $cs.Split(';')) {
-            if ($part.Trim() -eq '') { continue }
-            $eq = $part.IndexOf('=')
-            if ($eq -lt 1) { return $false }
-            $key = (($part.Substring(0, $eq).Trim()) -replace '\s+', ' ').ToLowerInvariant()
-            $val = $part.Substring($eq + 1).Trim()
-            if ($val -eq '') { return $false }
-            if ($script:DbServerKeys -contains $key) { [void]$servers.Add($val) }
-            elseif (@('database', 'initial catalog') -contains $key) { [void]$dbs.Add($val) }
+        if ($HostExe -eq 'dropdb') {
+            if ($pos.Count -ne 1) { return $null }
+            [void]$targets.Add([string]$pos[0])
+        } elseif ($pos.Count -gt 0) {
+            # psql [OPTION]... [DBNAME [USERNAME]] - prvni pozicni argument je databaze.
+            [void]$conn.Add([string]$pos[0])
         }
-        if ($servers.Count -ne 1 -or $dbs.Count -ne 1) { return $false }
-        $server = [string]$servers[0]
-        $db = [string]$dbs[0]
-        if ($db -notmatch '^[A-Za-z0-9_]+$') { return $false }
     }
 
-    if (-not (Test-FixedLocalDbHost $server)) { return $false }
-    $hostOk = $false
-    foreach ($h in $hosts) { if ($server.ToLowerInvariant() -eq ([string]$h).ToLowerInvariant()) { $hostOk = $true; break } }
-    if (-not $hostOk) { return $false }
-    foreach ($pat in $patterns) {
-        $rx = '^' + ([regex]::Escape([string]$pat)).Replace('\*', '.*').Replace('\?', '.') + '$'
-        if ([regex]::IsMatch($db, $rx, 'IgnoreCase')) { return $true }
+    $dropDbRx = 'DROP' + $script:SqlGap + 'DATABASE(?:' + $script:SqlGap + 'IF' + $script:SqlGap + 'EXISTS)?' + $script:SqlGap + '(\[[^\]]+\]|"[^"]+"|[^\s;,()]+)'
+    foreach ($m in [regex]::Matches($SqlVisible, $dropDbRx, 'IgnoreCase')) {
+        [void]$targets.Add($m.Groups[1].Value.Trim('[', ']', '"'))
     }
-    return $false
+    $efDrop = [regex]::IsMatch([string]$Leaf.Raw + ' ' + [string](Get-LeafField $Leaf 'Outer' ''),
+                               ('\bdotnet[- ]ef' + $script:SqlGap + 'database' + $script:SqlGap + 'drop\b'), 'IgnoreCase')
+    if ($efDrop) {
+        if ($conn.Count -eq 0) { return $null }
+        foreach ($c in $conn) { [void]$targets.Add($c) }
+    }
+
+    $names = New-Object System.Collections.ArrayList
+    $rest = [regex]::Replace($SqlVisible, $dropDbRx, ' ', 'IgnoreCase')
+    if ($rest.Trim() -ne '' -and (Test-DestructiveSql $rest)) {
+        if ($conn.Count -eq 0) { return $null }
+        foreach ($c in $conn) { [void]$names.Add($c) }
+    }
+    foreach ($t in $targets) { [void]$names.Add($t) }
+    if ($names.Count -eq 0) { return $null }
+    foreach ($n in $names) {
+        if ([string]::IsNullOrWhiteSpace([string]$n) -or [string]$n -match '[\$%`{}()*?\s]') { return $null }
+    }
+    return ,@($names)
+}
+
+# Vzor `databases` je glob (`*`, `?`) ukotveny na cele jmeno, bez ohledu na velikost pismen (M14).
+function Test-DbNamesAllowed($Names, $Patterns) {
+    foreach ($n in @($Names)) {
+        $ok = $false
+        foreach ($pat in @($Patterns)) {
+            $rx = '^' + ([regex]::Escape([string]$pat)).Replace('\*', '.*').Replace('\?', '.') + '$'
+            if ([regex]::IsMatch([string]$n, $rx, 'IgnoreCase')) { $ok = $true; break }
+        }
+        if (-not $ok) { return $false }
+    }
+    return $true
 }
 
 function Get-ShortFlagLetter($Tokens) {
@@ -1403,10 +1411,12 @@ function Test-GitPushRule($Leaf, $Config) {
     if ($hitsProtected) {
         return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
     }
+    # ZOPT-Q102 / A179-O3 (Q1, Q2): bez cile muze force push mirit na main -> deny; na nechranenou vetev -> audit.
+    $gate = Get-Field $Config 'gate'
     if ($refspecs.Count -eq 0) {
-        return @{ Id = 'forcePushUnknown'; Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushUnknown' 'force push') }
+        return (New-PolicyVerdict $gate 'forcePushUnknown' ([string](Get-Field $shapes 'forcePushUnknown' 'force push')))
     }
-    return @{ Id = 'forcePushOther'; Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushOther' 'force push') }
+    return (New-PolicyVerdict $gate 'forcePushOther' ([string](Get-Field $shapes 'forcePushOther' 'force push')))
 }
 
 function Test-GitCleanRule($Leaf, $Config) {
@@ -1456,9 +1466,9 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
     # Nalez Amber A1: `[IO.Directory]::Delete($p, $true)` - cil je PROMENNA, regex nad
     # literalem v uvozovkach ji nenajde a bez teto vetve by cely tvar skoncil jako
     # allow. Zadani par. 2.3: obal s promennou -> ask. Cil nezname, tak se pta.
+    # ZOPT-Q102 / A179-O3 (Q4): cil nejde dolozit -> politika `netDeleteVariable` (vychozi deny).
     if ($Leaf.Exe -eq 'net-delete' -and $targets.Count -eq 0) {
-        return @{ Id = 'netDeleteVariable'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})')).Replace('{text}', [string]($Leaf.Text))) }
+        return (New-PolicyVerdict $gate 'netDeleteVariable' (([string](Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})')).Replace('{text}', [string]($Leaf.Text))))
     }
 
     if (-not $recursive) {
@@ -1490,8 +1500,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         # videt. Rozhodnuti `ask` se nemeni, meni se veta; tvar `deleteFromPipeline` zustava
         # tomu, co roura opravdu je (kontrolni skupina: Metis 8).
         if ($targets.Count -eq 0 -and $shortAbsolute.Count -gt 0) {
-            return @{ Id = 'shortAbsolutePath'; Decision = 'ask'
-                      Shape = (([string](Get-Field $shapes 'shortAbsolutePath' 'mazani s kratkou absolutni cestou ({target})')).Replace('{target}', [string]([string]$shortAbsolute[0]))) }
+            return (New-PolicyVerdict $gate 'shortAbsolutePath' (([string](Get-Field $shapes 'shortAbsolutePath' 'mazani s kratkou absolutni cestou ({target})')).Replace('{target}', [string]([string]$shortAbsolute[0]))))
         }
 
         # Nalez Metis 8: `Get-ChildItem src -Recurse -File | Remove-Item -Force` -
@@ -1500,7 +1509,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         # plati Z3 (nerozebratelne -> ask). Mazani konkretniho souboru bez -Recurse
         # zustava bezna prace (`Remove-Item -LiteralPath x -Force` ve skriptech GSD).
         if ($targets.Count -eq 0) {
-            return @{ Id = 'deleteFromPipeline'; Decision = 'ask'; Shape = (Get-Field $shapes 'deleteFromPipeline' 'mazani z roury') }
+            return (New-PolicyVerdict $gate 'deleteFromPipeline' ([string](Get-Field $shapes 'deleteFromPipeline' 'mazani z roury')))
         }
         if (-not $recursive) { return $null }
     }
@@ -1544,24 +1553,26 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
             if ($first -eq ([string]$root).ToLowerInvariant()) { $allowed = $true }
         }
 
+        # ZOPT-Q102 / A179-O3 (Q4): promenna v cili (mimo povoleny koren i v nem) a `..` = cil nejde dolozit -> politika
+        # `recursiveDeleteVariable` / `recursiveDeleteDotDot` (vychozi deny); hvezdicka UVNITR povoleneho korene -> `recursiveDeleteWildcard`
+        # (vychozi audit). Deny kterehokoli cile rozhoduje hned, audit se drzi jako nejhorsi dosavadni.
+        $v = $null
         if (-not $allowed) {
-            if ($hasVar) {
-                if ($null -eq $worst) {
-                    $worst = @{ Id = 'recursiveDeleteWildcard'; Decision = 'ask'
-                                Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
-                }
-                continue
+            if (-not $hasVar) {
+                return @{ Id = 'recursiveDelete'; Decision = 'deny'
+                          Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
-            return @{ Id = 'recursiveDelete'; Decision = 'deny'
-                      Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
+            $v = New-PolicyVerdict $gate 'recursiveDeleteVariable' (([string](Get-Field $shapes 'recursiveDeleteVariable' 'rm -rf {target}')).Replace('{target}', [string]($t)))
+        } elseif ($hasVar) {
+            $v = New-PolicyVerdict $gate 'recursiveDeleteVariable' (([string](Get-Field $shapes 'recursiveDeleteVariable' 'rm -rf {target}')).Replace('{target}', [string]($t)))
+        } elseif ($hasDotDot) {
+            $v = New-PolicyVerdict $gate 'recursiveDeleteDotDot' (([string](Get-Field $shapes 'recursiveDeleteDotDot' 'rm -rf {target}')).Replace('{target}', [string]($t)))
+        } elseif ($hasStar) {
+            $v = New-PolicyVerdict $gate 'recursiveDeleteWildcard' (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t)))
         }
-
-        if ($hasStar -or $hasDotDot -or $hasVar) {
-            if ($null -eq $worst) {
-                $worst = @{ Id = 'recursiveDeleteWildcard'; Decision = 'ask'
-                            Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
-            }
-        }
+        if ($null -eq $v) { continue }
+        if ($v.Decision -eq 'deny') { return $v }
+        if ($null -eq $worst) { $worst = $v }
     }
     return $worst
 }
@@ -1879,23 +1890,27 @@ function Test-DatabaseRule($Leaf, $Config) {
             return @{ Id = 'dbDestroyRemote'; Decision = 'deny'
                       Shape = (([string](Get-Field $shapes 'dbDestroyRemote' 'DB {host}')).Replace('{host}', [string]($dbHost))) }
         }
-        # H-f (Z117-Q13 = A, tvar Z117-Q19 = A): rozhodnuti o LOKALNI destruktivni operaci je
-        # nastavitelne projektovym prepisem `gate.dbDestroyLocal`; vychozi `ask` = 0.2.0.
-        # Obsah prepisu uz zkontrolovalo H-c (neplatny klic = vychozi hodnota, nikdy allow).
+        # H-f (Z117-Q13 = A) + ZOPT-Q102 / A179-O3 (Q10), 0.3.1: rozhodnuti o LOKALNI destruktivni operaci nese
+        # `gate.dbDestroyLocal` - `deny` zakaze vse, vychozi `allow` pusti jen databaze ve vzorech `databases`
+        # (Get-DbTargetNames); cokoli jineho je deny. Obsah prepisu uz zkontrolovalo H-c (neplatny klic = vychozi hodnota).
         $dl = Get-Field $gate 'dbDestroyLocal'
-        $dlDecision = Get-DbDestroyLocalDecision $dl
-        if ($dlDecision -eq 'deny') { return (New-DbDestroyLocalDenied $shapes) }
+        if ((Get-DbDestroyLocalDecision $dl) -eq 'deny') { return (New-DbDestroyLocalDenied $shapes) }
         # TASK-179 (AOPT-O26): tvar uvnitr kontejneru nikdy `allow` - ani kdyz jeho vnitrni text je doslova povoleny statement.
         # K3-2 (kolo 3): totez pro tvar v kontejneru, ktery rozbalil starsi pruchod (`docker exec -i c sh <<EOF`) - NoAllow.
-        if ($dlDecision -eq 'allow' -and -not $localDbDelete -and -not [bool](Get-LeafField $Leaf 'Container' $false) -and
-            -not [bool](Get-LeafField $Leaf 'NoAllow' $false) -and
-            (Test-DbDestroyLocalAllowed $Leaf $dl)) {
-            # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
-            # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
-            Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
-            return $null
+        if ([bool](Get-LeafField $Leaf 'Container' $false) -or [bool](Get-LeafField $Leaf 'NoAllow' $false)) {
+            return @{ Id = 'dbDestroyContainer'; Decision = 'deny'; Shape = (Get-Field $shapes 'dbDestroyContainer' 'DB') }
         }
-        return @{ Id = 'dbDestroyLocal'; Decision = 'ask'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }
+        # Z117-Q20 + A179-O3 (Q10): `sqllocaldb delete` smaze instanci se VSEMI databazemi - nikdy allow.
+        if (-not $localDbDelete) {
+            $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExe.ToLowerInvariant()
+            if ($null -ne $names -and (Test-DbNamesAllowed $names @(Get-Field $dl 'databases' @()))) {
+                # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
+                # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
+                Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
+                return $null
+            }
+        }
+        return @{ Id = 'dbDestroyLocal'; Decision = 'deny'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }
     }
 
     if ($update -and -not $isLocal) {
@@ -1946,24 +1961,33 @@ function Get-RemoteShellPositional($Argv) {
 # pravidla `permissions.*`), kdezto ticho ji necha rozhodnout. Plugin timhle prestava
 # byt POSLEDNI instanci parseru a stava se prvni - viz README "Tri rozhodnuti, ne dve".
 #
-# Neznama hodnota politiky konci `ask`, ne vyjimkou: fail-closed je strop, ne prvni
-# omezujici hodnota, a preklep v projektovem override nesmi branu tise otevrit.
+# Neznama hodnota politiky konci `deny` (do 0.3.0 `ask`), ne vyjimkou: preklep v projektovem
+# override nesmi branu tise otevrit.
 # 1C: kod interpretu se nerozebira, ale JMENO destruktivniho volani v nem videt je.
 # Je to test na TOKEN, ne parser jazyka - `python -c "print(1)"` musi projit,
 # `python -c "shutil.rmtree('x')"` ne. Porovnani je case-SENSITIVNI (`Remove-Item`
 # ano, `remove-item` ne bylo by falesne siroke pres bezna anglicka slova).
 # K7-5 (TASK-179, kolo 7): samostatna funkce - zavora K6-5 (interpret v kontejneru s DB literalem) se pta nejdriv na ni,
 # aby tvar 0.3.0 nesl dal svuj Id `interpreterDestructive`.
+# ZOPT-Q102 / A179-O3 (Q6), 0.3.1: DB token (`gate.interpreterDbTokens`) = zniceni databaze, jejiz jmeno nepreteme ->
+# politika `interpreterDestructiveDb` (vychozi deny); ostatni tokeny -> `interpreterDestructive` (vychozi audit).
+# DB tokeny se zkousi prvni, aby je obecny token tehoz tela (`subprocess`) neprebil auditem.
 function Get-InterpreterDestructiveVerdict([string]$Body, $Config) {
     if ($Body -eq '') { return $null }
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
+    foreach ($t in @(Get-Field $gate 'interpreterDbTokens' @())) {
+        $token = [string]$t
+        if ($token -eq '') { continue }
+        if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+            return (New-PolicyVerdict $gate 'interpreterDestructiveDb' (([string](Get-Field $shapes 'interpreterDestructiveDb' 'kod interpretu rusi databazi ({token})')).Replace('{token}', [string]($token))))
+        }
+    }
     foreach ($t in @(Get-Field $gate 'interpreterDestructiveTokens' @())) {
         $token = [string]$t
         if ($token -eq '') { continue }
         if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-            return @{ Id = 'interpreterDestructive'; Decision = 'ask'
-                      Shape = (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))) }
+            return (New-PolicyVerdict $gate 'interpreterDestructive' (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))))
         }
     }
     return $null
@@ -1984,30 +2008,33 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
     # 0.1.10 auditem, prestoze destruktivni LITERAL je v nich VIDET. Neni to nutna cena:
     # 1C uz presne tenhle token-test dela nad telem interpretu - tady se dela nad `Raw`.
     #
-    # `ask`, ne `deny`: kontext nezname (hlavu rozebrat neumime), takze se pta clovek.
-    # Porovnani je stejne jako u `interpreterDestructiveTokens` - IndexOf, Ordinal,
+    # Do 0.3.0 `ask` (kontext nezname); od 0.3.1 politika `gate.decisions.opaqueDestructive` (ZOPT-Q102 / A179-O3 Q5:
+    # vychozi deny - literaly jsou jen z deny trid). Porovnani je stejne jako u `interpreterDestructiveTokens` - IndexOf, Ordinal,
     # zadny parser. N50: `DELETE FROM` v tomhle seznamu JE (o tvaru nevime nic jineho,
     # ask je levny), v `interpreterDestructiveTokens` NENI (telo interpretu bezne nese
     # SQL retezce s WHERE, ktere overit nejde).
-    if (@('variable', 'heredocUnterminated', 'depth') -ccontains $Why -and $Raw -ne '') {
+    # ZOPT-Q102 (0.3.1): `invoked` sem patri taky - do 0.3.0 koncil `ask` sam, od 0.3.1 je jeho politika `audit`, takze by
+    # `$x = 'a'; ${x} = 'git'; & $x reset --hard` (hlava nerozbalena, literal videt) prosel tichem (A179-O3 Q5: deny).
+    if (@('variable', 'heredocUnterminated', 'depth', 'invoked') -ccontains $Why -and $Raw -ne '') {
         foreach ($t in @(Get-Field $gate 'rawDestructiveTokens' @())) {
             $token = [string]$t
             if ($token -eq '') { continue }
             if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-                return @{ Id = 'opaqueDestructive'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))) }
+                return (New-PolicyVerdict $gate 'opaqueDestructive' (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))))
             }
         }
     }
 
-    if (([string](Get-Field (Get-Field $gate 'opaque') $Why 'ask')) -eq 'audit') {
+    # ZOPT-Q102 / A179-O3 (0.3.1): politika `gate.opaque.<pricina>` je `audit` nebo `deny`; neznama hodnota nebo pricina
+    # (`unknown`, Q8) = deny. `audit` zapise radek `opaque:<pricina>` jako dosud.
+    if (([string](Get-Field (Get-Field $gate 'opaque') $Why 'deny')) -ceq 'audit') {
         Write-GateAudit $script:ToolName ('opaque:' + $Why) 'allow' $Config
         return $null
     }
 
     $text = [string]$Raw
     if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-    return @{ Id = ('opaque:' + $Why); Decision = 'ask'
+    return @{ Id = ('opaque:' + $Why); Decision = 'deny'
               Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
 }
 
@@ -2041,9 +2068,10 @@ function Invoke-LeafVerdict($Leaf, $Config, [bool]$InContainer) {
     }
 }
 
-# K6-10 (kolo 6): jeden tvar dotazu "nerozebratelne v kontejneru s DB textem".
-function New-ContainerOpaqueAsk($Shapes) {
-    return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'ask'
+# K6-10 (kolo 6): jeden tvar "nerozebratelne v kontejneru s DB textem". ZOPT-Q102 / A179-O3 (Q10), 0.3.1: jmeno DB
+# nejde precist a v kontejneru se nepovoluje nikdy (AOPT-O26) -> deny (do 0.3.0 ask).
+function New-ContainerOpaqueDenied($Shapes) {
+    return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'deny'
               Shape = (Get-Field $Shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
 }
 
@@ -2056,7 +2084,9 @@ function New-DbDestroyLocalDenied($Shapes) {
 # K9-5 (kolo 9): rozhodnuti prepisu gate.dbDestroyLocal cte jedno misto (Test-DatabaseRule i zaloha po stropu prace).
 # K10-7 (kolo 10): bere uz nacteny objekt prepisu - Test-DatabaseRule z nej cte i seznamy pro `allow`.
 function Get-DbDestroyLocalDecision($DbDestroyLocal) {
-    return [string](Get-Field $DbDestroyLocal 'decision' 'ask')
+    # ZOPT-Q102 (0.3.1): chybejici rozhodnuti = deny (fail-closed); `ask` uz neni hodnota.
+    if ([string](Get-Field $DbDestroyLocal 'decision' 'deny') -ceq 'allow') { return 'allow' }
+    return 'deny'
 }
 
 # $InContainer = $true: vnitrni listy jsou v kontejneru (jen DB pravidlo, Test-ContainerLeaf). $false: telo tvaru 0.3.0
@@ -2091,9 +2121,10 @@ function Test-ContainerLeaf($Leaf, $Config) {
             return (Get-WorstInnerVerdict (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0) $Leaf $true $Config)
         }
         # K4-3 (kolo 4): telo heredocu do interpretu v kontejneru (`docker compose exec -T db python3 <<EOF`) = kod, ktery
-        # rozebrat neumime - tataz zavora jako u `python -c` v kontejneru (clen M-d): viditelny destruktivni DB literal -> ask.
+        # rozebrat neumime - tataz zavora jako u `python -c` v kontejneru (clen M-d): viditelny destruktivni DB literal -> deny
+        # (0.3.1, ZOPT-Q102; do 0.3.0 ask).
         if (@($script:CodeInterpreters) -ccontains $oe) {
-            if (Test-DbDestructiveText ([string]$Leaf.Raw)) { return (New-ContainerOpaqueAsk $shapes) }
+            if (Test-DbDestructiveText ([string]$Leaf.Raw)) { return (New-ContainerOpaqueDenied $shapes) }
         }
         return $null
     }
@@ -2104,7 +2135,8 @@ function Test-ContainerLeaf($Leaf, $Config) {
     }
     if ($kind -eq 'opaque') {
         # K4-4 (kolo 4): `pwsh -EncodedCommand` uvnitr kontejneru - literal neni videt, ale text jde dekodovat (UTF-16LE base64,
-        # jako hook secrets, A117-N16). Dekodovany text se rozebere jako prikaz v kontejneru; nejde-li dekodovat -> ask.
+        # jako hook secrets, A117-N16). Dekodovany text se rozebere jako prikaz v kontejneru; nejde-li dekodovat, plati politika
+        # `gate.opaque.encoded` jako na hostiteli (0.3.1, ZOPT-Q102 / A179-O3: vychozi audit; do 0.3.0 ask).
         if ([string](Get-LeafField $Leaf 'Why' '') -eq 'encoded') {
             $argvE = Split-Arguments ([string]$Leaf.Raw)
             $wb = $null
@@ -2114,11 +2146,11 @@ function Test-ContainerLeaf($Leaf, $Config) {
             }
             # K5-6 (kolo 5): totez dekodovani jako hook secrets (ConvertFrom-EncodedCommandText).
             $decoded = if ($null -ne $wb) { ConvertFrom-EncodedCommandText ([string]$wb.Text) } else { '' }
-            if ($decoded -eq '') { return (New-ContainerOpaqueAsk $shapes) }
+            if ($decoded -eq '') { return (Resolve-OpaqueDecision 'encoded' '' '' $Config) }
             return (Get-WorstInnerVerdict (Get-NestedShellLeaf $decoded 'PowerShell' 0) $Leaf $true $Config)
         }
         if ((Test-DbDestructiveText ([string]$Leaf.Raw)) -or (Test-DbDestructiveText ([string](Get-LeafField $Leaf 'Body' '')))) {
-            return (New-ContainerOpaqueAsk $shapes)
+            return (New-ContainerOpaqueDenied $shapes)
         }
     }
     return $null
@@ -2154,8 +2186,8 @@ function Test-Leaf($Leaf, $Config) {
             if ($positional.Count -ge 2) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-                return @{ Id = 'remoteShell'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
+                # ZOPT-Q102 / A179-O3, 0.3.1: politika `gate.decisions.remoteShell` (vychozi audit; do 0.3.0 ask).
+                return (New-PolicyVerdict $gate 'remoteShell' (([string](Get-Field $shapes 'remoteShell' 'prikaz na cizim stroji ({text})')).Replace('{text}', [string]($text))))
             }
         }
     }
@@ -2206,21 +2238,21 @@ function Test-Leaf($Leaf, $Config) {
         #                     na nasem stroji o cizim stroji netvrdi nic.
         if (@($script:CodeInterpreters) -ccontains $oe) {
             # K5-1 (TASK-179, kolo 5): interpret v kontejneru rozbaleny starsim pruchodem (`docker exec -i app python3 <<EOF`)
-            # ma verdikt 0.3.0 a navic zavoru K4-3 - viditelny destruktivni DB literal v tele -> aspon ask.
-            # K6-5 (kolo 6): zavora PRED Resolve-OpaqueDecision - ta by pri `audit` zapsala allow radek k listu, ktery konci ask.
-            # K7-5 (kolo 7): destruktivni token interpretu ma prednost - tvar 0.3.0 si necha Id `interpreterDestructive`.
+            # ma verdikt 0.3.0 a navic zavoru K4-3 - viditelny destruktivni DB literal v tele -> deny (0.3.1; do 0.3.0 ask).
+            # K6-5 (kolo 6): zavora PRED Resolve-OpaqueDecision - ta by pri `audit` zapsala allow radek k listu, ktery konci deny.
+            # K7-5 (kolo 7): destruktivni token interpretu ma prednost, je-li jeho politika deny (Id `interpreterDestructiveDb`);
+            # token s politikou audit (ZOPT-Q102) DB literal v kontejneru neprebije.
             if ([bool](Get-LeafField $Leaf 'NoAllow' $false) -and (Test-DbDestructiveText ([string]$Leaf.Raw))) {
                 $id = Get-InterpreterDestructiveVerdict ([string]$Leaf.Raw) $Config
-                if ($null -ne $id) { return $id }
-                return (New-ContainerOpaqueAsk $shapes)
+                if ($null -ne $id -and $id.Decision -eq 'deny') { return $id }
+                return (New-ContainerOpaqueDenied $shapes)
             }
             return (Resolve-OpaqueDecision 'interpreter' ([string]$Leaf.Raw) ([string]$Leaf.Raw) $Config)
         }
         if (@(Get-Field $gate 'remoteShells' @()) -ccontains $oe) {
             $text = [string]$Leaf.Raw
             if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-            return @{ Id = 'remoteShell'; Decision = 'ask'
-                      Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
+            return (New-PolicyVerdict $gate 'remoteShell' (([string](Get-Field $shapes 'remoteShell' 'prikaz na cizim stroji ({text})')).Replace('{text}', [string]($text))))
         }
 
         # Jinak je telo DATA (`cat > NOTES.md <<EOF`) a pravidla se na nej neuplatnuji.
@@ -2228,12 +2260,12 @@ function Test-Leaf($Leaf, $Config) {
     }
 
     # Nalez Metis 27: `git -c alias.bd='branch -D' bd x` schova destruktivni podprikaz
-    # do definice aliasu. Rozbalit to neumime, takze plati Z3: nerozebratelne -> ask.
+    # do definice aliasu. Rozbalit to neumime, takze plati Z3: nerozebratelne -> politika `gate.decisions.gitAlias`
+    # (0.3.1, ZOPT-Q102 / A179-O3 Q3: vychozi deny - alias spusti cokoli; do 0.3.0 ask).
     if ($Leaf.Exe -eq 'git') {
         foreach ($cfg in $Leaf.GitConfig) {
             if ($cfg -match '(?i)^alias\.') {
-                return @{ Id = 'gitAlias'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'opaque' '{text}')).Replace('{text}', [string]($cfg))) }
+                return (New-PolicyVerdict $gate 'gitAlias' (([string](Get-Field $shapes 'gitAlias' '{text}')).Replace('{text}', [string]($cfg))))
             }
         }
     }
@@ -2241,16 +2273,18 @@ function Test-Leaf($Leaf, $Config) {
     $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'denyPatterns' @())
     if ($shape) { return @{ Id = $shape.Id; Decision = 'deny'; Shape = $shape.Shape } }
 
+    # Seda zona (`audit`) jednoho pravidla se drzi stranou - `deny` pozdejsiho pravidla tehoz listu ma prednost.
     foreach ($rule in @('Test-GitPushRule', 'Test-GitCleanRule', 'Test-GitRestoreRule', 'Test-RecursiveDeleteRule', 'Test-DatabaseRule')) {
         $r = & $rule $Leaf $Config
         if ($r -and $r.Decision -eq 'deny') { return $r }
-        if ($r -and $r.Decision -eq 'ask' -and -not $script:PendingAsk) { $script:PendingAsk = $r }
+        if ($r -and $r.Decision -eq 'audit' -and -not $script:PendingAudit) { $script:PendingAudit = $r }
     }
 
-    $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'askPatterns' @())
-    if ($shape) { return @{ Id = $shape.Id; Decision = 'ask'; Shape = $shape.Shape } }
+    # ZOPT-Q102 / A179-O3 (Q7), 0.3.1: do 0.3.0 `askPatterns`; shoda = seda zona (audit).
+    $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'auditPatterns' @())
+    if ($shape) { $script:PendingAudit = $null; return @{ Id = $shape.Id; Decision = 'audit'; Shape = $shape.Shape } }
 
-    if ($script:PendingAsk) { $r = $script:PendingAsk; $script:PendingAsk = $null; return $r }
+    if ($script:PendingAudit) { $r = $script:PendingAudit; $script:PendingAudit = $null; return $r }
     return $null
 }
 
@@ -2303,7 +2337,7 @@ if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 # H-c: odmitnuty klic prepisu je videt v auditu jednou za session (CR-P10) a v kanarku (jen jmeno klice).
 Write-OverrideRejectedAudit $toolName $config ([string](Get-Field $payload 'session_id' ''))
 
-$script:PendingAsk = $null
+$script:PendingAudit = $null
 $decision = $null
 
 # Nalez Ada N19: retez pruchodu (heredoc -> roura do SQL klienta -> prikazova radka)
@@ -2330,37 +2364,33 @@ foreach ($leaf in $leaves) {
 # a vnitrni prikaz obalu nemusely byt prectene cele. Je-li v nekterem rozebiranem textu destruktivni DB literal, ptame se.
 # K8-2 (kolo 8): hostitel takoveho prikazu neni prectany = mistni (jako pruchozi `-e PGHOST` bez hodnoty, CR-3) - plati
 # `gate.dbDestroyLocal`: `deny` z prepisu zustava `deny`, jinak `ask` (`allow` v kontejneru nikdy, AOPT-O26).
-# K9-1 (kolo 9): zaloha bezi i po `ask` - `deny` z prepisu prebije kazde drive vznikle `ask` (i z listu, ktery DB text sam nese);
-# `ask` zalohy nic neprebiji. K10-6 (kolo 10): po `ask` bez prepisu `deny` se texty neprochazeji (vysledek by se zahodil).
+# K9-1 (kolo 9): zaloha bezi i po sede zone jineho listu - `deny` zalohy ji prebije.
+# ZOPT-Q102 / A179-O3 (Q10), 0.3.1: jmeno DB po prekroceni stropu nejde precist -> deny vzdy (do 0.3.0 ask; s prepisem
+# `gate.dbDestroyLocal = deny` tvar `dbDestroyLocalDenied`).
 if ($script:SubstOverflow -and ($null -eq $decision -or $decision.Decision -ne 'deny')) {
     $ovGate = Get-Field $config 'gate'
-    $ovDeny = (Get-DbDestroyLocalDecision (Get-Field $ovGate 'dbDestroyLocal')) -eq 'deny'
-    if ($null -eq $decision -or $ovDeny) {
-        foreach ($pt in @($script:ParsedTexts)) {
-            if (Test-DbDestructiveText ([string]$pt.Text)) {
-                $ovShapes = Get-Field $ovGate 'shapes'
-                if ($ovDeny) {
-                    $decision = New-DbDestroyLocalDenied $ovShapes
-                } else {
-                    $decision = New-ContainerOpaqueAsk $ovShapes
-                }
-                break
+    foreach ($pt in @($script:ParsedTexts)) {
+        if (Test-DbDestructiveText ([string]$pt.Text)) {
+            $ovShapes = Get-Field $ovGate 'shapes'
+            if ((Get-DbDestroyLocalDecision (Get-Field $ovGate 'dbDestroyLocal')) -eq 'deny') {
+                $decision = New-DbDestroyLocalDenied $ovShapes
+            } else {
+                $decision = New-ContainerOpaqueDenied $ovShapes
             }
+            break
         }
     }
 }
 
 if ($null -eq $decision) { exit 0 }
 
-# H-b (TASK-117, Z117-Q8 = B): kazde `ask` a `deny` jde do auditu s ID tvaru, nikdy s textem prikazu.
-Write-GateAudit $toolName ('gate:' + [string](Get-LeafField $decision 'Id' 'unknown')) ([string]$decision.Decision) $config
-
-$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
-
-if ($decision.Decision -eq 'ask' -and $mode -eq 'bypassPermissions') {
-    $reason = $reason + (Get-Text $config 'bypassSuffix' ' bypass')
-    Write-DenyDecision $reason
+# ZOPT-Q102 (0.3.1): seda zona (`audit`) = hook mlci a zapise radek auditu s ID tvaru; `ask` uz neexistuje.
+if ($decision.Decision -eq 'audit') {
+    Write-GateAudit $toolName ('gate:' + [string](Get-LeafField $decision 'Id' 'unknown')) 'allow' $config
+    exit 0
 }
 
-if ($decision.Decision -eq 'deny') { Write-DenyDecision $reason }
-Write-AskDecision $reason
+# H-b (TASK-117, Z117-Q8 = B): kazde `deny` jde do auditu s ID tvaru, nikdy s textem prikazu.
+Write-GateAudit $toolName ('gate:' + [string](Get-LeafField $decision 'Id' 'unknown')) 'deny' $config
+$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
+Write-DenyDecision $reason

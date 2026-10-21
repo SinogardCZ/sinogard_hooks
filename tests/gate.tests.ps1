@@ -53,7 +53,10 @@ $denyCases = @(
     (Case 'restore .'                  'git restore .' 'deny')
     # (3) mazani vetvi
     (Case 'branch -D'                  'git branch -D feature/x' 'deny')
-    (Case 'branch -d'                  'git branch -d feature/x' 'deny')
+    # A179-O3 (Q11), 0.3.1: `-d` smaze jen sloucenou vetev (nesloucenou git odmitne) -> bez brany
+    (Case 'branch -d'                  'git branch -d feature/x' 'allow')
+    (Case 'branch -d -f'               'git branch -d -f feature/x' 'deny')
+    (Case 'branch --delete --force'    'git branch --delete --force feature/x' 'deny')
     (Case 'push --delete'              'git push --delete origin feature/x' 'deny')
     # (4) clean a stash
     (Case 'clean -fd'                  'git clean -fd' 'deny')
@@ -127,9 +130,9 @@ $wrapperCases = @(
     # `bash -c "$x"`, `cmd /c %X%` i `eval $cmd` spousteji obsah promenne uplne stejne
     # jako `& $cmd` - a koncily auditem. `$TOOL git push` je jiny pripad: promenna
     # stoji v pozici prikazu, ale zadny OBAL ji nespousti, takze audit drzi (T36-N34 i).
-    (Case 'bash -c s promennou'        'bash -c "$x"' 'ask')
-    (Case 'cmd /c s promennou'         'cmd /c %X%' 'ask')
-    (Case 'eval s promennou'           'eval $cmd' 'ask')
+    (Case 'bash -c s promennou'        'bash -c "$x"' 'audit')
+    (Case 'cmd /c s promennou'         'cmd /c %X%' 'audit')
+    (Case 'eval s promennou'           'eval $cmd' 'audit')
     (Case 'promenna misto exe'         '$TOOL git push' 'allow')
     # neprohledne, ale dokumentovane -> allow
     (Case 'skript souborem sh'         './cleanup.sh' 'allow')
@@ -152,19 +155,19 @@ $metisCases = @(
     (Case 'M6 -Recurse dvojtecka'      'Remove-Item src -Recurse:$true -Force:$true' 'deny' 'PowerShell')
     (Case 'M7 find -delete'            'find src -depth -delete' 'deny')
     (Case 'M7 find -delete povolena'   'find bin -delete' 'allow')
-    (Case 'M8 mazani z roury'          'Get-ChildItem src -Recurse -Force -File | Remove-Item -Force' 'ask' 'PowerShell')
+    (Case 'M8 mazani z roury'          'Get-ChildItem src -Recurse -Force -File | Remove-Item -Force' 'audit' 'PowerShell')
     (Case 'M10 dotnet-ef drop'         'dotnet-ef database drop --connection "Host=db.firma.cz;Database=gsd"' 'deny')
-    (Case 'M10 dotnet-ef drop lokalne' 'dotnet-ef database drop' 'ask')
+    (Case 'M10 dotnet-ef drop lokalne' 'dotnet-ef database drop' 'deny')
     (Case 'M12 update-ref -d'          'git update-ref -d refs/heads/feature/old' 'deny')
     (Case 'M13 branch -df'             'git branch -df feature/old' 'deny')
     (Case 'M14 push --mirror'          'git push --mirror origin' 'deny')
     (Case 'M15 push plus wildcard'     "git push origin '+refs/heads/*:refs/heads/*'" 'deny')
-    (Case 'M16 python -c'              'python -c "import shutil; shutil.rmtree(''src'')"' 'ask')
-    (Case 'M16 node -e'                'node -e "require(''fs'').rmSync(''src'')"' 'ask')
+    (Case 'M16 python -c'              'python -c "import shutil; shutil.rmtree(''src'')"' 'audit')
+    (Case 'M16 node -e'                'node -e "require(''fs'').rmSync(''src'')"' 'audit')
     (Case 'M17 DROP s komentarem'      'psql "Host=db.firma.cz" -c "DROP/**/TABLE users"' 'deny')
     (Case 'M25 Start-Process'          "Start-Process git -ArgumentList 'branch -D feature/old' -Wait" 'deny' 'PowerShell')
     (Case 'M26 clean.requireForce'     'git -c clean.requireForce=false clean -dx' 'deny')
-    (Case 'M27 alias'                  "git -c alias.bd='branch -D' bd feature/old" 'ask')
+    (Case 'M27 alias'                  "git -c alias.bd='branch -D' bd feature/old" 'deny')
     (Case 'M28 env -i'                 'env -i rm -rf src' 'deny')
     # Kontrolni skupina: bezna prace se timhle kolem zablokovat NESMI.
     (Case 'M kontrola python skript'   'python scripts/build.py' 'allow')
@@ -178,20 +181,20 @@ $metisCases = @(
 # ----------------------------------------------------------------- ask (Z2) ---
 
 $askCases = @(
-    (Case 'force-with-lease jina'      'git push --force-with-lease origin feature/x' 'ask')
-    (Case 'force push jina vetev'      'git push --force origin feature/x' 'ask')
-    (Case 'force push bez cile'        'git push --force origin' 'ask')
-    (Case 'rm -rf s hvezdickou'        'rm -rf ./bin/*' 'ask')
-    (Case 'rm -rf s ..'                'rm -rf bin/../obj' 'ask')
-    (Case 'rm -rf s promennou'         'rm -rf $BUILD/bin' 'ask')
-    (Case 'Invoke-Expression'          'Invoke-Expression $cmd' 'ask' 'PowerShell')
-    (Case 'iex'                        'iex $cmd' 'ask' 'PowerShell')
-    (Case 'ef migrations remove'       'dotnet ef migrations remove' 'ask')
-    (Case 'DROP TABLE bez hostu'       'psql -c "DROP TABLE Record"' 'ask')
-    (Case 'dropdb lokalni'             'dropdb gsd_test_e2e_1' 'ask')
-    (Case 'ef database drop lokalni'   'dotnet ef database drop' 'ask')
-    (Case 'ef drop Host=localhost'     'dotnet ef database drop --connection "Host=localhost;Database=gsd_dev"' 'ask')
-    (Case 'TRUNCATE lokalni'           'psql -h 127.0.0.1 -c "TRUNCATE Record"' 'ask')
+    (Case 'force-with-lease jina'      'git push --force-with-lease origin feature/x' 'audit')
+    (Case 'force push jina vetev'      'git push --force origin feature/x' 'audit')
+    (Case 'force push bez cile'        'git push --force origin' 'deny')
+    (Case 'rm -rf s hvezdickou'        'rm -rf ./bin/*' 'audit')
+    (Case 'rm -rf s ..'                'rm -rf bin/../obj' 'deny')
+    (Case 'rm -rf s promennou'         'rm -rf $BUILD/bin' 'deny')
+    (Case 'Invoke-Expression'          'Invoke-Expression $cmd' 'audit' 'PowerShell')
+    (Case 'iex'                        'iex $cmd' 'audit' 'PowerShell')
+    (Case 'ef migrations remove'       'dotnet ef migrations remove' 'audit')
+    (Case 'DROP TABLE bez hostu'       'psql -c "DROP TABLE Record"' 'deny')
+    (Case 'dropdb lokalni'             'dropdb gsd_test_e2e_1' 'audit')
+    (Case 'ef database drop lokalni'   'dotnet ef database drop' 'deny')
+    (Case 'ef drop Host=localhost'     'dotnet ef database drop --connection "Host=localhost;Database=gsd_dev"' 'audit')
+    (Case 'TRUNCATE lokalni'           'psql -h 127.0.0.1 -c "TRUNCATE Record"' 'deny')
 )
 
 # --------------------------------------------------------------- allow (0) ---
@@ -222,7 +225,7 @@ $allowCases = @(
 $czechCases = @(
     (Case 'ceska cesta deny'           'rm -rf docs/hlášení/září' 'deny')
     (Case 'ceska cesta allow'          'rm -rf bin/hlášení' 'allow')
-    (Case 'ceska cesta ask'            'rm -rf bin/hlášení/*' 'ask')
+    (Case 'ceska cesta ask'            'rm -rf bin/hlášení/*' 'audit')
 )
 
 # ------------------------------------------------------------- vyhodnoceni ---
@@ -233,7 +236,10 @@ function Test-Cases([string]$Section, $Cases) {
         # Nalez Amber H2: generator invariantu bere pripady odsud, ne rucnim vyberem.
         # Pripad s jinym nez vychozim rezimem opravneni se do invariantu NEDAVA -
         # radek nese jen prikaz a rezim by se pri prehrani ztratil.
-        if ($c.Mode -eq 'default') { Add-CollectedCase 'gate' 'cmd' $c.Tool $c.Cmd $c.Expect $c.Name }
+        # ZOPT-Q102 (0.3.1): `audit` = hook mlci (allow) A zapise radek auditu sede zony (Test-GreyZoneAudit) - byvale `ask`
+        # s politikou audit se tak lisi od tvaru, o kterem brana mlci uplne. Invariant drzi rozhodnuti allow.
+        $exp = if ($c.Expect -eq 'audit') { 'allow' } else { $c.Expect }
+        if ($c.Mode -eq 'default') { Add-CollectedCase 'gate' 'cmd' $c.Tool $c.Cmd $exp $c.Name }
         if (Test-CollectOnly) { continue }
 
         $template = if ($c.Tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
@@ -241,9 +247,11 @@ function Test-Cases([string]$Section, $Cases) {
             'tool_input.command' = $c.Cmd
             'permission_mode'    = $c.Mode
         }
-        $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json
+        $envA = if ($c.Expect -eq 'audit') { New-AuditEnvironment } else { $null }
+        $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json -Environment $envA
         $decision = Get-Decision $r
-        Assert-Equal $c.Expect $decision ("[{0}] {1}" -f $c.Name, $c.Cmd)
+        Assert-Equal $exp $decision ("[{0}] {1}" -f $c.Name, $c.Cmd)
+        if ($null -ne $envA) { Assert-True (Test-GreyZoneAudit $envA['CLAUDE_PLUGIN_DATA']) ("[{0}] radek auditu sede zony" -f $c.Name) }
 
         # navratovy kod je soucast kontraktu: deny = 2, jinak 0
         $expectedExit = if ($c.Expect -eq 'deny') { 2 } else { 0 }
@@ -269,8 +277,8 @@ Test-Cases 'ceske cesty - round-trip kodovani' $czechCases
 
 $amberCases = @(
     # --- A1: .NET mazani, kde cil je promenna. Drive allow, ted ask (par. 2.3). ---
-    (Case 'A1 net-delete promenna'      '[IO.Directory]::Delete($p, $true)' 'ask' 'PowerShell')
-    (Case 'A1 net-delete promenna File' '[System.IO.File]::Delete($target)' 'ask' 'PowerShell')
+    (Case 'A1 net-delete promenna'      '[IO.Directory]::Delete($p, $true)' 'deny' 'PowerShell')
+    (Case 'A1 net-delete promenna File' '[System.IO.File]::Delete($target)' 'deny' 'PowerShell')
     (Case 'A1 kontrola literal src'     '[IO.Directory]::Delete(''src'', $true)' 'deny' 'PowerShell')
     (Case 'A1 kontrola literal bin'     '[IO.Directory]::Delete(''bin'', $true)' 'allow' 'PowerShell')
 
@@ -294,7 +302,7 @@ $amberCases = @(
     (Case 'A4 heredoc quoted delim'     "psql -h db.firma.cz <<'SQL'`nTRUNCATE users`nSQL" 'deny')
     (Case 'A4 heredoc conn string'      "psql `"Host=db.firma.cz`" <<SQL`nDROP SCHEMA public CASCADE`nSQL" 'deny')
     # bez hosta = lokalni = ask (ne deny)
-    (Case 'A4 heredoc lokalni'          "psql <<SQL`nDROP TABLE users`nSQL" 'ask')
+    (Case 'A4 heredoc lokalni'          "psql <<SQL`nDROP TABLE users`nSQL" 'deny')
     # kontrolni skupina: nedestruktivni SQL v heredocu je bezna prace
     (Case 'A4 kontrola SELECT'          "psql -h db.firma.cz <<SQL`nSELECT 1`nSQL" 'allow')
     (Case 'A4 kontrola cizi heredoc'    "cat <<EOF`nDROP TABLE users`nEOF" 'allow')
@@ -332,7 +340,7 @@ $amberCases = @(
     (Case 'B4 Select-String'            'Select-String "DROP TABLE" -Path src/x.sql' 'allow' 'PowerShell')
     # kontrolni skupina: v SQL kontextu to porad chytit MUSI
     (Case 'B4 psql -c vzdalene'         'psql -h db.firma.cz -c "DROP TABLE users"' 'deny')
-    (Case 'B4 psql -c lokalne'          'psql -c "TRUNCATE users"' 'ask')
+    (Case 'B4 psql -c lokalne'          'psql -c "TRUNCATE users"' 'deny')
 
     # --- B5: Npgsql bere Server= i Data Source= jako hostitele. ---
     (Case 'B5 Server= vzdalene'         'dotnet ef database update --connection "Server=db.firma.cz;Database=gsd"' 'deny')
@@ -341,13 +349,13 @@ $amberCases = @(
 
     # --- T-1 (Tom): DELETE FROM bez WHERE ma dopad TRUNCATE. ---
     (Case 'T1 delete bez where vzdal'   'psql -h db.firma.cz -c "DELETE FROM users"' 'deny')
-    (Case 'T1 delete bez where lokal'   'psql -c "DELETE FROM users"' 'ask')
+    (Case 'T1 delete bez where lokal'   'psql -c "DELETE FROM users"' 'deny')
     (Case 'T1 delete heredoc'           "psql -h db.firma.cz <<SQL`nDELETE FROM users`nSQL" 'deny')
     # kontrolni skupina: s WHERE je to bezna prace
     (Case 'T1 kontrola s where'         'psql -c "DELETE FROM users WHERE id=1"' 'allow')
     (Case 'T1 kontrola where vzdalene'  'psql -h db.firma.cz -c "DELETE FROM users WHERE id=1"' 'allow')
     # WHERE musi byt v TOM SAMEM statementu, ne kdekoli v textu
-    (Case 'T1 where v jinem statementu' 'psql -c "SELECT * FROM a WHERE id=1; DELETE FROM users"' 'ask')
+    (Case 'T1 where v jinem statementu' 'psql -c "SELECT * FROM a WHERE id=1; DELETE FROM users"' 'deny')
 
     # --- B11 (Amber, zeleny): absolutni povolena cesta a tvar Git Bashe ---
     (Case 'B11 absolutni bin'           'rm -rf W:/dev/gsd/repo/bin' 'allow')
@@ -363,7 +371,7 @@ Test-Cases 'review Amber + rozhodnuti T-1' $amberCases
 $amber2Cases = @(
     # --- C1: regrese, kterou zavedla oprava B4. Roura do SQL klienta. ---
     (Case 'C1 echo do psql'             'echo "DROP TABLE users" | psql -h db.firma.cz' 'deny')
-    (Case 'C1 echo lokalne'             'echo "TRUNCATE users" | psql' 'ask')
+    (Case 'C1 echo lokalne'             'echo "TRUNCATE users" | psql' 'deny')
     # T-10 A: SQL, ktere v prikazu neni videt, uz nezastavuje - zapise se do auditu.
     (Case 'C1 cat souboru do psql'      'cat drop.sql | psql -h db.firma.cz' 'allow')
     (Case 'C1 Get-Content do psql'      'Get-Content drop.sql | psql -h db.firma.cz' 'allow' 'PowerShell')
@@ -400,7 +408,7 @@ $amber2Cases = @(
     (Case 'C4 sudo psql'                "sudo -u postgres psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
     (Case 'C4 docker exec psql'         "docker exec -i db psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
     (Case 'C4 sqlcmd -S -Q'             'sqlcmd -S db.firma.cz -Q "DROP TABLE x"' 'deny')
-    (Case 'C4 sqlcmd lokalne'           'sqlcmd -Q "TRUNCATE TABLE x"' 'ask')
+    (Case 'C4 sqlcmd lokalne'           'sqlcmd -Q "TRUNCATE TABLE x"' 'deny')
     (Case 'C4 psql -f souborem'         'psql -h db.firma.cz -f migrace.sql' 'allow')
     (Case 'C4 sqlcmd -i souborem'       'sqlcmd -S db.firma.cz -i migrace.sql' 'allow')
     (Case 'C4 kontrola sudo SELECT'     "sudo -u postgres psql -h db.firma.cz <<SQL`nSELECT 1`nSQL" 'allow')
@@ -445,7 +453,7 @@ $amber3Cases = @(
     # 0.1.10 na ni dala audit; 0.1.11 zpatky ASK (nalez Ady N35): ve vypisu 46 dotazu
     # ma tahle pricina NULA vyskytu, takze `ask` nestoji ani jeden dotaz navic - a
     # u tvaru, kde nevime ani kde telo konci, je audit tvrzeni bez opory.
-    (Case 'E2 neukonceny heredoc'       "bash <<EOF`ngit status" 'ask')
+    (Case 'E2 neukonceny heredoc'       "bash <<EOF`ngit status" 'audit')
     # kontrolni skupina D3 plati dal: telo u NE-shellu jsou data
     (Case 'E2 kontrola D3 poznamka'     "cat > NOTES.md <<EOF`ngit reset --hard je nebezpecny`nEOF" 'allow')
 
@@ -466,7 +474,7 @@ $amber3Cases = @(
     (Case 'E4 nice -n 10'               "nice -n 10 psql -h db.firma.cz <<SQL`nDROP TABLE x`nSQL" 'deny')
 
     # --- F1: `-S` je hostitel jen u sqlcmd ---
-    (Case 'F1 psql -S neni host'        'psql -S -c "TRUNCATE x"' 'ask')
+    (Case 'F1 psql -S neni host'        'psql -S -c "TRUNCATE x"' 'deny')
     (Case 'F1 kontrola sqlcmd'          'sqlcmd -S db.firma.cz -Q "DROP TABLE x"' 'deny')
 
     # --- E6: substituce v upstream clanku roury ---
@@ -487,7 +495,7 @@ $metis2Cases = @(
     #      vzalo jen prvni slovo. S LITERALNIM cilem je to ted deny.
     (Case 'M1 find exec literal'        'find . -exec sh -c ''rm -rf /srv/data'' {} \;' 'deny')
     #      S promennou v cili plati Z3 (rozsah nezname) - stejne jako u [IO.Directory]::Delete($p).
-    (Case 'M1 find exec promenna'       'find . -exec sh -c ''rm -rf "$0"'' {} \;' 'ask')
+    (Case 'M1 find exec promenna'       'find . -exec sh -c ''rm -rf "$0"'' {} \;' 'deny')
     (Case 'M1 kontrola'                 'find . -name "*.cs" -exec grep -l TODO {} \;' 'allow')
 
     # M2 - `<<\SQL` je treti zpusob potlaceni expanze vedle `'SQL'` a `"SQL"`
@@ -499,8 +507,8 @@ $metis2Cases = @(
     (Case 'M3 kontrola'                 '& { Get-Date }' 'allow' 'PowerShell')
 
     # M4 - PowerShell bere kazdou jednoznacnou zkratku parametru
-    (Case 'M4 -enc'                     'pwsh -enc UmVtb3ZlLUl0ZW0gLVJlY3Vyc2UgLUZvcmNlIEM6XA==' 'ask' 'PowerShell')
-    (Case 'M4 -encod'                   'pwsh -encod UmVtb3ZlLUl0ZW0=' 'ask' 'PowerShell')
+    (Case 'M4 -enc'                     'pwsh -enc UmVtb3ZlLUl0ZW0gLVJlY3Vyc2UgLUZvcmNlIEM6XA==' 'audit' 'PowerShell')
+    (Case 'M4 -encod'                   'pwsh -encod UmVtb3ZlLUl0ZW0=' 'audit' 'PowerShell')
     (Case 'M4 kontrola -e neni enc'     'pwsh -NoProfile -Command "Get-Date"' 'allow' 'PowerShell')
 
     # M5 - procesova substituce je taky spusteny prikaz
@@ -511,7 +519,7 @@ $metis2Cases = @(
     (Case 'M6 dva heredocy'             "cat <<IGNORE && psql -h prod <<SQL`nignorovany text`nIGNORE`nDROP TABLE users;`nSQL" 'deny')
 
     # M7 - -ArgumentList jako POLE se rozlozi na tokeny
-    (Case 'M7 ArgumentList pole'        "Start-Process pwsh -ArgumentList @('-enc', 'UmVtb3ZlLUl0ZW0gQzpc')" 'ask' 'PowerShell')
+    (Case 'M7 ArgumentList pole'        "Start-Process pwsh -ArgumentList @('-enc', 'UmVtb3ZlLUl0ZW0gQzpc')" 'audit' 'PowerShell')
     (Case 'M7 kontrola'                 "Start-Process git -ArgumentList @('status')" 'allow' 'PowerShell')
 
     # M8 - Metis sam stahl; overuji, ze mel pravdu, ze to stahl
@@ -562,7 +570,7 @@ $amber4Cases = @(
     #      tri pismena a padne do STARE zabrany "kratke /xxx muze byt prepinac cmd,
     #      rozsah nezname" (Z3). Nalez to nevyvraci: pred opravou bylo ALLOW.
     #      Deny se dolozi tymz obalem nad cilem, ktery za prepinac vzit nejde.
-    (Case 'G2 sudo -u'                  'sudo -u root rm -rf /srv' 'ask')
+    (Case 'G2 sudo -u'                  'sudo -u root rm -rf /srv' 'deny')
     (Case 'G2 sudo -u cesta'            'sudo -u root rm -rf /srv/data' 'deny')
     (Case 'G2 sudo -n'                  'sudo -n git reset --hard' 'deny')
     (Case 'G2 nice -n'                  'nice -n 10 rm -rf src' 'deny')
@@ -591,7 +599,7 @@ $amber4Cases = @(
     (Case 'G4 nevyvazena zavorka'       'echo { ; git reset --hard' 'deny' 'PowerShell')
 
     # G5 - `-ec` NENI predpona slova `encodedcommand`; `-c`/`-command` se porovnavaly presne.
-    (Case 'G5 -ec'                      'pwsh -ec UmVtb3ZlLUl0ZW0=' 'ask' 'PowerShell')
+    (Case 'G5 -ec'                      'pwsh -ec UmVtb3ZlLUl0ZW0=' 'audit' 'PowerShell')
     (Case 'G5 -com'                     'pwsh -com "git reset --hard"' 'deny' 'PowerShell')
     (Case 'G5 -comm'                    'pwsh -comm "rm -rf src"' 'deny' 'PowerShell')
     (Case 'G5 kontrola'                 'pwsh -NoProfile -File build.ps1' 'allow' 'PowerShell')
@@ -604,8 +612,8 @@ $amber4Cases = @(
     (Case 'G7 kontrola vetev'           'git checkout -b feature/x' 'allow')
 
     # G8 - telo heredocu, ktere se SPUSTI, ale rozebrat ho neumime (Z3 -> ask).
-    (Case 'G8 python heredoc'           "python <<EOF`nimport shutil`nshutil.rmtree('src')`nEOF" 'ask')
-    (Case 'G8 ssh heredoc'              "ssh prod <<EOF`nrm -rf /srv`nEOF" 'ask')
+    (Case 'G8 python heredoc'           "python <<EOF`nimport shutil`nshutil.rmtree('src')`nEOF" 'audit')
+    (Case 'G8 ssh heredoc'              "ssh prod <<EOF`nrm -rf /srv`nEOF" 'audit')
     (Case 'G8 kontrola data'            "cat > NOTES.md <<EOF`nrm -rf je nebezpecny`nEOF" 'allow')
 )
 
@@ -725,8 +733,8 @@ $amber5bCases = @(
     (Case 'K1 stash@{0}'                'git stash drop stash@{0}' 'deny')
     (Case 'K1 HEAD@{1}'                 'git reset --hard HEAD@{1}' 'deny')
     (Case 'K1 @{u}'                     'git reset --hard @{u}' 'deny')
-    (Case 'K1 ${DIR}'                   'rm -rf ${DIR}' 'ask')
-    (Case 'K1 src/${x}'                 'rm -rf src/${x}' 'ask')
+    (Case 'K1 ${DIR}'                   'rm -rf ${DIR}' 'deny')
+    (Case 'K1 src/${x}'                 'rm -rf src/${x}' 'deny')
     (Case 'K1 slozena zavorka jako arg' 'rm -rf {src,lib}' 'deny')
     (Case 'K1 neblokova zavorka driv'   'if ($a -eq ${env:X}) { git reset --hard }' 'deny' 'PowerShell')
     # 🔴 kontrolni skupina: blok se MUSI dal rozebirat (jinak by K1 vratilo I1)
@@ -748,10 +756,10 @@ $amber5bCases = @(
     #    (`Delete(`, `git reset --hard`), takze `rawDestructiveTokens` dela token-test
     #    nad `Raw` a vyjde z toho `ask`, ne `deny` - kontext neznáme. Cena nad
     #    vypisem 46 dotazu: 0.
-    (Case 'L1 kontrola volani metody'   'Get-ChildItem | ForEach-Object { $_.Delete() }' 'ask' 'PowerShell')
-    (Case 'L1 kontrola podvyraz'        'Where-Object { $_.Name -eq ''x'' -or (git reset --hard) }' 'ask' 'PowerShell')
+    (Case 'L1 kontrola volani metody'   'Get-ChildItem | ForEach-Object { $_.Delete() }' 'deny' 'PowerShell')
+    (Case 'L1 kontrola podvyraz'        'Where-Object { $_.Name -eq ''x'' -or (git reset --hard) }' 'deny' 'PowerShell')
     #    Naproti tomu mazani z roury je POJMENOVANY tvar, ne nerozebratelny - zustava ask.
-    (Case 'L1 kontrola roura z $_'      'Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force }' 'ask' 'PowerShell')
+    (Case 'L1 kontrola roura z $_'      'Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force }' 'audit' 'PowerShell')
     # 🔴 v BASHi vyrazove pravidlo NEPLATI - `$cmd -rf src` se tam spousti, takze tvar
     #    zustava NEROZEBRATELNY; od 0.1.10 z toho ale neni dotaz, ale audit.
     (Case 'L1 kontrola Bash zustava'    '$_.Name -like "*.cs"' 'allow')
@@ -803,14 +811,14 @@ $ada6Cases = @(
 
     # N22 - UPDATE ... SET bez WHERE (rozsireni rozsahu, rozhodl Tom T-9 A)
     (Case 'N22 update bez where prod'    'psql -h prod -c "UPDATE users SET active=0"' 'deny')
-    (Case 'N22 update bez where local'   'psql -h localhost -c "UPDATE users SET active=0"' 'ask')
+    (Case 'N22 update bez where local'   'psql -h localhost -c "UPDATE users SET active=0"' 'deny')
     # 🔴 kontrolni skupina: s WHERE je to bezna prace
     (Case 'N22 kontrola s where'         'psql -h prod -c "UPDATE t SET a=1 WHERE id=1"' 'allow')
     (Case 'N22 kontrola delete drzi'     'psql -h prod -c "DELETE FROM t"' 'deny')
 
     # N21 - prikaz jako argument vzdaleneho shellu
-    (Case 'N21 ssh s prikazem'           'ssh host "rm -rf /"' 'ask')
-    (Case 'N21 ssh s SQL prikazem'       'ssh host "psql -c ''DROP TABLE x''"' 'ask')
+    (Case 'N21 ssh s prikazem'           'ssh host "rm -rf /"' 'audit')
+    (Case 'N21 ssh s SQL prikazem'       'ssh host "psql -c ''DROP TABLE x''"' 'audit')
     # 🔴 kontrolni skupina: ssh BEZ prikazu je bezna prace
     (Case 'N21 kontrola ssh bez prikazu' 'ssh host' 'allow')
     (Case 'N21 kontrola ssh -T'          'ssh -T git@github.com' 'allow')
@@ -833,8 +841,8 @@ $ada6bCases = @(
     (Case 'N24 ssh -o s volbou'          'ssh -o BatchMode=yes host' 'allow')
     (Case 'N24 ssh -l s uzivatelem'      'ssh -l tomas host' 'allow')
     # 🔴 kontrolni skupina: s PRIKAZEM to ask zustava, i kdyz jsou prepinace pritomne
-    (Case 'N24 kontrola s prikazem'      'ssh -i key.pem host "rm -rf /"' 'ask')
-    (Case 'N24 kontrola bez prepinacu'   'ssh host "rm -rf /"' 'ask')
+    (Case 'N24 kontrola s prikazem'      'ssh -i key.pem host "rm -rf /"' 'audit')
+    (Case 'N24 kontrola bez prepinacu'   'ssh host "rm -rf /"' 'audit')
     (Case 'N24 kontrola holy ssh'        'ssh host' 'allow')
 
     # N25 - UPDATE ONLY / UPDATE ... AS
@@ -872,7 +880,7 @@ $t10Cases = @(
     # !! kontrolni skupina: SQL, ktere VIDET JE, se rozhoduje dal podle hostitele
     (Case 'T10 kontrola literal v roure' 'echo "DROP TABLE users" | psql -h prod' 'deny')
     (Case 'T10 kontrola -c na prod'      'psql -h prod -c "DROP TABLE x"' 'deny')
-    (Case 'T10 kontrola -c na localhost' 'psql -h localhost -c "DROP TABLE x"' 'ask')
+    (Case 'T10 kontrola -c na localhost' 'psql -h localhost -c "DROP TABLE x"' 'deny')
     (Case 'T10 kontrola here-string literal' 'psql -h prod <<< "DROP TABLE x"' 'deny')
 
     # !! tridy, ktere ask ZUSTAVAJI (rozhodnuti T-10 A jmenuje i to, co se NEMENI)
@@ -880,10 +888,10 @@ $t10Cases = @(
     #    T36-O5 A z nej udelalo audit a N34 (i) ho v 0.1.11 vraci na ask - protoze
     #    obsah promenne se v nem SPUSTI. Nazev pripadu zustava, ukazuje na nej radek
     #    regresniho invariantu.
-    (Case 'T10 zustava obal s promennou' 'bash -c "$CMD"' 'ask')
-    (Case 'T10 zustava ssh s prikazem'   'ssh host "rm -rf /"' 'ask')
-    (Case 'T10 zustava kratka cesta'     'rm -rf /srv' 'ask')
-    (Case 'T10 zustava spusteni promenne' '& $cmd' 'ask' 'PowerShell')
+    (Case 'T10 zustava obal s promennou' 'bash -c "$CMD"' 'audit')
+    (Case 'T10 zustava ssh s prikazem'   'ssh host "rm -rf /"' 'audit')
+    (Case 'T10 zustava kratka cesta'     'rm -rf /srv' 'deny')
+    (Case 'T10 zustava spusteni promenne' '& $cmd' 'audit' 'PowerShell')
 )
 
 Test-Cases 'rozhodnuti Toma T-10 A (tridy ask)' $t10Cases
@@ -935,21 +943,21 @@ Assert-True (-not [System.IO.Directory]::Exists($auditDir2)) '[audit/kontrola] z
 $t36Cases = @(
     # --- kontrolni skupina: co ask ZUSTAVA. Bez ni by sada merila jen to, ze se neco
     #     zmenilo, ne ze se zmenilo to spravne.
-    (Case 'T36 spusteni promenne'       '& $cmd' 'ask' 'PowerShell')
-    (Case 'T36 spusteni promenne arg'   '& $cmd -Force' 'ask' 'PowerShell')
-    (Case 'T36 -enc'                    'pwsh -enc UmVtb3ZlLUl0ZW0=' 'ask' 'PowerShell')
-    (Case 'T36 ssh s prikazem'          'ssh prod "rm -rf /"' 'ask')
-    (Case 'T36 git alias'               "git -c alias.bd='branch -D' bd x" 'ask')
-    (Case 'T36 ssh heredoc'             ("ssh prod <<EOF" + $lf + 'rm -rf /srv' + $lf + 'EOF') 'ask')
+    (Case 'T36 spusteni promenne'       '& $cmd' 'audit' 'PowerShell')
+    (Case 'T36 spusteni promenne arg'   '& $cmd -Force' 'audit' 'PowerShell')
+    (Case 'T36 -enc'                    'pwsh -enc UmVtb3ZlLUl0ZW0=' 'audit' 'PowerShell')
+    (Case 'T36 ssh s prikazem'          'ssh prod "rm -rf /"' 'audit')
+    (Case 'T36 git alias'               "git -c alias.bd='branch -D' bd x" 'deny')
+    (Case 'T36 ssh heredoc'             ("ssh prod <<EOF" + $lf + 'rm -rf /srv' + $lf + 'EOF') 'audit')
 
     # --- pricina `variable` -> audit (jadro zmeny 0.1.10)
     # 🔴 0.1.11 / N34 (i): tri z techto ctyr jsou OBALY, ktere obsah promenne SPUSTI -
     #    tedy `invoked`, ne `variable`. Audit u nich znamenal, ze se rozlisovac tvaril
     #    jako "spusti se" x "nespusti se", ale ve skutecnosti delil "PS operator `&`"
     #    x zbytek. Ctvrty (`$TOOL git push`) obal nema a auditem zustava.
-    (Case 'T36 obal s promennou'        'bash -c "$CMD"' 'ask')
-    (Case 'T36 cmd s promennou'         'cmd /c %X%' 'ask')
-    (Case 'T36 eval s promennou'        'eval $cmd' 'ask')
+    (Case 'T36 obal s promennou'        'bash -c "$CMD"' 'audit')
+    (Case 'T36 cmd s promennou'         'cmd /c %X%' 'audit')
+    (Case 'T36 eval s promennou'        'eval $cmd' 'audit')
     (Case 'T36 promenna misto exe'      '$TOOL git push' 'allow')
     (Case 'T36 retezec s promennou'     '"EXIT=$LASTEXITCODE"' 'allow' 'PowerShell')
     (Case 'T36 Math Truncate promenna'  '[Math]::Truncate($x)' 'allow' 'PowerShell')
@@ -959,37 +967,38 @@ $t36Cases = @(
 
     # --- pricina `heredocUnterminated` a `depth`: 0.1.10 audit, 0.1.11 zpatky ASK
     #     (N35: obe maji ve vypisu 46 dotazu 0 vyskytu, takze default `ask` nestoji nic)
-    (Case 'T36 neukonceny heredoc'      ("bash <<EOF" + $lf + 'git status') 'ask')
+    (Case 'T36 neukonceny heredoc'      ("bash <<EOF" + $lf + 'git status') 'audit')
 
     # --- pricina `interpreter`: bez destruktivniho tokenu audit, s nim ask (1C)
     (Case 'T36 python neskodny'         'python -c "print(1)"' 'allow')
     (Case 'T36 python read_text'        'python -c "import io; io.open(''x'').read()"' 'allow')
-    (Case 'T36 python rmtree'           'python -c "import shutil; shutil.rmtree(''src'')"' 'ask')
-    (Case 'T36 python os.remove'        'python -c "import os; os.remove(''x'')"' 'ask')
-    (Case 'T36 node rmSync'             'node -e "require(''fs'').rmSync(''src'')"' 'ask')
+    (Case 'T36 python rmtree'           'python -c "import shutil; shutil.rmtree(''src'')"' 'audit')
+    (Case 'T36 python os.remove'        'python -c "import os; os.remove(''x'')"' 'audit')
+    (Case 'T36 node rmSync'             'node -e "require(''fs'').rmSync(''src'')"' 'audit')
     (Case 'T36 node neskodny'           'node -e "console.log(require(''./p.json'').name)"' 'allow')
     (Case 'T36 python heredoc neskodny' ("python <<EOF" + $lf + 'print(1)' + $lf + 'EOF') 'allow')
-    (Case 'T36 python heredoc rmtree'   ("python <<EOF" + $lf + 'import shutil' + $lf + "shutil.rmtree('src')" + $lf + 'EOF') 'ask')
+    (Case 'T36 python heredoc rmtree'   ("python <<EOF" + $lf + 'import shutil' + $lf + "shutil.rmtree('src')" + $lf + 'EOF') 'audit')
     #     token se porovnava CASE-SENSITIVNE - jinak by seznam chytal bezna slova
     (Case 'T36 token jinou velikosti'   'python -c "x.remove_item(1)"' 'allow')
 
     # --- 1B: Microsoft.VisualBasic je druhe jmeno teze operace
-    (Case 'T36 VB promenna'             '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, $true)' 'ask' 'PowerShell')
+    (Case 'T36 VB promenna'             '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, $true)' 'deny' 'PowerShell')
     (Case 'T36 VB literal src'          '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(''src'')' 'deny' 'PowerShell')
     (Case 'T36 VB literal bin'          '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(''bin'')' 'allow' 'PowerShell')
     (Case 'T36 VB DeleteFile literal'   '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(''src/a.cs'')' 'deny' 'PowerShell')
-    (Case 'T36 VB recycle bin'          '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)' 'ask' 'PowerShell')
+    (Case 'T36 VB recycle bin'          '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)' 'deny' 'PowerShell')
     #     kontrolni skupina: stara cesta [IO.*]::Delete se nezmenila
-    (Case 'T36 IO.File promenna'        '[IO.File]::Delete($f)' 'ask' 'PowerShell')
+    (Case 'T36 IO.File promenna'        '[IO.File]::Delete($f)' 'deny' 'PowerShell')
     (Case 'T36 IO.Directory literal'    '[IO.Directory]::Delete(''src'', $true)' 'deny' 'PowerShell')
 
     # --- v bypassu: audit ZUSTAVA auditem (neni to `ask`, tak se z neho nema co stat
     #     `deny`), `invoked` na deny padne dal.
     # 🔴 0.1.11: `bash -c "$CMD"` uz auditem NENI (N34 i -> `invoked`), takze v bypassu
     #    padne na deny stejne jako `& $cmd`. Auditni tvar drzi `$TOOL git push` nize.
-    (Case 'T36 bypass obal s promennou' 'bash -c "$CMD"' 'deny' 'Bash' 'bypassPermissions')
+    # ZOPT-Q102 (0.3.1): `ask` v bypassu uz nevznika (nebylo co prekladat na deny) - `invoked` je seda zona i tady.
+    (Case 'T36 bypass obal s promennou' 'bash -c "$CMD"' 'audit' 'Bash' 'bypassPermissions')
     (Case 'T36 bypass audit zustava'    '$TOOL git push' 'allow' 'Bash' 'bypassPermissions')
-    (Case 'T36 bypass spusteni'         '& $cmd' 'deny' 'PowerShell' 'bypassPermissions')
+    (Case 'T36 bypass spusteni'         '& $cmd' 'audit' 'PowerShell' 'bypassPermissions')
     (Case 'T36 bypass VB literal'       '[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(''src'')' 'deny' 'PowerShell' 'bypassPermissions')
 )
 
@@ -1019,20 +1028,18 @@ if ([System.IO.File]::Exists($auditPathO)) {
     Assert-True (-not $lineO.Contains('TOOL')) '[opaque-audit] NEOBSAHUJE text prikazu'
 }
 
-# 🔴 kontrolni skupina: tvar, ktery ask ZUSTAVA, se do auditu nezapisuje - jinak by
-# radek v JSONL netvrdil nic o tom, co se doopravdy pustilo dal.
-Start-Case 'kontrolni skupina: & $cmd je ask, ne audit'
+# 🔴 kontrolni skupina: `& $cmd` (obsah se SPUSTI) ma vlastni pricinu - do 0.3.1 `ask`, od 0.3.1 (ZOPT-Q102) seda
+# zona: hook mlci a radek nese pricinu `invoked`, ne `variable` (rozdil proti tvaru vyse drzi tvar auditu).
+Start-Case 'kontrolni skupina: & $cmd je seda zona s pricinou invoked'
 $auditDirI = Join-Path $script:TempDir ('audit-inv-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
 $auditPathI = Join-Path $auditDirI 'gate-audit.jsonl'
 $jsonI = New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = '& $cmd' }
 $rI = Invoke-Hook -Script 'gate.ps1' -InputJson $jsonI -Environment @{ 'CLAUDE_PLUGIN_DATA' = $auditDirI }
-Assert-Equal 'ask' (Get-Decision $rI) '[opaque-ask] rozhodnuti je ask'
-# TASK-117 H-b (Z117-Q8 = B): od 0.3.0 se zapisuje i `ask` - radek ale nese SKUTECNE rozhodnuti
-# (`ask`), takze dal netvrdi, ze se neco pustilo. Do 0.2.0 tu stalo "radek NEVZNIKL".
+Assert-Equal 'allow' (Get-Decision $rI) '[opaque-invoked] hook mlci'
 $lineI = if ([System.IO.File]::Exists($auditPathI)) { [System.IO.File]::ReadAllText($auditPathI, ([System.Text.UTF8Encoding]::new($false))) } else { '' }
-Assert-True ($lineI -match '"shape":"gate:opaque:invoked"' -and $lineI -match '"decision":"ask"') '[opaque-ask] radek auditu nese ask s pricinou'
-Assert-True ($lineI -notmatch '"decision":"allow"') '[opaque-ask] zadny radek allow'
-Assert-True (-not $lineI.Contains('cmd')) '[opaque-ask] radek NEOBSAHUJE text prikazu'
+Assert-True ($lineI -match '"shape":"opaque:invoked","decision":"allow"') '[opaque-invoked] radek auditu nese pricinu invoked'
+Assert-True ($lineI -notmatch 'opaque:variable') '[opaque-invoked] pricina NENI variable'
+Assert-True (-not $lineI.Contains('cmd')) '[opaque-invoked] radek NEOBSAHUJE text prikazu'
 
 # TASK-117 CR-P10 (A117-N12): odmitnuty klic prepisu se do auditu zapise JEDNOU za session (znacka
 # `override-rejected.json`), ne pri kazdem volani - a v NOVE session znovu.
@@ -1070,7 +1077,7 @@ $v0111Cases = @(
     #     nebo `-f x.sql` a vetev markeru rozhodla driv, nez se nekdo podival na text.
     (Case 'N28 -c a redirect na prod'   'psql -h prod -c "DROP TABLE x" < /dev/null' 'deny')
     (Case 'N28 -f vedle -c na prod'     'psql -h prod -f m.sql -c "DROP TABLE x"' 'deny')
-    (Case 'N28 -c a redirect localhost' 'psql -h localhost -c "DROP TABLE x" < x' 'ask')
+    (Case 'N28 -c a redirect localhost' 'psql -h localhost -c "DROP TABLE x" < x' 'deny')
     #     další viditelné tvary vedle markeru
     (Case 'N28 truncate vedle -f'       'psql -h prod -f m.sql -c "TRUNCATE users"' 'deny')
     (Case 'N28 delete bez where'        'psql -h prod -c "DELETE FROM users" < /dev/null' 'deny')
@@ -1080,15 +1087,15 @@ $v0111Cases = @(
     #     se ptala na `$sqlDestructive`, pravidlo se pta na `$destructive`.
     (Case 'A-1 dropdb prod + redirect'  'dropdb -h prod mydb < /dev/null' 'deny')
     (Case 'A-1 dropdb prod + -f'        'dropdb -h prod mydb -f x.sql' 'deny')
-    (Case 'A-1 dropdb localhost + redir' 'dropdb -h localhost x < /dev/null' 'ask')
+    (Case 'A-1 dropdb localhost + redir' 'dropdb -h localhost x < /dev/null' 'deny')
     # 🔴 kontrolni skupina A-1: bez markeru se nic nemeni
     (Case 'A-1 kontrola dropdb prod'    'dropdb -h prod x' 'deny')
-    (Case 'A-1 kontrola dropdb local'   'dropdb -h localhost x' 'ask')
+    (Case 'A-1 kontrola dropdb local'   'dropdb -h localhost x' 'deny')
     #     `dotnet ef` v `sqlClients` NENI, takze marker nedostane - zmereno, ne
     #     odhadnuto: presmerovani na jeho rozhodnuti nema vliv (obojí `ask`, protoze
     #     bez `--connection` nema hostitele a plati "lokalni").
-    (Case 'A-1 kontrola ef drop'        'dotnet ef database drop' 'ask')
-    (Case 'A-1 kontrola ef drop redir'  'dotnet ef database drop < /dev/null' 'ask')
+    (Case 'A-1 kontrola ef drop'        'dotnet ef database drop' 'deny')
+    (Case 'A-1 kontrola ef drop redir'  'dotnet ef database drop < /dev/null' 'deny')
     (Case 'A-1 kontrola ef update prod' 'dotnet ef database update --connection "Host=prod" < /dev/null' 'deny')
 
     # 🔴 kontrolni skupina: marker SAM (bez viditelneho SQL) zustava auditem - jinak
@@ -1099,18 +1106,18 @@ $v0111Cases = @(
     (Case 'N28 kontrola neskodne -c'    'psql -h prod -c "SELECT 1" < /dev/null' 'allow')
 
     # --- 1B / N34 (i): obal, ktery SPOUSTI obsah promenne -> `invoked` -> ask
-    (Case 'N34 eval'                    'eval $cmd' 'ask')
-    (Case 'N34 bash -c'                 'bash -c "$x"' 'ask')
-    (Case 'N34 sh -c'                   'sh -c "$x"' 'ask')
-    (Case 'N34 cmd /c'                  'cmd /c %X%' 'ask')
-    (Case 'N34 pwsh -c'                 'pwsh -c $x' 'ask' 'PowerShell')
-    (Case 'N34 Start-Process promenna'  'Start-Process $x' 'ask' 'PowerShell')
-    (Case 'N33 dot-source promenne'     '. $x' 'ask' 'PowerShell')
+    (Case 'N34 eval'                    'eval $cmd' 'audit')
+    (Case 'N34 bash -c'                 'bash -c "$x"' 'audit')
+    (Case 'N34 sh -c'                   'sh -c "$x"' 'audit')
+    (Case 'N34 cmd /c'                  'cmd /c %X%' 'audit')
+    (Case 'N34 pwsh -c'                 'pwsh -c $x' 'audit' 'PowerShell')
+    (Case 'N34 Start-Process promenna'  'Start-Process $x' 'audit' 'PowerShell')
+    (Case 'N33 dot-source promenne'     '. $x' 'audit' 'PowerShell')
     #     `iex 'literal'` se ROZEBERE jako telo `bash -c` (N33 zuzeny)
     (Case 'N33 iex literal destruktivni' 'iex ''git reset --hard''' 'deny' 'PowerShell')
     (Case 'N33 iex literal neskodny'    'iex ''git status''' 'allow' 'PowerShell')
     (Case 'N33 iex -Command literal'    'Invoke-Expression -Command ''git branch -D x''' 'deny' 'PowerShell')
-    (Case 'N33 iex promenna'            'iex $cmd' 'ask' 'PowerShell')
+    (Case 'N33 iex promenna'            'iex $cmd' 'audit' 'PowerShell')
     # 🔴 kontrolni skupina N49: promenna jako CESTA neni kod. Bez teto skupiny by
     #    "obal s promennou = ask" znamenalo ask u kazdeho spousteni skriptu s cestou
     #    v promenne, coz je bezna prace.
@@ -1125,18 +1132,18 @@ $v0111Cases = @(
     (Case 'N33 kontrola nadrazeny adresar' 'ls ..' 'allow')
 
     # --- 1C / N35: destruktivni LITERAL pod nerozebratelnou hlavou -> ask
-    (Case 'N35 podvyraz v Where-Object' 'Where-Object { $_.Name -eq ''x'' -or (git reset --hard) }' 'ask' 'PowerShell')
-    (Case 'N35 volani metody Delete'    'Get-ChildItem | ForEach-Object { $_.Delete() }' 'ask' 'PowerShell')
-    (Case 'N35 promenna v hlave'        '$SUDO git reset --hard' 'ask')
+    (Case 'N35 podvyraz v Where-Object' 'Where-Object { $_.Name -eq ''x'' -or (git reset --hard) }' 'deny' 'PowerShell')
+    (Case 'N35 volani metody Delete'    'Get-ChildItem | ForEach-Object { $_.Delete() }' 'deny' 'PowerShell')
+    (Case 'N35 promenna v hlave'        '$SUDO git reset --hard' 'deny')
     # 🔴 Zmereno: neukonceny heredoc s destruktivnim TELEM konci `deny`, ne `ask` -
     #    telo se rozebere jako prikazova radka a `deny` z nej prebije `ask` z priciny
     #    `heredocUnterminated`. Tvrdi se tedy silnejsi vec, nez zadani predpokladalo.
     #    Kontrolni skupina o radek niz ukazuje, ze prazdna cesta konci `ask`.
     (Case 'N35 neukonceny heredoc destr' ("bash <<EOF" + $lf + 'git reset --hard') 'deny')
-    (Case 'N35 neukonceny heredoc plain' ("bash <<EOF" + $lf + 'git status') 'ask')
+    (Case 'N35 neukonceny heredoc plain' ("bash <<EOF" + $lf + 'git status') 'audit')
     #     `depth`: destruktivni literal chytne 1C, cisty tvar chytne default `ask`
-    (Case 'N40 zanoreni depth s rm'     $deepDestr 'ask' 'PowerShell')
-    (Case 'N40 zanoreni depth bez rm'   $deepPlain 'ask' 'PowerShell')
+    (Case 'N40 zanoreni depth s rm'     $deepDestr 'deny' 'PowerShell')
+    (Case 'N40 zanoreni depth bez rm'   $deepPlain 'deny' 'PowerShell')
     # 🔴 kontrolni skupina: bez destruktivniho literalu zustava audit (ticho).
     #    Bez ni by "1C funguje" znamenalo jen "vse je ask" - to uz umel 0.1.9.
     (Case 'N35 kontrola bez tokenu'     '"EXIT=$x"' 'allow' 'PowerShell')
@@ -1144,11 +1151,12 @@ $v0111Cases = @(
     (Case 'N35 kontrola git push'       '$TOOL git push' 'allow')
     # 🔴 N50: `DELETE FROM` je v `rawDestructiveTokens`, ale NE v tokenech interpretu -
     #    telo interpretu bezne nese SQL s WHERE, ktere overit nejde.
-    (Case 'N50 raw DELETE FROM'         '$SQL DELETE FROM users' 'ask')
+    (Case 'N50 raw DELETE FROM'         '$SQL DELETE FROM users' 'deny')
     (Case 'N50 interpret DELETE FROM'   'python -c "q = ''DELETE FROM t WHERE id=1''"' 'allow')
 
     # --- 1F / N40: dva tvary, ktere dosud nemely pripad
-    (Case 'N40 -EncodedCommand bypass'  'pwsh -enc UmVtb3ZlLUl0ZW0=' 'deny' 'PowerShell' 'bypassPermissions')
+    # A179-O3, 0.3.1: zadne ask, ktere by bypass prevadel na deny; opaque.encoded = audit i v bypassu
+    (Case 'N40 -EncodedCommand bypass'  'pwsh -enc UmVtb3ZlLUl0ZW0=' 'audit' 'PowerShell' 'bypassPermissions')
 )
 
 Test-Cases 'v0.1.11 - nalezy Ady N28, N33-N35, N49, N50' $v0111Cases
@@ -1180,17 +1188,17 @@ $d1Cases = @(
     # 🔴 kontrolni skupina: hlava PROMENNA nebo SUBSTITUCE = obsah se SPUSTI -> `invoked` -> ask.
     #    Tvary `pwsh -c "$x"` a `bash -c "$cmd arg"` ve vzorku faze 1 NEBYLY (Amber, vyroky §4) -
     #    doklada je az tenhle test, a je to podminka, ne bonus.
-    (Case 'B15 kontrola bash -c $x'                'bash -c "$x"' 'ask')
-    (Case 'B15 kontrola bash -c $cmd arg'          'bash -c "$cmd arg"' 'ask')
-    (Case 'B15 kontrola pwsh -c $x'                'pwsh -c "$x"' 'ask' 'PowerShell')
-    (Case 'B15 kontrola pwsh -Command $cmd -Force' 'pwsh -Command "$cmd -Force"' 'ask' 'PowerShell')
-    (Case 'B15 kontrola promenna v DRUHEM statementu' 'bash -c "echo hi; $cmd"' 'ask')
-    (Case 'B15 kontrola substituce v hlave'        'bash -c "$(cat cmd.txt)"' 'ask')
-    (Case 'B15 kontrola cmd /c %X%'                'cmd /c %X%' 'ask')
-    (Case 'B15 kontrola eval $cmd'                 'eval $cmd' 'ask')
-    (Case 'B15 kontrola iex $cmd'                  'iex $cmd' 'ask' 'PowerShell')
-    (Case 'B15 kontrola Start-Process $x'          'Start-Process $x' 'ask' 'PowerShell')
-    (Case 'B15 kontrola & $cmd (konstrukce A)'     '& $cmd' 'ask' 'PowerShell')
+    (Case 'B15 kontrola bash -c $x'                'bash -c "$x"' 'audit')
+    (Case 'B15 kontrola bash -c $cmd arg'          'bash -c "$cmd arg"' 'audit')
+    (Case 'B15 kontrola pwsh -c $x'                'pwsh -c "$x"' 'audit' 'PowerShell')
+    (Case 'B15 kontrola pwsh -Command $cmd -Force' 'pwsh -Command "$cmd -Force"' 'audit' 'PowerShell')
+    (Case 'B15 kontrola promenna v DRUHEM statementu' 'bash -c "echo hi; $cmd"' 'audit')
+    (Case 'B15 kontrola substituce v hlave'        'bash -c "$(cat cmd.txt)"' 'audit')
+    (Case 'B15 kontrola cmd /c %X%'                'cmd /c %X%' 'audit')
+    (Case 'B15 kontrola eval $cmd'                 'eval $cmd' 'audit')
+    (Case 'B15 kontrola iex $cmd'                  'iex $cmd' 'audit' 'PowerShell')
+    (Case 'B15 kontrola Start-Process $x'          'Start-Process $x' 'audit' 'PowerShell')
+    (Case 'B15 kontrola & $cmd (konstrukce A)'     '& $cmd' 'audit' 'PowerShell')
     # 🔴 destruktivni LITERAL uvnitr obalu je deny dal - zuzeni nesmi nic propustit
     (Case 'B15 kontrola deny v pwsh -Command'      'pwsh -Command "git reset --hard; Write-Host $x"' 'deny' 'PowerShell')
     (Case 'B15 kontrola deny v bash -c'            'bash -c "echo $x; git reset --hard"' 'deny')
@@ -1207,9 +1215,9 @@ $d1Cases = @(
     (Case 'B15b .NET volani s promennou uvnitr'    'pwsh -NoProfile -Command "[IO.File]::ReadAllBytes(''$f'')"' 'allow')
     (Case 'B15b prirazena promenna v hlave roury'  'pwsh -NoProfile -Command ''$e = $null; [x]::Parse($p, [ref]$null, [ref]$e); $e | Select-Object -First 3''' 'allow')
     # 🔴 kontrolni skupina: NEprirazena promenna v hlave a `& $x` uvnitr obalu zustavaji ask
-    (Case 'B15b kontrola neprirazena v hlave'      'pwsh -NoProfile -Command ''$e = $null; $other -Force''' 'ask')
-    (Case 'B15b kontrola & prirazene'              'pwsh -NoProfile -Command ''$c = "git status"; & $c''' 'ask')
-    (Case 'B15b kontrola escapovany dolar v hlave' 'bash -c "\$cmd arg"' 'ask')
+    (Case 'B15b kontrola neprirazena v hlave'      'pwsh -NoProfile -Command ''$e = $null; $other -Force''' 'audit')
+    (Case 'B15b kontrola & prirazene'              'pwsh -NoProfile -Command ''$c = "git status"; & $c''' 'audit')
+    (Case 'B15b kontrola escapovany dolar v hlave' 'bash -c "\$cmd arg"' 'audit')
 
     # --- bod 6 (nalez Amber K2, vyrok 2 Amber = DO ROZSAHU): rozebiraji se VSECHNY bloky
     #     ve statementu, ne jen ten, kterym statement konci. Mutant: vratit
@@ -1218,7 +1226,7 @@ $d1Cases = @(
     (Case 'B6 try/catch, destruktivni v try'       'try { git reset --hard } catch { Write-Host $_ }' 'deny' 'PowerShell')
     (Case 'B6 blok s komentarem za nim'            '{ rm -rf src } # poznamka' 'deny' 'PowerShell')
     (Case 'B6 if/elseif/else, destruktivni v POSLEDNIM' 'if ($a) { git status } elseif ($b) { git log } else { git branch -D x }' 'deny' 'PowerShell')
-    (Case 'B6 -Begin/-Process, mazani v druhem bloku' 'Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $_.Delete() }' 'ask' 'PowerShell')
+    (Case 'B6 -Begin/-Process, mazani v druhem bloku' 'Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $_.Delete() }' 'deny' 'PowerShell')
     (Case 'B6 Bash blok s presmerovanim za nim'    '{ rm -rf src; } 2>/dev/null' 'deny')
     # 🔴 kontrolni skupina (podminka vyroku 2): neskodne bloky se ptat NESMEJI
     (Case 'B6 kontrola if/else neskodne'           'if ($x) { git status } else { git log }' 'allow' 'PowerShell')
@@ -1296,16 +1304,20 @@ Assert-True ($null -ne $shapesBod4.PSObject.Properties['shortAbsolutePath']) '[b
 $textShort = ''
 if ($null -ne $shapesBod4.PSObject.Properties['shortAbsolutePath']) { $textShort = [string]$shapesBod4.shortAbsolutePath -replace '\{target\}', '/srv' }
 $textPipe = [string]$shapesBod4.deleteFromPipeline
+# ZOPT-Q102 / A179-O3 (Q4), 0.3.1: kratka absolutni cesta je deny (duvod dal jmenuje skutecnou pricinu), mazani z roury
+# je seda zona (hook mlci) - kontrolni skupina proto rozlisuje pricinu TVAREM auditu, ne textem dotazu.
 $r4 = Invoke-Hook -Script 'gate.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'rm -rf /srv' })
 $reason4 = Get-AskReason $r4
-Assert-Equal 'ask' (Get-Decision $r4) '[bod4] rm -rf /srv je porad ask'
+Assert-Equal 'deny' (Get-Decision $r4) '[bod4] rm -rf /srv je deny (0.3.1; do 0.3.1 ask)'
 Assert-True ($textShort -ne '' -and $reason4.Contains($textShort)) ("[bod4] duvod jmenuje kratkou absolutni cestu: {0}" -f $reason4)
 Assert-True (-not $reason4.Contains($textPipe)) '[bod4] duvod NEMLUVI o mazani z roury'
-$r4c = Invoke-Hook -Script 'gate.ps1' -InputJson (New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = 'Get-ChildItem src -Recurse -File | Remove-Item -Force' })
-$reason4c = Get-AskReason $r4c
-Assert-Equal 'ask' (Get-Decision $r4c) '[bod4/kontrola] mazani z roury je porad ask'
-Assert-True ($reason4c.Contains($textPipe)) ("[bod4/kontrola] duvod jmenuje mazani z roury: {0}" -f $reason4c)
-Assert-True ($textShort -eq '' -or -not $reason4c.Contains($textShort)) '[bod4/kontrola] duvod NEMLUVI o kratke absolutni ceste'
+$env4c = New-AuditEnvironment
+$r4c = Invoke-Hook -Script 'gate.ps1' -InputJson (New-HookInput 'pretooluse-powershell' @{ 'tool_input.command' = 'Get-ChildItem src -Recurse -File | Remove-Item -Force' }) -Environment $env4c
+Assert-Equal 'allow' (Get-Decision $r4c) '[bod4/kontrola] mazani z roury je seda zona (hook mlci)'
+$aud4c = Join-Path $env4c['CLAUDE_PLUGIN_DATA'] 'gate-audit.jsonl'
+$line4c = if ([System.IO.File]::Exists($aud4c)) { [System.IO.File]::ReadAllText($aud4c) } else { '' }
+Assert-True ($line4c -match '"shape":"gate:deleteFromPipeline","decision":"allow"') ("[bod4/kontrola] audit jmenuje mazani z roury: {0}" -f $line4c)
+Assert-True ($line4c -notmatch 'shortAbsolutePath') '[bod4/kontrola] audit NEMLUVI o kratke absolutni ceste'
 
 # ------------------------ K-2: tvary v auditu u "SQL neni videt" (review Amber) ---
 #
@@ -1392,7 +1404,9 @@ function Test-OpaquePolicy([string]$Name, [string]$Value, [string]$Expect) {
 
 Start-Case 'gate.opaque je konfigurace (a neznama hodnota je fail-closed)'
 Test-OpaquePolicy 'audit' 'audit' 'allow'
-Test-OpaquePolicy 'ask'   'ask'   'ask'
+# ZOPT-Q102 (0.3.1): hodnoty jsou `audit` | `deny` (do 0.3.1 `audit` | `ask`); `ask` H-c odmitne jako neznamou hodnotu.
+Test-OpaquePolicy 'deny'  'deny'  'deny'
+Test-OpaquePolicy 'ask (od 0.3.1 neznama, klic odmitnut)' 'ask' 'allow'
 # 🔴 Neznama hodnota NESMI branu tise otevrit. Do 0.2.0 ji Resolve-OpaqueDecision cetl jako
 # `ask`; od 0.3.0 (H-c, Z117-Q21 = A) se klic `gate.opaque` s neznamou hodnotou ODMITNE cely a plati
 # vychozi `opaque` - pro `variable` je vychozi `audit`, tedy ticho. Neotevira to nic, co vychozi
@@ -1429,18 +1443,20 @@ function Test-PartialGateOverride([string]$Name, [string]$Tool, [string]$Cmd, [s
 }
 
 Start-Case 'K2-1 opraveno: castecny override `gate` uz zbytek klice NEZTRATI'
-$ovVariableAsk = '{"gate":{"opaque":{"variable":"ask"}}}'
+# ZOPT-Q102 (0.3.1): zprisneni politiky je `deny` (do 0.3.1 `ask`). Objekt `opaque` se nahrazuje CELY - chybejici
+# priciny padnou na vychozi hodnotu kodu `deny`, proto `invoked drzi` nize konci deny.
+$ovVariableAsk = '{"gate":{"opaque":{"variable":"deny"}}}'
 Test-PartialGateOverride 'reset --hard drzi'  'Bash' 'git reset --hard' 'deny' $ovVariableAsk
 Test-PartialGateOverride 'branch -D drzi'     'Bash' 'git branch -D feature/x' 'deny' $ovVariableAsk
 Test-PartialGateOverride 'filter-branch drzi' 'Bash' 'git filter-branch --tree-filter x HEAD' 'deny' $ovVariableAsk
 # 🔴 druhy smer teze ztraty: povolena slozka uz taky nemizi, takze zadny falesny blok
 Test-PartialGateOverride 'rm -rf bin neblokuje' 'Bash' 'rm -rf bin' 'allow' $ovVariableAsk
 # a hodnota, kvuli ktere se override psal, PLATI - jinak by slouceni bylo k nicemu
-Test-PartialGateOverride 'prepsana politika plati' 'PowerShell' '"EXIT=$x"' 'ask' $ovVariableAsk
+Test-PartialGateOverride 'prepsana politika plati' 'PowerShell' '"EXIT=$x"' 'deny' $ovVariableAsk
 # 🔴 kontrolni skupina: pravidla, ktera ziji v KODU (ne v konfiguraci), drzi dal
 Test-PartialGateOverride 'rm -rf src drzi'    'Bash' 'rm -rf src' 'deny' $ovVariableAsk
 Test-PartialGateOverride 'DB podle hosta drzi' 'Bash' 'psql -h db.firma.cz -c "DROP TABLE users"' 'deny' $ovVariableAsk
-Test-PartialGateOverride 'invoked drzi'       'PowerShell' '& $cmd' 'ask' $ovVariableAsk
+Test-PartialGateOverride 'invoked drzi'       'PowerShell' '& $cmd' 'deny' $ovVariableAsk
 
 # 🔴 A POLE se porad nahrazuje CELE - to je smysl "jednourovnove", ne "hluboke".
 #    Bez tohohle radku by se nedalo poznat, jestli se neslucuje i dovnitr poli, a
@@ -1455,7 +1471,7 @@ Test-PartialGateOverride 'prazdne denyPatterns odmitnuto (H-c)' 'Bash' 'git rese
 $ovDenyPlus = '{"gate":{"denyPatterns":[' +
     '{"id":"git-reset-hard","pattern":"^git\\s+reset\\b.*\\s--hard(\\s|$)","shape":"git reset --hard"},' +
     '{"_pozn_checkout_restore":"x"},' +
-    '{"id":"git-branch-delete","pattern":"^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)","shape":"git branch -d/-D"},' +
+    '{"id":"git-branch-delete-force","pattern":"^git\\s+branch\\b(?=.*\\s(?-i:-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$))(?=.*\\s(?-i:-[A-Za-z]*[Df][A-Za-z]*|--force)(\\s|$))","shape":"git branch -D"},' +
     '{"id":"git-update-ref-del","pattern":"^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)","shape":"git update-ref -d"},' +
     '{"id":"git-push-delete","pattern":"^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)","shape":"git push --delete"},' +
     '{"id":"git-stash-destroy","pattern":"^git\\s+stash\\s+(drop|clear)(\\s|$)","shape":"git stash drop/clear"},' +
@@ -1506,11 +1522,12 @@ if (-not (Test-SafePath $vypisPath)) {
             Assert-Equal '' ($r.Stdout.Trim()) ("[vypis/{0}] hook mlci (prazdny stdout)" -f $vid)
             Assert-Equal 0 $r.Exit ("[vypis/{0}] exit 0" -f $vid)
         } else {
-            Assert-Equal 'ask' (Get-Decision $r) ("[vypis/{0}] rozhodnuti ask" -f $vid)
+            # ZOPT-Q102 / A179-O3 (Q4), 0.3.1: oba tvary s dotazem jsou `netDeleteVariable` -> deny (fixtura nese
+            # historicke `ask` mereni 7. 9.; tvrzeni se cte podle mapy).
+            Assert-Equal 'deny' (Get-Decision $r) ("[vypis/{0}] rozhodnuti deny (do 0.3.1 ask)" -f $vid)
             # Duvod musi jmenovat MAZANI. Bez 1B by tenhle tvar spadl do tridy
             # `variable`, tedy do auditu - a to by byla dira, ne automatizace.
-            # !! Cte se ze STDOUT: `ask` se na stderr nevypisuje vubec (Write-AskDecision),
-            #    takze tvrzeni nad `$r.Stderr` by bylo zelene i pro uplne jiny tvar.
+            # Cte se ze STDOUT (duvod deny nese JSON i stderr; stdout je tyz zdroj jako drive u ask).
             $reasonV = ''
             if (-not [string]::IsNullOrWhiteSpace($r.Stdout)) {
                 $reasonV = [string]($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason
@@ -1644,7 +1661,9 @@ Assert-Equal $expectedReason $r.Stderr 'duvod na stderr'
 
 # ------------------------------------------------- bypassPermissions (N2) ---
 
-Start-Case 'bypassPermissions - ask se vydava jako deny'
+# ZOPT-Q102 (0.3.1): do 0.3.1 se `ask` v bypassu vydaval jako `deny` s priponou "bypass". `ask` uz neexistuje, takze
+# byvala seda zona v bypassu dopadne STEJNE jako v `default` (audit = ticho, deny = deny) a duvod zadnou priponu nenese.
+Start-Case 'bypassPermissions - byvale ask dopadne jako v default (0.3.1)'
 foreach ($c in $askCases) {
     $template = if ($c.Tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
     $json = New-HookInput $template @{
@@ -1652,9 +1671,9 @@ foreach ($c in $askCases) {
         'permission_mode'    = 'bypassPermissions'
     }
     $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json
-    Assert-Equal 'deny' (Get-Decision $r) ("[bypass] {0}" -f $c.Name)
-    Assert-Equal 2 $r.Exit ("[bypass] {0} exit" -f $c.Name)
-    Assert-True ($r.Stderr -match 'bypass') ("[bypass] {0} duvod jmenuje bypass" -f $c.Name)
+    $expB = if ($c.Expect -eq 'audit') { 'allow' } else { $c.Expect }
+    Assert-Equal $expB (Get-Decision $r) ("[bypass] {0}" -f $c.Name)
+    Assert-True ($r.Stderr -notmatch 'bypass') ("[bypass] {0} duvod nenese priponu bypass" -f $c.Name)
 }
 
 Start-Case 'bypassPermissions - allow zustava allow'
@@ -1854,6 +1873,9 @@ Invoke-Task117Rows 'gate'
 #     Pripady v tests/fixtures/task179-gate.json; mutanti v repu GSD docs/logs/mutants/task-179/.
 Start-Case 'TASK-179 (fixtures/task179-gate.json)'
 Invoke-Task117Rows 'gate' 'task179'
+
+# ZOPT-Q102 (0.3.1): zadny beh sady nevydal ask, zdroj ani vychozi konfigurace ask neznaji.
+Assert-NoAskVerdict
 
 Write-CollectedCases
 Assert-TimingBudget

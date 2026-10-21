@@ -19,23 +19,27 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 
 | Hook | Událost | Co dělá |
 |---|---|---|
-| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**. Šedá zóna → **ask**. Tvar, který nejde rozebrat, → **audit** (viz níže). |
-| `secrets.ps1` | `PreToolUse` nad `Read`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit`/`Bash`/`PowerShell` | Čtení, zápis i výpis souborů se secrets → **deny**. Výpis prostředí, čtení citlivé proměnné a zápis do souborů, kterými se brána vypíná → **ask**. |
+| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**. Šedá zóna → **audit** nebo **deny** podle politiky (od 0.3.1 žádné `ask`, viz níže). |
+| `secrets.ps1` | `PreToolUse` nad `Read`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit`/`Bash`/`PowerShell` | Čtení, zápis i výpis souborů se secrets a zápis do souborů, kterými se brána vypíná → **deny**. Výpis prostředí a čtení citlivé proměnné → **audit**. |
 | `resume-cost.ps1` | `SessionStart` (`startup`/`resume`/`fork`) | Při startu **kanárek** („plugin běží, tyhle čtyři hooky jsou živé"). Při obnovení session hlásí cenu a zapisuje řádek do JSONL. Od 0.2.0 na každém startu hlásí **přírůstek řádků auditu** od minulého startu (výrok 6, TASK-106). Nic neblokuje. |
 | `notify.ps1` | `Notification` | Upozorní, že se čeká na člověka. Nic neblokuje. |
 
-### Tři rozhodnutí, ne dvě
+### Dvě rozhodnutí — od 0.3.1 žádné `ask` (`ZOPT-Q102`)
 
 - **deny** — nástroj se neprovede vůbec; důvod se vrátí modelu. Platí **i v režimu
   `bypassPermissions`** a s `--dangerously-skip-permissions`.
-- **ask** — zobrazí se běžný dotaz na oprávnění. Tohle je vynucený souhlas člověka:
-  rozhoduje ten, kdo sedí u terminálu, ne model.
-- **žádné rozhodnutí** — hook mlčí a platí normální tok oprávnění.
+- **žádné rozhodnutí** — hook mlčí a platí normální tok oprávnění. Šedá zóna (**audit**)
+  navíc zapíše řádek auditu s id tvaru.
 
-V režimu `bypassPermissions` se **`ask` vydává jako `deny`**: v bypassu by se dotaz
-nezobrazil, takže šedá zóna by tiše propadla. Důvod to říká nahlas.
+Do 0.3.0 existovalo třetí rozhodnutí, **ask** (dotaz na oprávnění; v `bypassPermissions` se
+vydával jako `deny`). Od 0.3.1 (rozhodnutí Toma `ZOPT-Q102` 2026-10-20, mapa Amber `A179-O3`)
+hook **na člověka nečeká nikdy**: každé bývalé `ask` má politiku `audit` nebo `deny`
+(`gate.decisions`, `secrets.decisions`, `gate.opaque`, `gate.dbDestroyLocal`). Úplná mapa je
+v [CHANGELOG 0.3.1](CHANGELOG.md). Tabulky níže jsou **historie** — `ask` v nich je verdikt
+té verze. Strukturní test sady (`Assert-NoAskVerdict`) hlídá, že žádný běh hooku `ask`
+nevydá a že zdroj ani výchozí konfigurace `ask` neznají.
 
-### Třídy `ask` — a jak se měnily od 0.1.8
+### Třídy `ask` — a jak se měnily od 0.1.8 (historie do 0.3.0)
 
 Rozsah brány je **rozhodnutí zadavatele**, ne technická nutnost. Po prvních ostrých
 sessions se spočítalo, co se doopravdy ptalo, a nad těmi čísly padla rozhodnutí
@@ -187,7 +191,7 @@ Projekt je může přepsat souborem `.claude/sinogard-hooks.json` ve své složc
 - je-li hodnota na obou stranách **objekt**, sloučí se **o jednu úroveň** (klíč po klíči),
 - **pole a skaláry se nahrazují CELÉ**.
 
-Takže `{"gate":{"opaque":{"variable":"ask"}}}` přepíše `gate.opaque` a **nechá být**
+Takže `{"gate":{"opaque":{"variable":"deny"}}}` přepíše `gate.opaque` a **nechá být**
 `denyPatterns`, `allowedRemoveRoots` i `shapes`; `{"gate":{"denyPatterns":[]}}` by naopak
 ten seznam vyprázdnil celý — **od 0.3.0 ho ale odmítne kontrola obsahu (níže)**. Důvod
 původního mělkého slučování tím drží — položku seznamu pořád nejde jen odebrat — jen kvůli
@@ -202,10 +206,10 @@ konfiguraci — čtou se před sloučením, takže je přepis sám změnit nemů
 
 | klíč přepisu | přijat, když |
 |---|---|
-| seznamy, jejichž přidání zpřísňuje (`gate.denyPatterns`, `askPatterns`, `rawDestructiveTokens`, `interpreterDestructiveTokens`, `sqlClients`, `shellInterpreters`, `codeInterpreters`, `remoteShells`, `protectedBranches`; `secrets.denyPathPatterns`, `askPathPatterns`, `selfProtectPathPatterns`, `protectedBaseNames`, `protectedPaths`, `pathCommands`, `writeCommands`) | obsahuje **všechny** výchozí položky |
+| seznamy, jejichž přidání zpřísňuje (`gate.denyPatterns`, `auditPatterns`, `rawDestructiveTokens`, `interpreterDestructiveTokens`, `interpreterDbTokens`, `sqlClients`, `shellInterpreters`, `codeInterpreters`, `remoteShells`, `protectedBranches`; `secrets.denyPathPatterns`, `auditPathPatterns`, `selfProtectPathPatterns`, `protectedBaseNames`, `protectedPaths`, `pathCommands`, `writeCommands`) | obsahuje **všechny** výchozí položky |
 | seznamy, jejichž přidání povoluje (`gate.allowedRemoveRoots`, `secrets.dataHeredocHosts`) | jen **vybírá** z výchozích |
 | `gate.localDbHosts` | jen jména z pevné místní množiny v kódu: `localhost`, `127.0.0.1`, `::1`, `(local)`, `.`, `(localdb)\<instance>` |
-| `gate.opaque` | hodnoty `audit` / `ask`; `encoded` jen `ask` |
+| `gate.opaque`, `gate.decisions`, `secrets.decisions` (od 0.3.1, pravidlo `policy`) | hodnoty `audit` / `deny`; klíč s výchozím `deny` zůstává `deny`; neznámý klíč se odmítne |
 | `secrets.envFile` | `denyNames` nadmnožina, `allowNames` podmnožina, `otherPolicy` beze změny |
 | `gate.dbDestroyLocal` | schéma níže |
 | `hooks`, `texts`, `notify`, `resumeCost`, klíče začínající `_` | beze změny |
@@ -217,13 +221,22 @@ i session, která má přepis opravit. Odmítnutí je vidět: kanárek vypíše
 `· přepis: odmítnuto N klíčů (gate.denyPatterns, …)` a každé volání brány, které odmítnutý
 klíč potkalo, zapíše audit `config:overrideRejected:<klíč>` (jen jméno, nikdy hodnota).
 
-### Lokální destruktivní operace nad DB per projekt (`gate.dbDestroyLocal`, od 0.3.0, H-f)
+### Lokální destruktivní operace nad DB per projekt (`gate.dbDestroyLocal`, od 0.3.0, H-f; od 0.3.1 `ZOPT-Q102`)
 
 ```jsonc
-{ "gate": { "dbDestroyLocal": { "decision": "allow", "databases": ["Hrms*"], "hosts": ["(localdb)\\MSSQLLocalDB"] } } }
+{ "gate": { "dbDestroyLocal": { "decision": "allow", "databases": ["*_test_*"] } } }
 ```
 
-Výchozí `{"decision":"ask","databases":[],"hosts":[]}` = chování 0.2.0. `deny` → lokální
+**Od 0.3.1** (`ZOPT-Q102`, `A179-O3` Q10): výchozí `{"decision":"allow","databases":["*_test_*","*_test","*_dev"]}`.
+Destruktivní operace na **místním** hostiteli nad databází, jejíž jméno příkaz **nese** a které sedí na vzor → hook mlčí
+a zapíše audit `gate:dbDestroyLocal`; cokoli jiného → `deny`. Jména se čtou doslova z příkazu: `-d`/`--dbname`,
+`dbname=`, URI, `Database=`/`Initial Catalog=`, `PGDATABASE=`, první poziční argument `psql`, cíl `dropdb`, jméno
+v `DROP DATABASE` (u `DROP DATABASE`/`dropdb`/`ef database drop` rozhoduje **rušená** databáze, ne údržbová, ke které se
+klient připojí). Každé nalezené jméno musí sedět. Nečitelné (`deny`): žádné jméno, proměnná, `USE`, meta-příkaz psql,
+dynamické SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`), trojdílné jméno objektu, pgcli s DSN, `sqllocaldb delete`,
+tvar uvnitř kontejneru (`AOPT-O26`). Přepis smí `databases` jen **zúžit**; `decision` `allow` | `deny`; `hosts` se nečte.
+
+ℹ️ **Do 0.3.0** platilo: výchozí `{"decision":"ask","databases":[],"hosts":[]}` = chování 0.2.0. `deny` → lokální
 destruktivní operace `deny`. **`allow` = hook MLČÍ a zapíše audit `gate:dbDestroyLocal`**
 (bez jména DB, serveru i textu příkazu) — ne `permissionDecision: allow`; v headless běhu
 (`claude -p`) proto projekt potřebuje i vlastní pravidlo `permissions.allow`. `allow` platí
@@ -304,6 +317,10 @@ na nastavení oznámení Windows.
 
 Tohle nejsou nedodělky, ale hranice, které plugin **nemá jak** překročit. Patří sem,
 aby si je nikdo nemusel objevit sám.
+
+ℹ️ **Od 0.3.1 (`ZOPT-Q102`) hook `ask` nevydává.** Kde omezení níže říká „končí `ask`",
+platí politika toho místa podle tabulky v [CHANGELOG 0.3.1](CHANGELOG.md) — ticho + audit,
+nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
 
 1. **Skript volaný souborem je pro hook neprůhledný.** Hook vidí jen příkaz, který
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
@@ -806,8 +823,8 @@ odchází jen s citovaným rozhodnutím.
 
 **`allow` v invariantu znamená, že hook MLČÍ** — prázdný stdout a `exit 0`, tedy platí
 normální tok oprávnění Claude Code. Není to `permissionDecision: allow`; ten by tu
-vrstvu přeskočil. Plugin žádný allow writer nemá (`_common.ps1` umí jen
-`Write-DenyDecision` a `Write-AskDecision`), takže **každý řádek `allow` je tvrzení
+vrstvu přeskočil. Plugin žádný allow writer nemá (`_common.ps1` umí od 0.3.1 jen
+`Write-DenyDecision`; `Write-AskDecision` zmizel s `ZOPT-Q102`), takže **každý řádek `allow` je tvrzení
 o tichu**. Rozdíl drží `Get-Decision` v `tests/_harness.ps1`: uvidí-li
 `permissionDecision: allow`, vrátí `DECISION-ALLOW` — a to se nerovná žádnému očekávání
 v žádné fixtuře, takže takový hook zčervená na **každém** řádku. (0.1.11, nález Ada N46.

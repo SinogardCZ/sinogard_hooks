@@ -24,6 +24,7 @@ $script:Skip = 0
 $script:BaselineMs = $null
 $script:CurrentCase = ''
 $script:CaseHeaderPrinted = $false
+$script:AskOutputs = New-Object System.Collections.ArrayList
 
 function Start-Case([string]$name) {
     $script:CurrentCase = $name
@@ -238,6 +239,11 @@ function Invoke-HookOnce {
 
     $proc.WaitForExit()
     $sw.Stop()
+
+    # ZOPT-Q102 (Tom 2026-10-20, TASK-179 / 0.3.1): hook nesmi vratit `ask` NIKDY - kazdy beh kazde sady se pocita
+    # (Assert-NoAskVerdict), ne jen radky, ktere ocekavani `ask` nesou.
+    $stdoutText = $outTask.Result
+    if ($stdoutText -match '"permissionDecision"\s*:\s*"ask"') { [void]$script:AskOutputs.Add($Script) }
 
     return [pscustomobject]@{
         Exit   = $proc.ExitCode
@@ -530,6 +536,65 @@ function Get-HookCeilingMs { return $script:HookCeilingMs }
 function Set-HookCeilingMs([int]$Ms) { $script:HookCeilingMs = $Ms }
 function Get-HookRetryCount { return $script:Retries }
 function Get-HookTimeCount { return $script:Times.Count }
+
+# ZOPT-Q102 (0.3.1): ocekavani `audit` v tabulkach pripadu = hook MLCI (rozhodnuti allow) A zapise radek auditu sede zony
+# (`gate:<id>`, `opaque:<pricina>`, `secrets:<id>`) s rozhodnutim allow. Bez toho by kontrolni skupiny "tohle je citlive"
+# a "tohle ne" (byvale ask x allow) od 0.3.1 obe koncily allow a sada by rozdil prestala merit. Jmenujici tvary
+# (`secrets:nameOnly*`, `secrets:wildcardName`) a SQL ze souboru/roury nejsou seda zona - jsou to zaznamy tichych tvaru 0.3.0.
+function New-AuditEnvironment {
+    $dir = Join-Path $script:TempDir ('aud-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    return @{ 'CLAUDE_PLUGIN_DATA' = $dir }
+}
+
+function Test-GreyZoneAudit([string]$AuditDir) {
+    $path = Join-Path $AuditDir 'gate-audit.jsonl'
+    if (-not [System.IO.File]::Exists($path)) { return $false }
+    foreach ($l in [System.IO.File]::ReadAllLines($path, ([System.Text.UTF8Encoding]::new($false)))) {
+        if ($l -eq '') { continue }
+        $o = $l | ConvertFrom-Json
+        $shape = [string]$o.shape
+        if ([string]$o.decision -notmatch '^allow') { continue }
+        if ($shape -notmatch '^(gate:|opaque:|secrets:)') { continue }
+        if ($shape -match '^secrets:(nameOnly|wildcardName)') { continue }
+        return $true
+    }
+    return $false
+}
+
+# ZOPT-Q102 (Tom 2026-10-20, A179-O2): zadny verdikt `ask` nikde v pluginu (gate i secrets). Strukturni test ve dvou vrstvach:
+# (1) zadny beh hooku v cele sade nevydal `ask` (pocita Invoke-HookOnce); (2) zdroj hooku nema zapisovac `ask` ani konstrukci
+# verdiktu `ask` a vychozi konfigurace nema hodnotu `ask` - cesta kodu, kterou zadna fixtura nepotka, se tak chyti taky.
+function Assert-NoAskVerdict {
+    Start-Case 'ZOPT-Q102: zadny verdikt ask'
+    $byScript = @($script:AskOutputs | Group-Object | ForEach-Object { '{0} {1}x' -f $_.Name, $_.Count })
+    Assert-Equal 0 $script:AskOutputs.Count ('[ask/beh] behu hooku s permissionDecision ask ({0})' -f ($byScript -join ', '))
+    foreach ($f in @(Get-ChildItem -Path $script:ScriptsDir -Filter '*.ps1' -File)) {
+        $src = [System.IO.File]::ReadAllText($f.FullName)
+        $writer = [regex]::Matches($src, '\bWrite-AskDecision\b').Count
+        $verdict = [regex]::Matches($src, '(?i)Decision\s*=\s*''ask''').Count
+        Assert-Equal 0 $writer ('[ask/zdroj] {0}: vyskytu Write-AskDecision' -f $f.Name)
+        Assert-Equal 0 $verdict ('[ask/zdroj] {0}: konstrukci verdiktu ask' -f $f.Name)
+    }
+    $defaults = ConvertFrom-Json ([System.IO.File]::ReadAllText((Join-Path $script:ScriptsDir '..\config\defaults.json')))
+    $askPaths = New-Object System.Collections.ArrayList
+    $stack = New-Object System.Collections.Stack
+    $stack.Push(@('', $defaults))
+    while ($stack.Count -gt 0) {
+        $item = $stack.Pop()
+        $path = [string]$item[0]; $node = $item[1]
+        if ($node -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($p in $node.PSObject.Properties) {
+                if ($p.Name.StartsWith('_')) { continue }
+                $stack.Push(@(($path + '.' + $p.Name), $p.Value))
+            }
+        } elseif ($node -is [System.Array]) {
+            for ($i = 0; $i -lt $node.Count; $i++) { $stack.Push(@(($path + '[' + $i + ']'), $node[$i])) }
+        } elseif ($node -is [string] -and $node -ceq 'ask') {
+            [void]$askPaths.Add($path)
+        }
+    }
+    Assert-Equal 0 $askPaths.Count ('[ask/konfigurace] defaults.json: hodnot ask ({0})' -f (@($askPaths | Sort-Object) -join ', '))
+}
 
 function Assert-TimingBudget {
     if ($script:Times.Count -eq 0) { return }

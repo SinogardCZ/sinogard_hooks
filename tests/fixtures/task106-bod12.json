@@ -24,8 +24,8 @@
     { "name": "N14 kontrola: heredoc pro python cte secret",  "tool": "Bash",       "cmd": "python - <<'PY'\nprint(open('.env').read())\nPY", "expect": "deny" },
     { "name": "B12 kontrola: literal v .NET volani",          "tool": "PowerShell", "cmd": "[IO.File]::ReadAllText('.env')", "expect": "deny" },
     { "name": "B12 kontrola: zapis do .env presmerovanim",    "tool": "Bash",       "cmd": "echo x > .env", "expect": "deny" },
-    { "name": "NH4 kontrola: apiKey je secret",               "tool": "PowerShell", "cmd": "echo $env:apiKey", "expect": "ask" },
-    { "name": "NH4 kontrola: ActiveKey je secret",            "tool": "PowerShell", "cmd": "echo $env:Gsd__Cursor__ActiveKey", "expect": "ask" },
+    { "name": "NH4 kontrola: apiKey je secret",               "tool": "PowerShell", "cmd": "echo $env:apiKey", "expect": "audit" },
+    { "name": "NH4 kontrola: ActiveKey je secret",            "tool": "PowerShell", "cmd": "echo $env:Gsd__Cursor__ActiveKey", "expect": "audit" },
 
     { "name": "NH2 hlaska nese cestu s $_ doslova",  "tool": "PowerShell", "cmd": "Get-ChildItem | ForEach-Object { Get-Content \"$_\\.env\" }", "expect": "deny", "reasonContains": "$_\\.env", "reasonNotContains": "({path})" },
     { "name": "NH2 hlaska nese cestu s $1 doslova",  "tool": "Bash",       "cmd": "cat $1/.env", "expect": "deny", "reasonContains": "$1/.env" }

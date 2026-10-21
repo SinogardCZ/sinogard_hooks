@@ -10,6 +10,53 @@ Amber v1.1 (`2026-10-18-zadani-task-179.md`, revize Grace `T179-N1`–`N12`), ro
 a `AOPT-O22`–`O28` (Amber). Bezpečnostní oprava brány §6 → patch verze. Doklady: `docs/logs/mutants/task-179/` v repu GSD
 (krok 0 s tabulkami voleb CLI, červená fáze, mutanti).
 
+**A v témže vydání (A179-O2, jedno vydání místo dvou): plugin už nikdy nevrací `ask` (`ZOPT-Q102`, Tom 2026-10-20).**
+Hook ve všech projektech nečeká na člověka: každé místo, které do 0.3.0 vracelo `ask`, je od 0.3.1 buď **ticho + řádek
+auditu**, nebo **`deny`** — podle mapy Toma (`ZOPT-Q102`) a rozhodnutí Amber `A179-O1` a `A179-O3` (Q1–Q16). Výčet míst
+s řádky kódu a měření dnešních zaseknutí: `predavka-task-179/2026-10-20-37…40` v GSD.
+
+### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
+
+| místo (id v auditu) | do 0.3.0 | od 0.3.1 | rozhodnutí |
+|---|---|---|---|
+| force push na nechráněnou větev (`forcePushOther`) | `ask` | ticho + audit | Q2 (zakázaný je jen přepis historie `main`) |
+| force push bez cíle (`forcePushUnknown`) | `ask` | `deny` | Q1 (může mířit na `main`) |
+| `git -c alias.…` (`gitAlias`) | `ask` | `deny` | Q3 (alias spustí cokoli) |
+| `git branch -d` (git sám odmítne nesloučenou větev) | `deny` | **ticho** | Q11, mění `ZOPT-Q40` |
+| `git branch -D`, `-d -f`, `--delete --force` | `deny` | `deny` (vzor `git-branch-delete-force`) | Q11 |
+| mazání s cílem v proměnné, s `..`, `.NET` mazání s proměnnou, krátká absolutní cesta (`recursiveDeleteVariable`, `recursiveDeleteDotDot`, `netDeleteVariable`, `shortAbsolutePath`) | `ask` | `deny` | Q4 (cíl nejde doložit) |
+| hvězdička uvnitř povolené složky (`recursiveDeleteWildcard`), mazání z roury (`deleteFromPipeline`) | `ask` | ticho + audit | Q4, mapa |
+| kód interpretu s destruktivním voláním (`interpreterDestructive`) | `ask` | ticho + audit | Q6 |
+| kód interpretu s DB tokenem — `DROP TABLE/DATABASE/SCHEMA`, `TRUNCATE` (`interpreterDestructiveDb`, nový seznam `gate.interpreterDbTokens`) | `ask` | `deny` | Q6 (jméno DB nečitelné) |
+| nerozebratelný tvar s destruktivním literálem (`opaqueDestructive`) | `ask` | `deny` | Q5 |
+| totéž u **spuštění** nerozbalené hlavy (příčina `invoked`, např. hlava po vícenásobném přiřazení) — kontrola literálu nově i tady; nový literál `reset --hard` (bez `git`) | `ask` (sama příčina) | `deny` | Q5 — bez toho by `invoked` = ticho pustilo destruktivní příkaz |
+| nerozebratelné: spuštění proměnné, `-EncodedCommand`, neukončený heredoc (`opaque:invoked/encoded/heredocUnterminated`) | `ask` | ticho + audit | mapa |
+| zanoření nad 5 (`opaque:depth`), neznámá příčina (`opaque:unknown`) | `ask` | `deny` | `A179-O1` (N31), Q8, Q9 |
+| `ssh host "příkaz"`, `ssh prod <<EOF` (`remoteShell`) | `ask` | ticho + audit | mapa |
+| `dotnet ef migrations remove`, `Invoke-Expression` (`auditPatterns`, do 0.3.0 `askPatterns`) | `ask` | ticho + audit | Q7 |
+| `Invoke-Expression` / `iex` **bez argumentu** (text z roury) — vzor `askPatterns` na něj v 0.3.0 nikdy nedosáhl | ticho **bez auditu** | ticho + audit `gate:invoke-expression` | `A179-O4` (mezera v auditu, žádný deny) |
+| destruktivní DB operace na **místním** hostiteli, jméno DB čitelné a ve vzoru `*_test_*`, `*_test`, `*_dev` | `ask` | ticho + audit `gate:dbDestroyLocal` | Q10 |
+| totéž mimo vzory, se jménem, které nejde přečíst, `sqllocaldb delete` | `ask` | `deny` | Q10 |
+| destruktivní DB operace uvnitř kontejneru (i nerozebratelná, i po stropu práce substitucí) | `ask` | `deny` | Q10 + `AOPT-O26` (v kontejneru nikdy povoleno) |
+| glob mířící na chráněnou cestu (`secrets:wildcardPath`), netrackovaný `.env.*` (`envFileUntracked`), čtení `.claude/settings.local.json` (`settingsLocal`), výpis prostředí (`envDump`), citlivá proměnná (`envVarRead`), nedekódovatelný `-EncodedCommand` (`wrapperEncoded`) | `ask` | ticho + audit | mapa |
+| **zápis** do `.claude/settings*.json`, `.claude/sinogard-hooks.json`, `hooks.json` a `hooks/config/*` nainstalované kopie (`secrets:selfProtect`) | `ask` | **`deny`** s textem „změnu nastavení provede Tom — zapiš ji do dávky" | Q16 (agent nesmí umět vypnout vlastní pojistku) |
+| `ask` v režimu `bypassPermissions` (vydával se jako `deny`, audit `ask-bypass`) | `deny` | podle mapy výše | — (`ask` neexistuje) |
+
+Jména DB se čtou doslova z příkazu (`-d`, `--dbname`, `dbname=`, URI, `Database=`/`Initial Catalog=`, `PGDATABASE`, první
+poziční argument `psql`, cíl `dropdb`, jméno v `DROP DATABASE`); u `DROP DATABASE`/`dropdb`/`ef database drop` rozhoduje
+rušená databáze. `USE`, meta-příkaz psql, dynamické SQL a trojdílné jméno = nečitelné → `deny`. Přepis
+`gate.dbDestroyLocal.databases` smí vzory jen zúžit; `decision` má hodnoty `allow` (výchozí) | `deny`; `hosts` se nečte.
+⚠️ Ticho u `secrets:wildcardPath` platí i pro glob, který míří na adresář s klíči — čtení přesného jména (`~/.ssh/id_rsa`)
+je `deny` dál (mapa `ZOPT-Q102`, „wildcard cesty = povolit").
+
+**Konfigurace (0.3.1):** nové objekty politik `gate.decisions` a `secrets.decisions` (hodnoty `audit` | `deny`, chybějící =
+`deny`); `gate.opaque` má hodnoty `audit` | `deny`. H-c pravidlo `policy`: přepis smí jen zpřísnit (`audit` → `deny`).
+Přejmenováno: `gate.askPatterns` → `gate.auditPatterns`, `secrets.askPathPatterns` → `secrets.auditPathPatterns`,
+`secrets.envFile.otherPolicy` = `trackedAllowElseAudit`; projektový přepis se starým jménem H-c odmítne (platí výchozí).
+⚠️ Migrace: přepis `gate.opaque` s `depth: audit` (tvar dřívějšího zúžení GSD) je od 0.3.1 uvolnění → celý klíč
+`gate.opaque` odmítnut (platí výchozí, audit `config:overrideRejected:gate.opaque`). Hodnoty `ask` H-c odmítne také.
+Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
+
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)
 
 README omezení 11 tvrdilo, že destrukce databáze v kontejneru je krytá. Platilo to jen pro tělo heredocu a rouru do
@@ -17,26 +64,26 @@ klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman`
 
 | třída tvaru | 0.3.0 | 0.3.1 |
 |---|---|---|
-| `docker\|podman exec\|run … <kontejner> psql\|sqlcmd … -c/-Q "<destruktivní SQL>"`, `dropdb`, `dotnet ef database drop`, `sqllocaldb delete` uvnitř — místní | ticho | `ask` (podle `gate.dbDestroyLocal`; `deny` → `deny`) |
+| `docker\|podman exec\|run … <kontejner> psql\|sqlcmd … -c/-Q "<destruktivní SQL>"`, `dropdb`, `dotnet ef database drop`, `sqllocaldb delete` uvnitř — místní | ticho | `deny` (v kontejneru nikdy povoleno, `AOPT-O26`; do `ZOPT-Q102` `ask`) |
 | totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`, průchozí `-e PGHOST` s hodnotou v témže příkazu, i v dekódovaném `-EncodedCommand`) | ticho | `deny` |
 | `podman-remote` (tentýž klient podmana) | ticho | jako řádky výše |
 | cíl kontejneru substitucí (`$(docker ps -q)`, zpětné apostrofy, `(docker ps -q)` v PowerShellu), zkratky dlouhých voleb `podman-compose` | ticho | jako řádky výše |
-| heredoc do shellu v `docker exec -i c sh` (tvar, který 0.3.0 rozbalovala): s přepisem `gate.dbDestroyLocal = allow` | ticho | `ask` (tvar v kontejneru nikdy `allow`) |
+| heredoc do shellu v `docker exec -i c sh` (tvar, který 0.3.0 rozbalovala): s přepisem `gate.dbDestroyLocal = allow` | ticho | `deny` (tvar v kontejneru nikdy `allow`) |
 | totéž s `-e PGHOST=<vzdálený>` | `ask` | `deny` |
 | management podpříkaz `container exec\|run`, compose (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem (podman i za ním), `run --entrypoint`, `podman exec --latest\|--cidfile`, volby s hodnotou ve všech zápisech (`--x=h`, `-xh`, shluk `-iu h`, `--`) | ticho | jako řádky výše |
 | volba, kterou tabulka CLI nezná (čte se s hodnotou i bez); tělo heredocu a roury se posoudí pro **každé** čtení obalu (i proti staršímu průchodu, který `--entrypoint` / `--detach-keys` nezná) a platí nejpřísnější | ticho | jako řádky výše |
 | vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
 | heredoc a roura do klienta v kontejneru za globální volbou nebo management podpříkazem, heredoc do shellu v kontejneru (compose, globální volba, `env -S "…"`) | ticho | jako řádky výše (heredoc do shellu jen DB pravidlem) |
-| nerozebratelná hlava uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem | ticho | `ask` (tvar `dbDestroyContainerOpaque`) |
+| nerozebratelná hlava uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem | ticho | `deny` (tvar `dbDestroyContainerOpaque`) |
 | uvozovaná závorka nebo zpětný apostrof v hodnotě volby obalu, vnořený kontejner s vlastním `-e PGHOST=…` | ticho | jako řádky výše (proměnné obou obalů se sčítají) |
-| heredoc do interpretu (`python`, `node` …) v kontejneru, který 0.3.0 nerozbalila (compose, globální volba), s destruktivním DB literálem | ticho | `ask` |
-| heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | beze změny; navíc destruktivní DB literál v těle → `ask` |
-| `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (místní `ask`, vzdálený `deny`) |
-| `-EncodedCommand` v kontejneru, které nejde dekódovat nebo dává prázdný text (i bez DB textu) | ticho | `ask` |
-| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `ask` (hostitel se nečte = místní; s přepisem `gate.dbDestroyLocal = deny` → `deny`, i když některý list téhož příkazu dostal `ask`; literál se hledá v každém rozebíraném textu příkazu, i v datech) |
-| cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `ask` — nová README mez 26 |
+| heredoc do interpretu (`python`, `node` …) v kontejneru, který 0.3.0 nerozbalila (compose, globální volba), s destruktivním DB literálem | ticho | `deny` |
+| heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | podle tabulky „žádné `ask`" výše; navíc destruktivní DB literál v těle → `deny` |
+| `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (v kontejneru `deny`) |
+| `-EncodedCommand` v kontejneru, které nejde dekódovat nebo dává prázdný text (i bez DB textu) | ticho | ticho + audit `opaque:encoded` (politika `gate.opaque.encoded`, jako na hostiteli) |
+| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `deny` (jméno DB nejde přečíst; s přepisem `gate.dbDestroyLocal = deny` tvar `dbDestroyLocalDenied`; přebije i ticho jiného listu; literál se hledá v každém rozebíraném textu příkazu, i v datech) |
+| cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `deny` — nová README mez 26 |
 
-Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`).
+Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`) — od `ZOPT-Q102` je proto `deny`.
 
 ### Beze změny (kontrolní skupiny, `AOPT-O25`)
 

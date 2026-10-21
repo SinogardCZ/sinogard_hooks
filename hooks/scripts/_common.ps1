@@ -176,7 +176,7 @@ function Get-ListItemKey($Item) {
     if ($Item -is [System.Management.Automation.PSCustomObject]) {
         $real = @($Item.PSObject.Properties | Where-Object { -not $_.Name.StartsWith('_') })
         if ($real.Count -eq 0) { return $null }
-        # CR-P6 (/code-review): pravidlo (`denyPatterns`, `askPatterns`) urcuje jeho id a VZOR - poradi klicu ani
+        # CR-P6 (/code-review): pravidlo (`denyPatterns`, `auditPatterns`) urcuje jeho id a VZOR - poradi klicu ani
         # lidsky text `shape` ho nemeni; porovnani celeho JSON by kvuli nim odmitlo zprisnujici prepis.
         if ($Item.PSObject.Properties['pattern']) { return ([string](Get-Field $Item 'id' '') + [char]1 + [string]$Item.pattern) }
         return ($Item | ConvertTo-Json -Depth 6 -Compress)
@@ -222,16 +222,17 @@ function Test-OverrideValue([string]$Rule, $Value, $Default) {
             foreach ($h in $Value) { if (-not (Test-FixedLocalDbHost ([string]$h))) { return $false } }
             return $true
         }
-        'opaque' {
+        # ZOPT-Q102 / A179-O3 (0.3.1): politiky byvaleho `ask` (`gate.opaque`, `gate.decisions`, `secrets.decisions`) maji
+        # hodnoty `audit` | `deny` a prepis smi jen zprisnit - klic s vychozim `deny` zustava `deny`. Neznamy klic = odmitnout.
+        'policy' {
             if (-not (Test-MergeableObject $Value)) { return $false }
-            $known = @('variable', 'interpreter', 'heredocUnterminated', 'depth', 'invoked', 'encoded')
             foreach ($p in $Value.PSObject.Properties) {
                 if ($p.Name.StartsWith('_')) { continue }
-                if ($known -cnotcontains $p.Name) { return $false }
+                $d = Get-Field $Default $p.Name $null
+                if ($null -eq $d) { return $false }
                 $v = [string]$p.Value
-                # `encoded` = umyslne zakryti obsahu (`-EncodedCommand`), ne selhani parseru (A117-O4).
-                if ($p.Name -eq 'encoded') { if ($v -cne 'ask') { return $false }; continue }
-                if ($v -cne 'audit' -and $v -cne 'ask') { return $false }
+                if ($v -cne 'audit' -and $v -cne 'deny') { return $false }
+                if ([string]$d -ceq 'deny' -and $v -cne 'deny') { return $false }
             }
             return $true
         }
@@ -256,16 +257,15 @@ function Test-OverrideValue([string]$Rule, $Value, $Default) {
                 if (@('decision', 'databases', 'hosts') -cnotcontains $p.Name) { return $false }
             }
             # T117-N14: chybejici `decision` NIKDY allow - objekt se nahrazuje cely, takze by
-            # jinak rozhodl vychozi kod; odmitnuti vrati vychozi `ask` explicitne.
+            # jinak rozhodl vychozi kod; odmitnuti vrati vychozi hodnotu explicitne.
+            # ZOPT-Q102 (0.3.1): `ask` uz neni hodnota; `allow` = jen databaze ve vzorech `databases`, jinak deny.
             $decision = Get-Field $Value 'decision' $null
-            if ($null -eq $decision -or @('ask', 'allow', 'deny') -cnotcontains [string]$decision) { return $false }
+            if ($null -eq $decision -or @('allow', 'deny') -cnotcontains [string]$decision) { return $false }
+            # A179-O3 (Q10): vychozi vzory testovacich a vyvojovych DB jsou strop - prepis z nich smi jen vybirat
+            # (chybejici `databases` = prazdny seznam = zadna DB se nepovoli, tedy zprisneni).
             $dbs = Get-Field $Value 'databases' @()
             if (-not ($dbs -is [System.Array]) -and $null -ne $dbs) { $dbs = @($dbs) }
-            foreach ($d in @($dbs)) {
-                $s = [string]$d
-                # Vzor jen ze zastupnych znaku (`*`) by povolil kazdou databazi.
-                if ($s -notmatch '^[A-Za-z0-9_*?\-]+$' -or $s -notmatch '[A-Za-z0-9_\-]') { return $false }
-            }
+            if (-not (Test-ListRelation @($dbs) (Get-Field $Default 'databases' @()) 'subset')) { return $false }
             $hosts = Get-Field $Value 'hosts' @()
             foreach ($h in @($hosts)) { if (-not (Test-FixedLocalDbHost ([string]$h))) { return $false } }
             return $true
@@ -317,9 +317,17 @@ function Write-DenyDecision([string]$Reason) {
     exit 2
 }
 
-function Write-AskDecision([string]$Reason) {
-    Write-HookStdout (New-PreToolUseJson 'ask' $Reason)
-    exit 0
+# ZOPT-Q102 (Tom 2026-10-20) + A179-O3 (Amber), 0.3.1: zapisovac `ask` zmizel - hook ve sede zone necheka na cloveka.
+# Kazde byvale `ask` ma politiku `audit` (hook mlci + radek auditu) nebo `deny`; chybejici nebo neznama hodnota = `deny`
+# (fail-closed: preklep v prepisu branu tise neotevre).
+function Get-PolicyDecision($Section, [string]$Id) {
+    $v = [string](Get-Field (Get-Field $Section 'decisions') $Id 'deny')
+    if ($v -ceq 'audit') { return 'audit' }
+    return 'deny'
+}
+
+function New-PolicyVerdict($Section, [string]$Id, [string]$Shape) {
+    return @{ Id = $Id; Decision = (Get-PolicyDecision $Section $Id); Shape = $Shape }
 }
 
 # ------------------------------------------------------ normalizace cesty ---
@@ -930,10 +938,6 @@ function Write-GateAudit([string]$ToolName, [string]$ShapeId, [string]$Decision,
         # Mapuje se TADY, ne na volajicich mistech, aby na to neslo u jednoho zapomenout.
         if ($Decision -eq 'allow' -and $script:PermissionMode -eq 'bypassPermissions') {
             $Decision = 'allow-bypass'
-        }
-        # TASK-117 H-b: `ask` se v bypassu vydava jako `deny` (T36-Q7) - radek rekne obe veci.
-        if ($Decision -eq 'ask' -and $script:PermissionMode -eq 'bypassPermissions') {
-            $Decision = 'ask-bypass'
         }
         # TASK-179 kolo 6/7 (K6-6, K7-3, K7-4): vic cteni TEHOZ vyskytu obalu (gate.ps1, $script:AuditReading = skupina G
         # a cteni R) je jedna udalost, ne tolik, kolik je cteni - jinak by nafoukla pocty, nad kterymi stoji T-10 A a T36-O5.
