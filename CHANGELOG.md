@@ -134,6 +134,12 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   jednoho SQL klienta bez proměnných hostitele. Složený tvar se jménem ve vzoru končí novým tvarem
   `gate:dbDestroyLocalCompound`. Jeho hláška jmenuje povolený tvar (`psql -d <db> -c "…"` nebo `dropdb <db>`).
   Zúžení platí i pro SQL rourou (`echo "TRUNCATE t" | psql -d gsd_dev` → `deny`).
+- **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
+  - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
+  - `${#x}` není komentář.
+  - `&>` je v cmd oddělovač (`echo hi &>nul rd …`) a přesměrování před příkazem (`>nul rd …`, `>out rm …`) se strhává.
+  - Sjednocení čtení s komentářem a bez něj místo čtyř kopií: hook gate rozebere příkaz s `#` podruhé bez komentáře
+    a z druhého čtení bere jen `deny` (bez auditu), `Split-CommandLine` sjednocuje segmenty pro secrets.
 
 **Šesté kolo `/code-review` nad CR-U (CR-V, skupina `CR-V`):**
 - **Příkaz uvnitř výrazu PowerShellu (CR-V2, chyba i v 0.3.0).** Statement, který začíná výrazem, třeba
@@ -180,12 +186,16 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   - Obalová závorka se strhává jen jako jeden pár, `(a) + (b)` se nezdvojí.
   - U složeného příkazu má hláška složeného tvaru přednost před hláškou o proměnné prostředí.
 
-- **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
-  - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
-  - `${#x}` není komentář.
-  - `&>` je v cmd oddělovač (`echo hi &>nul rd …`) a přesměrování před příkazem (`>nul rd …`, `>out rm …`) se strhává.
-  - Sjednocení čtení s komentářem a bez něj místo čtyř kopií: hook gate rozebere příkaz s `#` podruhé bez komentáře
-    a z druhého čtení bere jen `deny` (bez auditu), `Split-CommandLine` sjednocuje segmenty pro secrets.
+**Deváté kolo `/code-review` nad CR-X (CR-Y, skupina `CR-Y`):**
+- **Spouštěč druhého čtení (Y1, Y3, Y4).** Druhé čtení bez komentáře spouští `#` v příkazu, nebo `#` v těle
+  `-EncodedCommand`, které dekódovalo první čtení. Signál vzniká v místě dekódování, ne odhadem nad textem. Jméno
+  interpretu rozdělené uvozovkami (`pw''sh -ec …`) odhad z CR-X minul, a naopak každá zmínka slova „powershell“
+  spouštěla druhé čtení zbytečně.
+- **Přetečení rozpočtu v druhém čtení (Y2).** V gate je to znovu `deny` (nerozebíratelné). Secrets žádnou zálohu pro
+  přetečení nemá. Věta „stejně v gate i secrets“ výše neplatí.
+- **Ostatní (Y5, Y6).**
+  - Parser PowerShellu běží jen tam, kde příkaz může stát ve výrazu: závorka, `@{`, nebo `return`/`throw`/`exit`.
+  - Přiřazení před SQL klientem se čtou z tokenů, takže `PGPASSWORD=a"b c" psql …` je jedno přiřazení.
 Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)

@@ -408,13 +408,14 @@ $script:ScannerEscape = '\'
 $script:CommentAware = $true
 $script:BlockCommentSplit = $false
 
-# CR-W2/W3/W8 + CR-X3/X5/X6/X7 (TASK-179, kola 7 a 8): druhe cteni prikazu BEZ komentare - jeden protokol pro gate.ps1
-# i secrets.ps1. Spousti se, kdyz prikaz obsahuje `#`, nebo jmenuje pwsh/powershell (zakodovany prikaz `-EncodedCommand` ma
-# po dekodovani `#` mit muze, a jeho tvary - mezera v uvozovkach, slepene uvozovky - regex nad textem nepozna). Rozpocet
-# prace na substituce se NEnuluje (strop jednoho behu hooku drzi timeout 10 s); preteceni plati dal pres SubstOverflow
-# (zaloha K7-1 v gate.ps1 pro DB literal). Z druheho cteni plati jen `deny`, audit je ztlumeny.
+# CR-W2/W3/W8 + CR-X + CR-Y (TASK-179, kola 7 az 9): druhe cteni prikazu BEZ komentare - jeden protokol pro gate.ps1
+# i secrets.ps1. Spousti se, kdyz prikaz obsahuje `#`, nebo kdyz prvni cteni dekodovalo `-EncodedCommand` s `#` v tele
+# (ConvertFrom-EncodedCommandText, $script:DecodedHasHash). Rozpocet prace na substituce se NEnuluje (strop jednoho behu
+# hooku drzi timeout 10 s); narazi-li na nej az druhe cteni, gate.ps1 rozhodne `deny` (nerozebratelne).
+# Z druheho cteni plati jen `deny`, audit je ztlumeny.
+$script:DecodedHasHash = $false
 function Test-NeedsPlainReading([string]$Command) {
-    return ($Command.IndexOf('#') -ge 0 -or $Command -match '(?i)\b(?:pwsh|powershell)\b')
+    return ($Command.IndexOf('#') -ge 0 -or $script:DecodedHasHash)
 }
 function Invoke-PlainCommentReading([scriptblock]$Body) {
     $prevAware = $script:CommentAware
@@ -1482,6 +1483,9 @@ function ConvertFrom-EncodedCommandText([string]$Text) {
     $decoded = ''
     try { $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($Text.Trim().Trim("'").Trim('"'))) } catch { $decoded = '' }
     if ([string]::IsNullOrWhiteSpace($decoded)) { return '' }
+    # CR-Y1/Y3 (TASK-179, kolo 9): dekodovane telo s `#` potrebuje druhe cteni bez komentare - signal z mista dekodovani,
+    # ne odhad nad textem prikazu (`pw''sh -ec ...` jmeno interpretu v textu neni).
+    if ($decoded.IndexOf('#') -ge 0) { $script:DecodedHasHash = $true }
     return $decoded
 }
 

@@ -589,9 +589,11 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     # CR-W5/W6 (kolo 7): porovnani textu bez operatoru spusteni a obalovych zavorek (`& x`, `(x)`); hloubka se nezvysuje
     # (prikaz ve vyrazu je na teze urovni jako statement).
     # List z parseru nese `FromAst` - Test-DbAllowContext ho bere jako slozeny tvar (prikaz uvnitr vyrazu).
-    # CR-X1 (kolo 8): bez podminky "text ma zavorku" - `return git reset --hard` / `throw ...` prikaz spusti i bez ni.
+    # CR-X1 + CR-Y5 (kola 8 a 9): prikaz stoji ve vyrazu jen v zavorce, v hodnote hashtable (`@{a = rm -rf x}`) nebo za
+    # klicovym slovem `return` / `throw` / `exit` - jen tehdy se parser spousti (bezny `git status` ho neplati).
     # CR-X8: obalova zavorka se strhava jen jako JEDEN par (`(a) + (b)` ne).
-    if ((Get-ScannerEscape) -eq '`') {
+    if ((Get-ScannerEscape) -eq '`' -and ($pl.Rest.IndexOf('(') -ge 0 -or $pl.Rest.Contains('@{') -or
+        $pl.Rest -match '(?i)(?:^|[;\n{|&])\s*(?:return|throw|exit)\b')) {
         $normCmd = {
             param($s)
             $t = ([string]$s).Trim()
@@ -1333,13 +1335,16 @@ function Get-DbCompoundReason($Leaf, [string]$HostExe) {
     # AutoRun, `sudo -i`), ktere mohou nastavit PGHOST; `HOME=/x` presune ~/.psqlrc.
     $head = ([string]$stmts[0]).Trim()
     while ($head.StartsWith('(')) { $head = $head.Substring(1).TrimStart() }
-    while ($head -match '^([A-Za-z_][A-Za-z0-9_]*)=(?:"[^"]*"|''[^'']*''|\S*)\s+(.*)$') {
-        if ($script:DbPrefixAssignOk -cnotcontains $Matches[1]) { return 'compound' }
-        $head = $Matches[2].TrimStart()
-    }
+    # CR-Y6 (kolo 9): prirazeni se ctou z TOKENU (Split-Arguments; jmeno bez escapu a uvozovek jako Get-WrapperTail),
+    # ne vlastnim regexem - `PGPASSWORD=a"b c" psql ...` je jedno prirazeni.
     # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
     $first = Split-Arguments $head
-    if ($first.Count -eq 0 -or ([string](Get-ExecutableName ([string]$first[0]))).ToLowerInvariant() -cne $HostExe) { return 'compound' }
+    $k = 0
+    while ($k -lt $first.Count -and (([string]$first[$k]) -replace '[\\`''"]', '') -match '^([A-Za-z_][A-Za-z0-9_]*)=') {
+        if ($script:DbPrefixAssignOk -cnotcontains $Matches[1]) { return 'compound' }
+        $k++
+    }
+    if ($k -ge $first.Count -or ([string](Get-ExecutableName ([string]$first[$k]))).ToLowerInvariant() -cne $HostExe) { return 'compound' }
     # Kazdy list prikazu je tentyz SQL klient nebo telo heredocu pro nej - roura (`| cat`), substituce, zpetne apostrofy
     # i komentar (vlastni segment) pridavaji jiny list. CR-V2 + CR-W6: prikaz uvnitr vyrazu PowerShellu
     # (`[Environment]::X(...) + (psql ...)`) dohleda parser jako list `FromAst` - ten allow nema (vyse).
@@ -2559,6 +2564,7 @@ foreach ($leaf in $leaves) {
 # komentar tak rozbor jen rozsiri.
 # CR-W (kolo 7): protokol druheho cteni je v _common.ps1 (Invoke-PlainCommentReading), spolecny se secrets.ps1.
 if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
+    $overflowBefore = $script:SubstOverflow
     $pr = Invoke-PlainCommentReading {
         Set-ScannerEscape $toolName
         $plainLeaves = @(Get-CommandLineLeaves $command 0)
@@ -2570,6 +2576,8 @@ if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlai
         return $null
     }
     if ($null -ne $pr) { $decision = $pr }
+    # CR-Y2 (kolo 9): druhe cteni narazilo na strop prace - nevime, co by nasel, takze nerozebratelne (depth, deny).
+    elseif ($script:SubstOverflow -and -not $overflowBefore) { $decision = Invoke-LeafVerdict (New-OpaqueLeaf $command 'depth') $config $false }
 }
 
 # K7-1 (TASK-179, kolo 7): rozbor substituci v obalu kontejneru narazil na strop prace (_common.ps1, SubstWorkBudget) - cil

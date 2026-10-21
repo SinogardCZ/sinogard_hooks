@@ -421,6 +421,8 @@
     { "group": "CR-W", "name": "CR-W1/X2 env PGPASSWORD=x psql -> deny (obal: CR-X2)", "tool": "Bash", "cmd": "env PGPASSWORD=x psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "deny" },
     { "group": "CR-W", "name": "CR-W1/X2 bash -c s jedinym psql -> deny (obal: CR-X2)", "tool": "Bash", "cmd": "bash -c \"psql -d gsd_test_1 -c 'DROP TABLE t'\"", "expect": "deny" },
     { "group": "CR-W", "name": "CR-W1 (psql ...) v PowerShellu -> ticho", "tool": "PowerShell", "cmd": "(psql -d gsd_test_1 -c \"DROP TABLE t\")", "expect": "allow" },
+    { "group": "CR-Y", "name": "CR-Y6 prirazeni s uvozovkou uprostred hodnoty pred psql -> ticho", "tool": "Bash", "cmd": "PGPASSWORD=a\"b c\" psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "allow" },
+    { "group": "CR-Y", "name": "CR-Y5 prikaz v hodnote hashtable -> deny", "tool": "PowerShell", "cmd": "@{a = git reset --hard}", "expect": "deny" },
     { "group": "CR-X", "name": "CR-X1 return prikaz bez zavorky -> deny", "tool": "PowerShell", "cmd": "return git reset --hard", "expect": "deny" },
     { "group": "CR-X", "name": "CR-X1 throw prikaz -> deny", "tool": "PowerShell", "cmd": "throw git reset --hard", "expect": "deny" },
     { "group": "CR-X", "name": "CR-X1 return dropdb produkcni -> deny", "tool": "PowerShell", "cmd": "return dropdb prod_db", "expect": "deny" },
