@@ -15,6 +15,14 @@ Hook ve všech projektech nečeká na člověka: každé místo, které do 0.3.0
 auditu**, nebo **`deny`** — podle mapy Toma (`ZOPT-Q102`) a rozhodnutí Amber `A179-O1` a `A179-O3` (Q1–Q16). Výčet míst
 s řádky kódu a měření dnešních zaseknutí: `predavka-task-179/2026-10-20-37…40` v GSD.
 
+### Bezpečnost — oprava chyby 0.3.0: komentář s apostrofem vypínal bránu (CR-S8, `A179-O5`)
+
+Skener příkazů neznal komentář. Apostrof v komentáři (`# don't` na řádku před dalším příkazem, případně `<# it's #>`)
+otevřel „řetězec“, který trval až do konce příkazu. Další příkazy se proto nerozebraly a prošly tichem, a to v gate
+(`git reset --hard`, `rm -rf …`) i v secrets (`cat .env`). Chyba se změřila v nasazené 0.3.0 i ve verzích 0.2.0 a 0.1.9
+(cache pluginu, PowerShell, 2026-10-21). Od 0.3.1 skener zná komentář `#` (Bash i PowerShell) a `<# … #>` (PowerShell); uvnitř `cmd /c` se komentář nečte,
+protože cmd ho nezná. Případy hlídá skupina `CR-S` v `tests/fixtures/task179-gate.json` a `task179-secrets.json`.
+
 ### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
 
 | místo (id v auditu) | do 0.3.0 | od 0.3.1 | rozhodnutí |
