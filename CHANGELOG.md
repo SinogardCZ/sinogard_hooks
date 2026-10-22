@@ -116,12 +116,22 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 - **Kolo 19 `/code-review` (CR-AI) nad návratem:**
   - celý subshell jedním slovem s přesměrováním (`(psql) < drop.sql`) se četl jako větev `case` a příkaz zmizel. Teď ho
     rozebere cesta celého subshellu, glob v něm je `deny` (AI1, AI3);
-  - falešné `deny` u vnořeného subshellu s přesměrováním na konci rozděleného subshellu (AI2), u komentáře za
-    přesměrováním (AI4) a u uvozovek vnořených v `$( … )` uvnitř uvozovek (AI5). Když ocas za koncem podle
-    `Find-CloseParen` není čistý, zkusí se poslední `)` v textu a teprve pak `deny`;
+  - falešné `deny` u komentáře za přesměrováním (AI4);
+  - ~~záloha „poslední `)` v textu“ pro AI2 a AI5~~ — **vrácena v kole 20** (níž);
   - názvy fixtur bez vrácených heuristik (AI6) a sdílený vzor aritmetiky (AI7).
 
   Skupina `CR-AI`.
+- **Kolo 20 `/code-review` (CR-AJ):** záloha „poslední `)` v textu“ z kola 19 poslala celý subshell starou cestou i tehdy,
+  když poslední `)` patřila procesní substituci, substituci v cíli přesměrování nebo komentáři. Např. `(git reset --hard)
+  > >(tee log)` prošlo tichem místo `deny` (AJ1–AJ3). Je vrácená: konec určuje jen `Find-CloseParen` a ocas, který
+  není jen přesměrování, je `deny`.
+  - **Cena (fail-closed):** falešné `deny` u vnořeného subshellu s přesměrováním na konci rozděleného subshellu
+    (`(cd x; (git status) 2>/dev/null)`) a u uvozovek vnořených v `$( … )` uvnitř uvozovek. `Find-CloseParen` kontext
+    uvozovek nevnořuje (AJ5) → oprava ve verzi 0.3.2.
+  - Větev `case` se závorkou, globem a tělem jen z přesměrování (`(*) > /dev/null ;;`) je `deny`. Od celého subshellu
+    s globem v hlavě ji nejde rozeznat (AJ4, vědomě fail-closed).
+
+  Skupina `CR-AJ`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).

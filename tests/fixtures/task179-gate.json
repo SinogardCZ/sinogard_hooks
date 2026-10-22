@@ -609,10 +609,15 @@
     { "group": "CR-AG", "name": "A179-O14 cely subshell s ) v uvozovkach a presmerovanim, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard \")\") 2>&1", "expect": "deny" },
     { "group": "CR-AI", "name": "CR-AI1 cely subshell jednim slovem s presmerovanim vstupu -> klient SQL rozebran (audit sqlFrom)", "tool": "Bash", "cmd": "(psql) < drop.sql", "expect": "allow", "auditShape": "sqlFrom", "auditDecision": "allow" },
     { "group": "CR-AI", "name": "CR-AI1 cely subshell jednim slovem s globem a presmerovanim -> deny", "tool": "Bash", "cmd": "(/usr/bin/ps?l) < drop.sql", "expect": "deny", "reasonContains": "neumí přečíst" },
-    { "group": "CR-AI", "name": "CR-AI2 kontrola: vnoreny subshell s presmerovanim na konci rozdeleneho -> ticho", "tool": "Bash", "cmd": "(cd x; (git status) 2>/dev/null)", "expect": "allow" },
+    { "group": "CR-AI", "name": "cena CR-AE2/CR-AJ (kolo 20): vnoreny subshell s presmerovanim na konci rozdeleneho -> deny (nerozebiratelne)", "tool": "Bash", "cmd": "(cd x; (git status) 2>/dev/null)", "expect": "deny", "reasonContains": "neumí přečíst" },
     { "group": "CR-AI", "name": "CR-AI4 kontrola: cely subshell s presmerovanim a komentarem -> ticho", "tool": "Bash", "cmd": "(git status) > out.txt # log it", "expect": "allow" },
     { "group": "CR-AI", "name": "CR-AI4 cely subshell s presmerovanim a komentarem, rm -> deny", "tool": "Bash", "cmd": "(rm -rf src) 2>&1 # build", "expect": "deny" },
-    { "group": "CR-AI", "name": "CR-AI5 kontrola: vnorene uvozovky v $( ) uvnitr uvozovek celeho subshellu -> ticho", "tool": "Bash", "cmd": "(echo \"$(printf \")\")\") > log.txt", "expect": "allow" },
-    { "group": "CR-AI", "name": "CR-AI5 presmerovani do substituce za celym subshellem, rm -> deny", "tool": "Bash", "cmd": "(rm -rf src) > \"$(x)\"", "expect": "deny" }
+    { "group": "CR-AI", "name": "cena CR-AJ5 (0.3.2): vnorene uvozovky v $( ) uvnitr uvozovek celeho subshellu -> deny (Find-CloseParen je nevnoruje)", "tool": "Bash", "cmd": "(echo \"$(printf \")\")\") > log.txt", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "CR-AI", "name": "CR-AI5 presmerovani do substituce za celym subshellem, rm -> deny", "tool": "Bash", "cmd": "(rm -rf src) > \"$(x)\"", "expect": "deny" },
+    { "group": "CR-AJ", "name": "CR-AJ1 cely subshell s procesni substituci za presmerovanim, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard) > >(tee log)", "expect": "deny" },
+    { "group": "CR-AJ", "name": "CR-AJ1 cely subshell s presmerovanim do substituce, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard) 2>$(mktemp)", "expect": "deny" },
+    { "group": "CR-AJ", "name": "CR-AJ2 procesni substituce a dalsi presmerovani, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard) > >(tee log) 2>&1", "expect": "deny" },
+    { "group": "CR-AJ", "name": "CR-AJ3 neproste presmerovani a komentar s ) -> deny", "tool": "Bash", "cmd": "(git reset --hard) > \"$LOG\" # hotovo :)", "expect": "deny" },
+    { "group": "CR-AJ", "name": "cena CR-AI1 (kolo 20, fail-closed): vetev case (glob) s telem jen z presmerovani -> deny", "tool": "Bash", "cmd": "case $x in\n  (*) > /dev/null ;;\nesac", "expect": "deny", "reasonContains": "neumí přečíst" }
   ]
 }

@@ -1098,27 +1098,23 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # A179-O14: konec subshellu hleda Find-CloseParen (uvozovky, escape, komentar) - regex `)` posledni v textu bral i `)`
     # z `$( ... )` uvnitr uvozovek prvniho prikazu rozdeleneho subshellu (`(cd "$(git rev-parse ...)" && make)`) a ocas `"`
     # skoncil falesnym deny (regrese CR-AE2). Neuzavreny `(` (fragment rozdeleneho subshellu) sem nepatri - jde starou cestou.
-    # CR-AI2/AI5 (kolo 19): kdyz ocas za koncem podle Find-CloseParen neni jen presmerovani, zkusi se jeste posledni `)` v textu
-    # (Find-CloseParen nezna uvozovky vnorene v `$( ... )` uvnitr uvozovek). Konci-li text tou `)` (ulomek vnejsiho rozdeleneho
-    # subshellu, `(git status) 2>/dev/null)`), jde tvar starou cestou; deny jen kdyz ani jeden konec nedava cisty ocas.
-    # CR-AI7: escape a aritmetika `((` ze sdileneho vzoru.
+    # CR-AI7 (kolo 19): escape a aritmetika `((` ze sdileneho vzoru.
+    # CR-AJ1-AJ3 (kolo 20): zaloha "posledni `)` v textu" z kola 19 (CR-AI2/AI5) poslala celou cestu starym regexem i u `)`
+    # procesni substituce nebo komentare (`( ... ) > >(tee log)`) - z deny bylo allow. Vracena: konec urcuje jen Find-CloseParen,
+    # ocas, ktery neni jen presmerovani, je deny (CR-AE2). Cena: vnoreny subshell s presmerovanim na konci rozdeleneho subshellu
+    # a uvozovky vnorene v `$( ... )` uvnitr uvozovek (Find-CloseParen je nevnoruje, CR-AJ5 -> 0.3.2) = falesny deny.
     if ((Get-ScannerEscape) -eq '\') {
         $lead = [regex]::Match($stripped, '^\s*\(')
         if ($lead.Success -and -not $script:BashZoneRx.Arith.IsMatch($stripped, $lead.Index + $lead.Length - 1)) {
             $close = Find-CloseParen $stripped $lead.Length
             if ($close -lt $stripped.Length -and $stripped.Substring($close).Trim() -ne '') {
-                foreach ($c in @($close, ($stripped.LastIndexOf(')') + 1))) {
-                    if ($c -le $lead.Length) { continue }
-                    $tailText = $stripped.Substring($c)
-                    if ($tailText.Trim() -eq '') { $c = -1; break }
-                    $inner = $stripped.Substring($lead.Length, $c - 1 - $lead.Length)
-                    if ($inner.Trim() -ne '' -and (Test-BashRedirectOnlyTail $tailText)) {
-                        foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
-                        return $out
-                    }
+                $inner = $stripped.Substring($lead.Length, $close - 1 - $lead.Length)
+                if ($inner.Trim() -ne '' -and (Test-BashRedirectOnlyTail $stripped.Substring($close))) {
+                    foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
+                    return $out
                 }
                 # CR-AE2 (kolo 15): ocas, ktery neni jen prosta presmerovani (`> "$LOG"`, `<<EOF`, slovo za `)`), = nerozebiratelne.
-                if ($c -ne -1) { [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out }
+                [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out
             }
         }
     }
