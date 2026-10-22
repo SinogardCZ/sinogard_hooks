@@ -754,19 +754,132 @@ function Expand-LiteralHead([string]$Head, [string]$Raw) {
 # SLOVO shellu - kvotovane casti, escape a nekvotovane znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni).
 # CR-AA1 (kolo 11): slovo tvori i substituce `$( ... )` / `$(( ... ))` (zavorky parovane, kvotovane zavorky se nepocitaji),
 # `${ ... }` a v Bashi zpetne apostrofy. CR-AA8: regex se sestavi jednou pro kazdy escape znak.
+# A179-O9 (2026-10-22): Bash tenhle regex nepouziva (Get-BashCommandStart); slovo je atomicka skupina - bez ni regex nad
+# hodnotou s mnoha substitucemi, za kterou nestoji mezera, zkousel kazde rozdeleni na substituce a znaky (CR-AB1, cas
+# rostl exponencialne a hook by prekrocil timeout = bez verdiktu).
 $script:PrefixStripRegexes = @{}
 function Get-PrefixStripRegex {
     $esc = [string](Get-ScannerEscape)
     if ($script:PrefixStripRegexes.ContainsKey($esc)) { return $script:PrefixStripRegexes[$esc] }
     $escRx = [regex]::Escape($esc)
     $subst = '\$\((?>"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]|[^()"''' + $escRx + ']+|\((?<d>)|\)(?<-d>))*(?(d)(?!))\)|\$\{[^}]*\}'
-    if ($esc -eq '\') { $subst += '|`(?:[^`\\]|\\[\s\S])*`' }
     $wq = $subst + '|"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]'
-    $wordValue = '(?:' + $wq + '|[^\s"''' + $escRx + '])*'
-    $wordTarget = '(?:' + $wq + '|[^\s"''<>' + $escRx + '])+'
+    $wordValue = '(?>(?:' + $wq + '|[^\s"''' + $escRx + '])*)'
+    $wordTarget = '(?>(?:' + $wq + '|[^\s"''<>' + $escRx + '])+)'
     $rx = [regex]::new('^\s*(?:[A-Za-z_][A-Za-z0-9_]*=' + $wordValue + '\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*' + $wordTarget + '\s*)+')
     $script:PrefixStripRegexes[$esc] = $rx
     return $rx
+}
+
+# A179-O9 (Amber 2026-10-22, TASK-179): kola /code-review 10-13 nad rucni gramatikou slova Bashe (substituce, `${}`, uvozovky,
+# `case`, rezervovana slova) nekonvergovala - kazde naslo dalsi konstrukci, kterou skener necte. Misto dalsi gramatiky JEDNO
+# fail-closed pravidlo: pred prikazem smi v Bashi stat jen PROSTA slova (hodnota prirazeni, cil presmerovani, slovo a vzor
+# `case`) a stoji-li tam cokoli z toho, musi byt prostym slovem i hlava prikazu. Prosté slovo = znaky bez `$`, zpetneho
+# apostrofu, zavorek, escape, uvozovek a oddelovacu, NEBO jeden cely retezec v apostrofech / uvozovkach (v uvozovkach bez `$`,
+# zpetneho apostrofu a escape, ktery neco znamena). Uvozovka uprostred slova prosta neni. Cokoli jineho = `Bad` = deny
+# `opaque:shellWord` s hlaskou, ktera jmenuje nahradu. Hlava BEZ prefixu zustava beze zmeny (`$TOOL x` = `variable`, T36/Q102).
+$script:BashPlainWord = '(?:[^\s$`"''\\(){}<>;&|]+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n])*")'
+$script:BashZoneRx = @{
+    Ws      = [regex]'\G\s*'
+    Keyword = [regex]'\G(?:then|do|else|elif|if|while|until|coproc|!)(?=\s|$)'
+    Case    = [regex]'\Gcase(?=\s)'
+    In      = [regex]'\Gin(?=\s|$)'
+    Assign  = [regex]'\G[A-Za-z_][A-Za-z0-9_]*\+?='
+    Redir   = [regex]'\G[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)'
+    Word    = [regex]('\G' + $script:BashPlainWord)
+    # Slovo `case` smi byt i HOLA promenna (`case $1 in`, `case "${x}" in`) - nic nespousti a je to bezny tvar.
+    CaseWord = [regex]('\G(?:' + $script:BashPlainWord + '|(?<q>"?)\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-z0-9_]*\})\k<q>)')
+    Pattern = [regex]('\G\(?\s*' + $script:BashPlainWord + '(?:\s*\|\s*' + $script:BashPlainWord + ')*\s*\)')
+    ArmLike = [regex]'\G(?!\)(?:\s|$))\S*\)(?=\s|$)'
+}
+function Test-BashWordEnd([string]$Text, [int]$Pos) {
+    return ($Pos -ge $Text.Length -or $Text[$Pos] -match '[\s<>;&|]')
+}
+# Vraci @{ Start = index hlavy prikazu; Bad = $true, kdyz pred prikazem nebo v hlave za prefixem stoji neprosté slovo }.
+# Rezervovana slova (`if`, `then`, `!` ...) se preskoci (CR-AA10), ale hlavu prostou nevyzaduji - nejsou to hodnoty.
+# Vzor vetve `case` (CR-AA9) se cte za `case <slovo> in` a na zacatku segmentu za `;;`; tam jen kdyz za `)` neco stoji -
+# `(rm)` je subshell, ne vetev.
+function Get-BashCommandStart([string]$Text) {
+    $r = $script:BashZoneRx
+    $n = $Text.Length
+    $pos = 0
+    $prefix = $false
+    $first = $true
+    for ($guard = 0; $guard -lt 256; $guard++) {
+        $pos += $r.Ws.Match($Text, $pos).Length
+        if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
+        $m = $r.Keyword.Match($Text, $pos)
+        if ($m.Success) { $pos += $m.Length; $first = $false; continue }
+        $m = $r.Case.Match($Text, $pos)
+        if ($m.Success) {
+            $pos += $m.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            $w = $r.CaseWord.Match($Text, $pos)
+            if (-not $w.Success -or -not (Test-BashWordEnd $Text ($pos + $w.Length))) { return @{ Start = $pos; Bad = $true } }
+            $pos += $w.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            $m = $r.In.Match($Text, $pos)
+            if (-not $m.Success) { return @{ Start = $pos; Bad = $true } }
+            $pos += $m.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
+            $m = $r.Pattern.Match($Text, $pos)
+            if (-not $m.Success) {
+                # Vzor `a|b)` rozdeli Split-CommandLine na `|` - tady zbude jen prvni prosta alternativa, prikaz vetve je
+                # v dalsim segmentu (`b) prikaz`) a rozebere se tam.
+                $w = $r.Word.Match($Text, $pos + ($(if ($Text[$pos] -eq '(') { 1 } else { 0 })))
+                if ($w.Success -and $Text.Substring($w.Index + $w.Length).Trim() -eq '') { return @{ Start = $n; Bad = $false } }
+                return @{ Start = $pos; Bad = $true }
+            }
+            $pos += $m.Length; $prefix = $true; $first = $false; continue
+        }
+        if ($first) {
+            $m = $r.Pattern.Match($Text, $pos)
+            if ($m.Success -and ($Text.Substring($pos + $m.Length).Trim() -ne '')) { $pos += $m.Length; $prefix = $true; $first = $false; continue }
+            # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
+            if (-not $m.Success -and $r.ArmLike.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $true } }
+        }
+        $first = $false
+        $m = $r.Assign.Match($Text, $pos)
+        if ($m.Success) {
+            $pos += $m.Length
+            $w = $r.Word.Match($Text, $pos)
+            if ($w.Success) { $pos += $w.Length }
+            if (-not (Test-BashWordEnd $Text $pos)) { return @{ Start = $pos; Bad = $true } }
+            $prefix = $true; continue
+        }
+        $m = $r.Redir.Match($Text, $pos)
+        if ($m.Success) {
+            $pos += $m.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            $w = $r.Word.Match($Text, $pos)
+            if (-not $w.Success -or -not (Test-BashWordEnd $Text ($pos + $w.Length))) { return @{ Start = $pos; Bad = $true } }
+            $pos += $w.Length; $prefix = $true; continue
+        }
+        if ($prefix) {
+            $w = $r.Word.Match($Text, $pos)
+            if (-not $w.Success -or -not (Test-BashWordEnd $Text ($pos + $w.Length))) { return @{ Start = $pos; Bad = $true } }
+        }
+        return @{ Start = $pos; Bad = $false }
+    }
+    return @{ Start = $pos; Bad = $true }
+}
+
+# A179-O9: prirazeni mezi obalem a prikazem (`env X=... prikaz`, `sudo X=... prikaz`) je prefix stejne jako pred prikazem.
+# Tokeny uz prosly Split-Arguments (uvozovky pryc), proto se tu hlida jen `$`, zpetny apostrof a zavorky. Ocas, ktery neni
+# koncem ARGV (`env -S`), se nekontroluje - jeho text rozebira Get-WrapperTail sam.
+function Test-WrapperPrefixUnplain($Argv, $Tail) {
+    $end = $Argv.Count - $Tail.Count
+    if ($end -lt 1) { return $false }
+    for ($k = 0; $k -lt $Tail.Count; $k++) { if ([string]$Argv[$end + $k] -cne [string]$Tail[$k]) { return $false } }
+    $seen = $false
+    for ($i = 1; $i -lt $end; $i++) {
+        $t = [string]$Argv[$i]
+        if ($null -eq (Get-AssignmentName $t)) { continue }
+        $seen = $true
+        if ($t.Substring($t.IndexOf('=') + 1) -match '[$`(){}]') { return $true }
+    }
+    return ($seen -and ([string]$Tail[0]) -match '[$`(){}]')
 }
 
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.
@@ -836,30 +949,20 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # CR-AA1/AA2 (kolo 11): i substituce s mezerou uvnitr (`X=$(echo a b)`, `$((1 + 2))`, `${Y:-a b}`, zpetne apostrofy
     # v Bashi). Zbude-li za prefixem slovo se zavorkou, slozenou zavorkou nebo zpetnym apostrofem z neuzavrene substituce,
     # tvar je nerozebratelny. Regex je jeden na escape znak (Get-PrefixStripRegex).
-    $stripped = (Get-PrefixStripRegex).Replace($trimmed, '')
+    # CR-AA9 / CR-AA10 (kolo 11, diry i v 0.3.0): v Bashi pred prikazem stoji i rezervovana slova (`if`, `then`, `do`, `!` ...)
+    # a vzor vetve `case` - do 0.3.0 byl prikazem `then` nebo `<vzor>)` a zadne pravidlo nesedlo.
+    # A179-O9 (2026-10-22): v Bashi prefix, rezervovana slova i `case` cte Get-BashCommandStart; neprosté slovo pred prikazem
+    # (nebo hlava za prefixem) = nerozebiratelne = deny `opaque:shellWord`.
+    if ((Get-ScannerEscape) -eq '\') {
+        $zone = Get-BashCommandStart $trimmed
+        if ($zone.Bad) { [void]$out.Add((New-OpaqueLeaf $trimmed 'shellWord')); return $out }
+        $stripped = $trimmed.Substring($zone.Start)
+    } else {
+        $stripped = (Get-PrefixStripRegex).Replace($trimmed, '')
+    }
     if ($stripped.Trim() -eq '' -and $trimmed -match '^\s*[0-9]*[<>&]') { return $out }
     if ($stripped -match '^\s*[<>]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
-    if ($stripped.Length -lt $trimmed.Length -and $stripped -match '^\s*[^\s]*[)}`]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
-    # CR-AA9 (kolo 11, dira i v 0.3.0): `case` v Bashi. Prikaz vetve stoji za vzorem `<vzor>)` - prvni vetev za
-    # `case <slovo> in`, dalsi za `;;` (vlastni segment). Do 0.3.0 byl prikazem `case` nebo `<vzor>)` a zadne pravidlo
-    # nesedlo (`case x in a) rm -rf src;; esac`, i `esac) <prikaz>` za vzorem `case` v substituci). Slovo zakoncene `)`
-    # a za nim dalsi slovo (ne presmerovani) se proto bere jako vzor a rozebere se prikaz za nim. Konec subshellu
-    # (`(cd x; ls)`, `ls) > out`) tim neni dotceny.
-    # CR-AA10 (kolo 11, dira i v 0.3.0): rezervovana slova Bashe pred prikazem (`if rm ...`, `then rm ...`, `else`, `elif`,
-    # `do`, `while`, `until`, `!`, `coproc`) - do 0.3.0 byl prikazem `then` a `if true; then rm -rf src; fi` prosel.
-    if ((Get-ScannerEscape) -eq '\') {
-        $kw = [regex]::Match($stripped, '^\s*(?:(?:then|do|else|elif|if|while|until|coproc|!)\s+)+(\S[\s\S]*)$')
-        if ($kw.Success) {
-            foreach ($l in (Get-CommandLeaf $kw.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
-            return $out
-        }
-        $caseArm = $stripped
-        if ($caseArm -match '^\s*case\s+(?:"[^"]*"|''[^'']*''|\S)+\s+in\s+(.*)$') { $caseArm = $Matches[1] }
-        if ($caseArm -match '^\s*\(?[^\s()]+\)\s+(?![0-9]*[<>&])(\S[\s\S]*)$') {
-            foreach ($l in (Get-CommandLeaf $Matches[1] ($Depth + 1))) { [void]$out.Add($l) }
-            return $out
-        }
-    }
+    if ((Get-ScannerEscape) -ne '\' -and $stripped.Length -lt $trimmed.Length -and $stripped -match '^\s*[^\s]*[)}`]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
 
     # PowerShellove PRIRAZENI `$x = <prikaz>` neni volani promenne v pozici prikazu.
     # Bez teto vetve bral Test-Unexpandable `$out` jako promennou v pozici prikazu
@@ -1007,6 +1110,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                     [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = 'env'; GitConfig = @() })
                 }
                 return $out
+            }
+            if ((Get-ScannerEscape) -eq '\' -and (Test-WrapperPrefixUnplain $argv $tail)) {
+                [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out
             }
             foreach ($l in (Get-CommandLeaf (Join-Argument $tail) ($Depth + 1))) {
                 if ($inContainer) {
@@ -2276,8 +2382,10 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
 
     $text = [string]$Raw
     if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
+    # A179-O9: `shellWord` ma vlastni hlasku, ktera jmenuje nahradu (agent nesmi narazit do tiche zdi, D-GSD-14).
+    $shapeKey = if ($Why -ceq 'shellWord') { 'opaqueShellWord' } else { 'opaque' }
     return @{ Id = ('opaque:' + $Why); Decision = 'deny'
-              Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
+              Shape = (([string](Get-Field $shapes $shapeKey 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
 }
 
 # TASK-179 (0.3.1, AOPT-O25): list VNITRNIHO prikazu kontejneroveho obalu posuzuje JEN DB pravidlo. Cesty a git v obrazu

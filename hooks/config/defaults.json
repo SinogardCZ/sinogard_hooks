@@ -79,8 +79,10 @@
       "heredocUnterminated": "audit",
       "depth": "deny",
       "invoked": "audit",
-      "encoded": "audit"
+      "encoded": "audit",
+      "shellWord": "deny"
     },
+    "_opaqueShellWordComment": "A179-O9 (Amber 2026-10-22), 0.3.1: v Bashi smí před příkazem stát jen prostá slova (hodnota přiřazení, cíl přesměrování, slovo a vzor `case`) a stojí-li tam cokoli z toho, musí být prostým slovem i hlava příkazu; totéž pro přiřazení za obalem (`env`, `sudo` …). Prosté slovo = bez `$`, zpětného apostrofu, závorek, escape a uvozovky uprostřed (celý řetězec v apostrofech / uvozovkách prostý je). Jinak `shellWord` = `deny` s hláškou `shapes.opaqueShellWord`, která jmenuje náhradu. Hlava bez prefixu se nemění (`variable`, `invoked`).",
 
     "_decisionsComment": "ZOPT-Q102 (Tom 2026-10-20) + A179-O3 (Amber): každé místo, které do 0.3.0 vracelo `ask`, má politiku `audit` (hook mlčí a zapíše řádek auditu `gate:<id>` / `secrets:<id>` s rozhodnutím `allow`) nebo `deny`. Chybějící nebo neznámá hodnota = `deny`. Přepis smí jen zpřísnit (`audit` → `deny`). forcePushUnknown = force push bez cíle (může mířit na main) · forcePushOther = force push na nechráněnou větev · gitAlias = alias přes `-c` (spustí cokoli) · netDeleteVariable / shortAbsolutePath / recursiveDeleteVariable / recursiveDeleteDotDot = mazání, jehož cíl nejde doložit · recursiveDeleteWildcard = hvězdička uvnitř povoleného kořene · deleteFromPipeline = mazání z roury · interpreterDestructive = destruktivní volání v kódu interpretu · interpreterDestructiveDb = DB token v kódu interpretu (jméno DB nečitelné) · opaqueDestructive = destruktivní literál v nerozebratelném tvaru · remoteShell = příkaz na cizím stroji.",
     "decisions": {
@@ -163,6 +165,7 @@
       "_shortAbsolutePathComment": "TASK-106 bod 4 (nález Amber I6, 0.2.0): `rm -rf /srv` končilo ask s hláškou o rouře. Skutečná příčina: `/xxx` do tří znaků je od přepínače cmd (`/s`, `/q`) k nerozeznání, cíl není vidět. Rozhodnutí se nemění, věta ano.",
       "shortAbsolutePath": "rekurzivní mazání s krátkou absolutní cestou ({target}) — do tří znaků je od přepínače cmd (/s, /q) k nerozeznání, cíl není vidět",
       "opaque": "příkaz, který nejde rozebrat ({text})",
+      "opaqueShellWord": "před příkazem nebo v hlavě příkazu za přiřazením / přesměrováním stojí slovo, které hook neumí přečíst ($, zpětný apostrof, závorka, uvozovka uprostřed) ({text}) — napiš hlavu jako doslovnou cestu a hodnotu jako prosté slovo; potřebuješ-li výsledek substituce, spočítej ho samostatným příkazem a sem dej doslovnou hodnotu",
       "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})",
       "interpreterDestructiveDb": "kód interpretu ruší databázi, jejíž jméno nejde přečíst ({token})",
       "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})",
