@@ -593,13 +593,19 @@
     { "group": "CR-AF", "name": "CR-AF1 prvni prikaz subshellu se dvema prikazy, rm -> deny", "tool": "Bash", "cmd": "(rm -rf src; ls)", "expect": "deny" },
     { "group": "CR-AF", "name": "CR-AF1 prvni prikaz subshellu za &&, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard && echo ok)", "expect": "deny" },
     { "group": "CR-AF", "name": "CR-AF1 prvni prikaz subshellu s mezerou za (, rm -> deny", "tool": "Bash", "cmd": "( rm -rf src; ls )", "expect": "deny" },
-    { "group": "CR-AF", "name": "CR-AF3 posledni slovo subshellu s presmerovanim vstupu, dropdb -> deny", "tool": "Bash", "cmd": "(cd x; dropdb gsd_prod) < /dev/null", "expect": "deny" },
+    { "group": "CR-AF", "name": "CR-AF3 kontrola mimo vetev AF3 (dve slova): posledni prikaz subshellu s presmerovanim, dropdb -> deny", "tool": "Bash", "cmd": "(cd x; dropdb gsd_prod) < /dev/null", "expect": "deny" },
     { "group": "CR-AF", "name": "CR-AF3 kontrola: konec subshellu jednim slovem s presmerovanim -> ticho", "tool": "Bash", "cmd": "(cd x; make) > build.log", "expect": "allow" },
     { "group": "CR-AF", "name": "CR-AF3 klient SQL jako posledni slovo subshellu se vstupem ze souboru -> ticho s auditem (neni vetev case)", "tool": "Bash", "cmd": "(cd db && psql) < drop.sql", "expect": "allow", "auditShape": "sqlFrom", "auditDecision": "allow" },
     { "group": "CR-AF", "name": "CR-AF4 kontrola: source cesty s promennou -> ticho s auditem invoked", "tool": "Bash", "cmd": "source $VIRTUAL_ENV/bin/activate", "expect": "allow", "auditShape": "opaque:invoked", "auditDecision": "allow" },
     { "group": "CR-AF", "name": "CR-AF4 kontrola: tecka s cestou s promennou v uvozovkach -> ticho", "tool": "Bash", "cmd": ". \"$HOME/.cargo/env\" && cargo -V", "expect": "allow" },
     { "group": "CR-AF", "name": "CR-AF4 source cesty s promennou a destruktivnim literalem -> deny", "tool": "Bash", "cmd": "source $DIR/x.sh git reset --hard", "expect": "deny" },
     { "group": "CR-AF", "name": "CR-AF6 kontrola: escapovane zavorky find -> ticho", "tool": "Bash", "cmd": "find src \\( -name a -o -name b \\) -print", "expect": "allow" },
-    { "group": "CR-AF", "name": "CR-AF7 kontrola: SOURCE velkymi pismeny neni tecka -> ticho", "tool": "Bash", "cmd": "SOURCE $x", "expect": "allow" }
+    { "group": "CR-AF", "name": "CR-AF7 kontrola: SOURCE velkymi pismeny neni tecka -> ticho", "tool": "Bash", "cmd": "SOURCE $x", "expect": "allow" },
+    { "group": "CR-AG", "name": "CR-AG6 SOURCE velkymi pismeny s destruktivnim literalem neni invoked -> ticho (rozlisuje AF7)", "tool": "Bash", "cmd": "SOURCE $x reset --hard", "expect": "allow" },
+    { "group": "CR-AG", "name": "CR-AG1 kontrola: subshell s $( ... ) v prvnim prikazu -> ticho", "tool": "Bash", "cmd": "(cd \"$(git rev-parse --show-toplevel)\" && make)", "expect": "allow" },
+    { "group": "CR-AG", "name": "CR-AG1 prvni prikaz subshellu s $( ... ) v cili, rm -> deny", "tool": "Bash", "cmd": "(rm -rf \"$(pwd)/x\"; ls)", "expect": "deny" },
+    { "group": "CR-AG", "name": "CR-AG2 glob v poslednim slove subshellu s presmerovanim -> deny", "tool": "Bash", "cmd": "(cd db; /usr/bin/ps?l) < drop.sql", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "CR-AG", "name": "CR-AG3 2000 vzoru vetve za sebou -> deny do 5 s", "tool": "Bash", "cmd": "{REP}echo ok", "repText": "a) ", "repCount": 2000, "expect": "deny", "maxMs": 5000 },
+    { "group": "CR-AG", "name": "CR-AG4 sudy pocet escape pred ) konce subshellu, git reset --hard -> deny", "tool": "Bash", "cmd": "(cd x && git reset --hard \\\\)", "expect": "deny" }
   ]
 }

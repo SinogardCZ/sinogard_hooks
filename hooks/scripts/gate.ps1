@@ -818,16 +818,23 @@ $script:BashZoneRx = @{
 function Test-BashWordEnd([string]$Text, [int]$Pos) {
     return ($Pos -ge $Text.Length -or $Text[$Pos] -match '[\s<>;&|]')
 }
+# CR-AG7 (kolo 17): ocas za `)` je jen prosta presmerovani (zadna hlava, nic neprosteho) - jedna definice pro CR-AD1 a CR-AF3.
+function Test-BashRedirectOnlyTail([string]$Tail) {
+    $tz = Get-BashCommandStart $Tail -NoArm
+    return (-not $tz.Bad -and $tz.Start -ge $Tail.Length)
+}
 # Vraci @{ Start = index hlavy prikazu; Bad = $true, kdyz pred prikazem nebo v hlave za prefixem stoji neproste slovo }.
 # Rezervovana slova (`if`, `then`, `!` ...) se preskoci (CR-AA10), ale hlavu prostou nevyzaduji - nejsou to hodnoty.
 # Vzor vetve `case` (CR-AA9) se cte za `case <slovo> in` a na zacatku segmentu za `;;`; tam jen kdyz za `)` neco stoji -
 # `(rm)` je subshell, ne vetev.
-function Get-BashCommandStart([string]$Text) {
+# `-NoArm` (CR-AG3, kolo 17): bez vzoru vetve na zacatku - pro ocas za `)` (Test-BashRedirectOnlyTail), jinak by rada slov
+# `a) a) ...` rekurzi kopirovala text kvadraticky.
+function Get-BashCommandStart([string]$Text, [switch]$NoArm) {
     $r = $script:BashZoneRx
     $n = $Text.Length
     $pos = 0
     $prefix = $false
-    $first = $true
+    $first = -not $NoArm
     for ($guard = 0; $guard -lt 256; $guard++) {
         $pos += $r.Ws.Match($Text, $pos).Length
         if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
@@ -836,8 +843,12 @@ function Get-BashCommandStart([string]$Text) {
         # CR-AF1 (kolo 16, vyjimka O11 pro subshell): Split-CommandLine deli i uvnitr `( ... )`, takze prvni prikaz subshellu
         # prijde jako segment `(rm -rf src` bez `)` - zavorkovy obal ho nerozbali. `(` bez `)` v segmentu se preskoci jako
         # rezervovane slovo a prikaz za ni se cte jako kazdy jiny (konec subshellu odlomi CR-AE4).
-        if ($Text[$pos] -eq [char]'(' -and ($pos + 1) -lt $n -and $Text[$pos + 1] -ne [char]'(' -and $Text.IndexOf(')', $pos) -lt 0) {
-            $pos++; $first = $false; continue
+        # CR-AG1 (kolo 17): `)` uvnitr `$( ... )` nebo uvozovek prvniho prikazu (`(cd "$(git rev-parse ...)" && make)`) -
+        # rozhoduje pocet: segment, ve kterem `(` od teto pozice prevazuji nad `)`, subshell neuzavira (pocita se stejne
+        # naivne jako odlamovani `)` v Get-CommandLeaf).
+        if ($Text[$pos] -eq [char]'(' -and ($pos + 1) -lt $n -and -not $r.Arith.IsMatch($Text, $pos)) {
+            $rest = $Text.Substring($pos)
+            if (([regex]::Matches($rest, '\(')).Count -gt ([regex]::Matches($rest, '\)')).Count) { $pos++; $first = $false; continue }
         }
         $m = $r.Keyword.Match($Text, $pos)
         if (-not $m.Success) { $m = $r.FuncDef.Match($Text, $pos) }
@@ -872,12 +883,16 @@ function Get-BashCommandStart([string]$Text) {
                 # `ls)`), cely subshell `(sh)` nebo vzor `case` na samostatnem radku. CR-AE5 (kolo 15): slovo se dal rozebira
                 # jako hlava (`)` odlomi Get-CommandLeaf, `(sh)` rozbali zavorkovy obal). Glob se tu nehlida: vzor `*)` je
                 # bezny a jedno slovo bez argumentu zadne pravidlo neporusi.
-                if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
+                $armTail = $Text.Substring($pos + $m.Length)
+                if ($armTail.Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
                 # CR-AF3 (kolo 16): za `)` jen presmerovani (`psql) < drop.sql`) = konec subshellu jednim slovem; jako vetev
                 # `case` by se prikaz zahodil. Slovo je hlava, `)` odlomi Get-CommandLeaf. Presmerovani + prikaz = vetev (CR-AC6).
-                $armTail = $Text.Substring($pos + $m.Length)
-                $tz = Get-BashCommandStart $armTail
-                if (-not $tz.Bad -and $tz.Start -ge $armTail.Length) { return @{ Start = $pos; Bad = $false } }
+                # CR-AG2 (kolo 17): slovo s presmerovanim je hlava, ktera dostava vstup - nekvotovany glob = nerozebiratelne (O11).
+                if (Test-BashRedirectOnlyTail $armTail) {
+                    $w = $r.Word.Match($Text, $pos)
+                    $bad = ($w.Success -and $w.Value[0] -ne [char]"'" -and $w.Value[0] -ne [char]'"' -and $r.Glob.IsMatch($w.Value))
+                    return @{ Start = $pos; Bad = $bad }
+                }
                 $pos += $m.Length; $prefix = $true; $first = $false; continue
             }
             # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
@@ -1095,9 +1110,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         # Pozor na jmeno: `$sub` by byl parametr `$Sub` (PowerShell nerozlisuje velikost pismen) a Match by se prevedl na text.
         $subshell = [regex]::Match($stripped, '^\s*\((?!\()([\s\S]*)\)([^)]*)$')
         if ($subshell.Success -and $subshell.Groups[2].Value.Trim() -ne '' -and $subshell.Groups[1].Value.Trim() -ne '') {
-            $redirTail = $subshell.Groups[2].Value
-            $tz = Get-BashCommandStart $redirTail
-            if (-not $tz.Bad -and $tz.Start -ge $redirTail.Length) {
+            if (Test-BashRedirectOnlyTail $subshell.Groups[2].Value) {
                 foreach ($l in (Get-CommandLeaf $subshell.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
                 return $out
             }
@@ -1127,10 +1140,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         # ktery ma vic `)` nez `(` a na `)` konci, se o prebytecne `)` zkrati (`$(date))` -> `$(date)`, `src)` -> `src`).
         for ($k = 0; $k -lt $argv.Count; $k++) {
             $t = [string]$argv[$k]
-            # CR-AF6 (kolo 16): escapovana zavorka (`find \( ... \)`) se nepocita ani neodlamuje.
-            if ($t.Length -lt 2 -or -not $t.EndsWith(')') -or $t.EndsWith('\)')) { continue }
-            $extra = ([regex]::Matches($t, '(?<!\\)\)')).Count - ([regex]::Matches($t, '(?<!\\)\(')).Count
-            while ($extra -gt 0 -and $t.Length -gt 1 -and $t.EndsWith(')') -and -not $t.EndsWith('\)')) { $t = $t.Substring(0, $t.Length - 1); $extra-- }
+            # CR-AF6 (kolo 16): escapovana zavorka (`find \( ... \)`) se nepocita ani neodlamuje. CR-AG4 (kolo 17): escapovana
+            # je jen za LICHYM poctem `\` (`build\\)` = `build\` + konec subshellu).
+            if ($t.Length -lt 2 -or -not $t.EndsWith(')') -or $t -match '(?<!\\)(?:\\\\)*\\\)$') { continue }
+            $extra = ([regex]::Matches($t, '(?<!\\)(?:\\\\)*\)')).Count - ([regex]::Matches($t, '(?<!\\)(?:\\\\)*\(')).Count
+            while ($extra -gt 0 -and $t.Length -gt 1 -and $t.EndsWith(')') -and $t -notmatch '(?<!\\)(?:\\\\)*\\\)$') { $t = $t.Substring(0, $t.Length - 1); $extra-- }
             $argv[$k] = $t
         }
     }

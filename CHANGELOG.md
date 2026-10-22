@@ -97,6 +97,17 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
     → 0.3.2, README mez 27.
 
   Skupina `CR-AF`.
+- **Kolo 17 `/code-review` (CR-AG) nad opravami kola 16:**
+  - falešné `deny` u subshellu s `$( … )` v prvním příkazu (`(cd "$(git rev-parse --show-toplevel)" && make)`). `(` se
+    přeskočí podle počtu závorek v segmentu, ne podle přítomnosti `)` (AG1);
+  - glob v posledním slově subshellu s přesměrováním → `deny` (AG2);
+  - řada vzorů větví za sebou se rekurzí kopírovala kvadraticky. Červená fáze: 2000 vzorů = 21 s, tedy hook po timeoutu
+    prošel **bez verdiktu**. Ocas za `)` se teď čte bez větví (`-NoArm`, AG3);
+  - escape před `)` se počítá podle parity (AG4);
+  - rozlišující fixtury pro AF7 (AG6), jedna funkce „ocas je jen přesměrování“ (AG7) a sdílený vzor aritmetiky (AG8).
+  - AG5: fixtura `dropdb` z kola 16 je přejmenovaná na kontrolu mimo větev AF3. Rozlišující řádek pro AF3 je AG2.
+
+  Skupina `CR-AG`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).
