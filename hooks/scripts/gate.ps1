@@ -777,7 +777,10 @@ function Get-PrefixStripRegex {
 # `case`) a stoji-li tam cokoli z toho, musi byt prostym slovem i hlava prikazu. Proste slovo = znaky bez `$`, zpetneho
 # apostrofu, zavorek, escape, uvozovek a oddelovacu, NEBO jeden cely retezec v apostrofech / uvozovkach (v uvozovkach bez `$`,
 # zpetneho apostrofu a escape, ktery neco znamena). Uvozovka uprostred slova prosta neni. Cokoli jineho = `Bad` = deny
-# `opaque:shellWord` s hlaskou, ktera jmenuje nahradu. Hlava BEZ prefixu zustava beze zmeny (`$TOOL x` = `variable`, T36/Q102).
+# `opaque:shellWord` s hlaskou, ktera jmenuje nahradu.
+# A179-O11 (Amber 2026-10-22): pravidlo plati pro KAZDOU hlavu prikazu (brace expanze, zpetne apostrofy, `$( ... )` a
+# glob v hlave spusti neco, co hook nevidi). Vyjimky bez prefixu: hola promenna (`$X`, `${X}`, `"$X"`, `"${X}"` = `variable`,
+# audit T36/Q102), zacatek bloku `{ ...; }`, subshellu `( ... )` a definice funkce `f()` - ty rozebira Get-CommandLeaf dal.
 $script:BashPlainWord = '(?:[^\s$`"''\\(){}<>;&|]+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n])*")'
 $script:BashZoneRx = @{
     Ws      = [regex]'\G\s*'
@@ -791,6 +794,15 @@ $script:BashZoneRx = @{
     CaseWord = [regex]('\G(?:' + $script:BashPlainWord + '|(?<q>"?)\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-z0-9_]*\})\k<q>)')
     Pattern = [regex]('\G\(?\s*' + $script:BashPlainWord + '(?:\s*\|\s*' + $script:BashPlainWord + ')*\s*\)')
     ArmLike = [regex]'\G(?!\)(?:\s|$))\S*\)(?=\s|$)'
+    BareVar = [regex]'\G(?<q>"?)\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-z0-9_]*\})\k<q>'
+    # Zacatek bloku / subshellu a definice funkce `f()` (komentar `#` konci rozbor hned na zacatku smycky).
+    Structural = [regex]'\G(?:\(|\{(?=\s)|[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\))'
+    FuncDef = [regex]'\G[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\)'
+    Arith   = [regex]'\G\(\('
+    # Konec viceradkoveho bloku / subshellu (segment `} > log`, `) > log`) - cte se jako prefix: za nim smi stat jen
+    # presmerovani nebo prosta hlava.
+    Closer  = [regex]'\G[})](?=\s|$|[<>;&|])'
+    Glob    = [regex]'[*?]|\[(?!\[?$)'
 }
 function Test-BashWordEnd([string]$Text, [int]$Pos) {
     return ($Pos -ge $Text.Length -or $Text[$Pos] -match '[\s<>;&|]')
@@ -808,6 +820,8 @@ function Get-BashCommandStart([string]$Text) {
     for ($guard = 0; $guard -lt 256; $guard++) {
         $pos += $r.Ws.Match($Text, $pos).Length
         if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
+        # Komentar: segment konci koncem radku (Split-CommandLine deli i na nem), takze za `#` uz zadny prikaz nestoji.
+        if ($Text[$pos] -eq [char]'#') { return @{ Start = $pos; Bad = $false } }
         $m = $r.Keyword.Match($Text, $pos)
         if ($m.Success) { $pos += $m.Length; $first = $false; continue }
         $m = $r.Case.Match($Text, $pos)
@@ -837,9 +851,13 @@ function Get-BashCommandStart([string]$Text) {
             $m = $r.Pattern.Match($Text, $pos)
             if ($m.Success -and ($Text.Substring($pos + $m.Length).Trim() -ne '')) { $pos += $m.Length; $prefix = $true; $first = $false; continue }
             # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
-            if (-not $m.Success -and $r.ArmLike.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $true } }
+            # Neni to definice funkce `f()` ani aritmetika `(( ... ))`.
+            if (-not $m.Success -and $r.ArmLike.IsMatch($Text, $pos) -and -not $r.FuncDef.IsMatch($Text, $pos) -and
+                -not $r.Arith.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $true } }
         }
         $first = $false
+        $m = $r.Closer.Match($Text, $pos)
+        if ($m.Success) { $pos += $m.Length; $prefix = $true; continue }
         $m = $r.Assign.Match($Text, $pos)
         if ($m.Success) {
             $pos += $m.Length
@@ -856,11 +874,18 @@ function Get-BashCommandStart([string]$Text) {
             if (-not $w.Success -or -not (Test-BashWordEnd $Text ($pos + $w.Length))) { return @{ Start = $pos; Bad = $true } }
             $pos += $w.Length; $prefix = $true; continue
         }
-        if ($prefix) {
-            $w = $r.Word.Match($Text, $pos)
-            if (-not $w.Success -or -not (Test-BashWordEnd $Text ($pos + $w.Length))) { return @{ Start = $pos; Bad = $true } }
+        $w = $r.Word.Match($Text, $pos)
+        if ($w.Success -and (Test-BashWordEnd $Text ($pos + $w.Length))) {
+            # Glob v nekvotovane hlave (`/bin/r?`) vybere program az shell.
+            $bad = ($w.Value[0] -ne [char]"'" -and $w.Value[0] -ne [char]'"' -and $r.Glob.IsMatch($w.Value))
+            return @{ Start = $pos; Bad = $bad }
         }
-        return @{ Start = $pos; Bad = $false }
+        if (-not $prefix) {
+            if ($r.Structural.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $false } }
+            $v = $r.BareVar.Match($Text, $pos)
+            if ($v.Success -and (Test-BashWordEnd $Text ($pos + $v.Length))) { return @{ Start = $pos; Bad = $false } }
+        }
+        return @{ Start = $pos; Bad = $true }
     }
     return @{ Start = $pos; Bad = $true }
 }
@@ -879,7 +904,11 @@ function Test-WrapperPrefixUnplain($Argv, $Tail) {
         $seen = $true
         if ($t.Substring($t.IndexOf('=') + 1) -match '[$`(){}]') { return $true }
     }
-    return ($seen -and ([string]$Tail[0]) -match '[$`(){}]')
+    $head = [string]$Tail[0]
+    if ($seen) { return ($head -match '[$`(){}]') }
+    # A179-O11: hlava za obalem bez prirazeni smi byt hola promenna (`sudo $TOOL x` = `variable`). Join-Argument by jinak
+    # token se substituci a mezerou (`$(echo rm)`) obalil apostrofy a rekurze by ho cetla jako proste slovo.
+    return ($head -match '[$`(){}]' -and $head -notmatch '^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$')
 }
 
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.

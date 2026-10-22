@@ -33,8 +33,46 @@ Gate bral jako jméno příkazu první slovo statementu. Za rezervovaným slovem
 s mezerou (`X=$(echo a b) …`, i za `env`/`sudo`) proto skutečný příkaz nesedl na žádné pravidlo a prošel tichem:
 `if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`. Chyba se
 změřila v nasazené 0.3.0 i ve verzích 0.2.0 a 0.1.9 (cache pluginu, Bash, 2026-10-22). Secrets čte tokeny bez ohledu
-na pozici a chybu neměl. Od 0.3.1 gate tato slova a vzory strhne a rozebere příkaz za nimi; substituce je část slova.
-Případy hlídá skupina `CR-AA` v `tests/fixtures/task179-gate.json`.
+na pozici a chybu neměl. Od 0.3.1 gate tato slova a vzory strhne a rozebere příkaz za nimi. Co před příkazem stojí, musí
+být **prosté slovo** (`A179-O9`–`O11`, oddíl níž): hodnota přiřazení, cíl přesměrování, slovo a vzor `case`, i hlava
+příkazu. Jinak `deny`. Případy hlídají skupiny `CR-AA`, `CR-AB`, `O9` a `O11` v `tests/fixtures/task179-gate.json`.
+
+### Bezpečnost — slovo před příkazem v Bashi: jedno fail-closed pravidlo místo gramatiky (`A179-O9`)
+
+Kola `/code-review` 10–13 nad ručním rozborem slova Bashe (substituce, `${…}`, uvozovky, `case`, rezervovaná slova)
+nekonvergovala: každé našlo 7–10 dalších konstrukcí a 2–3 regrese předchozího kola. Kód slova se proto vrátil na stav
+kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperPrefixUnplain` v `gate.ps1`):
+
+- **Hlava příkazu a všechno před ní musí být v Bashi prosté slovo.** Před hlavou může stát hodnota přiřazení, cíl
+  přesměrování, slovo a vzor `case` nebo přiřazení za obalem (`env`, `sudo` …). Prosté slovo nemá `$`, zpětný apostrof,
+  závorku, escape ani uvozovku uprostřed. Prostý je i celý řetězec v apostrofech nebo uvozovkách (v uvozovkách bez `$`,
+  zpětného apostrofu a escape, který něco znamená). Nekvotovaná hlava navíc nesmí mít `*`, `?` ani `[` (glob vybere
+  program až shell). Slovo `case` smí být i holá proměnná (`case "$1" in`).
+- **Výjimky hlavy bez prefixu (`A179-O11`):** holá proměnná (`$X`, `${X}`, `"$X"`, `"${X}"`, i za obalem) zůstává
+  `opaque:variable` (ticho + audit, T36 / `ZOPT-Q102`). Dále začátek bloku `{ …; }` a subshellu `( … )`, aritmetika
+  `(( … ))`, definice funkce `f()` a komentář. Bloky a subshelly se rozebírají dál jako dřív.
+- **Jinak `deny`** s příčinou `opaque:shellWord` a hláškou, která jmenuje náhradu: hlava jako doslovná cesta, hodnota
+  jako prosté slovo, substituce v argumentu příkazu, nebo výsledek spočítaný samostatným příkazem.
+- **Cena (vědomě, `A179-O9`–`O11`):** `deny` i u běžných tvarů:
+  - proměnná nebo substituce v hlavě za přiřazením (`NODE_ENV=test ${HOME}/bin/tool`, `PYTHONPATH=. $(pwd)/venv/bin/python`);
+  - substituce nebo uvozovka uprostřed v hodnotě přiřazení (`X=$(echo a b) git status`, `X=a"b c" git status`);
+  - **samostatné přiřazení se substitucí** bez příkazu za ním (`n=$(basename "$f" .md)`; `A179-O10`). Hook bez gramatiky
+    nepozná, že za hodnotou nic nestojí. Náhrada je substituce v argumentu příkazu;
+  - substituce nebo cesta s proměnnou jako hlava bez prefixu (`$(which python) x.py`, `"$(pwd)/bin/x"`; `A179-O11`).
+- **Zavřené tvary:**
+  - nálezy CR-AB1–AB5 a CR-AC6–AC8 (větev `case` začínající přesměrováním, vzor s escapem nebo substitucí, přiřazení
+    pole `NAME=(…)`);
+  - regrese kola 12 CR-AC1–AC3 (kód kola 12 je pryč);
+  - hlavy, které 0.3.0 propouštěla tichem nebo jen auditem: brace expanze, zpětné apostrofy a `$( … )` jako hlava, glob
+    v hlavě, i za obalem (`A179-O11`).
+- **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
+  totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
+  může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).
+- **Doba:** regex prefixu (už jen pro PowerShell) má slovo jako atomickou skupinu. Hodnota s mnoha substitucemi bez
+  mezery za ní dřív zkoušela každé rozdělení a hook přetekl timeout, tedy prošel **bez verdiktu**. Červená fáze ukázala
+  20 s u Bashe (regrese kola 11) i u PowerShellu, teď je to pod 2 s (řádky `maxMs` ve skupinách `CR-AB` a `O9`).
+- **Co pravidlo nezavře:** README omezení 27 (uvozovky a substituce v **argumentech**, ANSI-C `$'…'`, druhá gramatika
+  slova v `Split-Arguments`). Oprava je jeden tokenizér Bashe ve verzi 0.3.2.
 
 ### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
 
@@ -241,22 +279,16 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   žádná pravidla: `if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`
   a `X=$(case x in a) echo;; esac) <příkaz>` prošly. Brána slova strhne a rozebere příkaz za nimi. Konec subshellu
   (`(cd x; ls) > out`) zůstává beze změny. Secrets čte tokeny bez ohledu na pozici a díru neměl.
-- **Známá mez (AA7, v kole 12 vyřešeno — CR-AB1).** Gramatika slova shellu byla na dvou místech (regex v `Get-CommandLeaf`
-  a `Split-Arguments`).
+- **Známá mez (AA7) → 0.3.2.** Gramatika slova shellu je na dvou místech: prefix před příkazem (v Bashi od `A179-O9`
+  `Get-BashCommandStart`) a `Split-Arguments`. Jeden tokenizér Bashe je kostra verze 0.3.2 (README omezení 27).
 
-**Dvanácté kolo `/code-review` nad CR-AA (CR-AB, skupina `CR-AB`):**
-- **Regex prefixu se vracel exponenciálně (AB1, moje regrese z AA1).** Při neúspěšné shodě (substituce nebo zpětné
-  apostrofy v hodnotě a za nimi další statement) trval rozbor desítky sekund až minuty — za timeoutem hooku příkaz
-  projde. Prefix (přiřazení a přesměrování před příkazem) teď čte lineární průchod po slovech `Split-CommandPrefix`
-  a slovo shellu určuje jedna funkce `Get-ShellWordEnd` (kvotované části, escape, `$( … )` přes `Find-CloseParen`,
-  `${ … }` přes nové `Find-CloseBrace`, zpětné apostrofy v Bashi). Regex z kola 11 zmizel. Tím je vyřešená i mez AA7.
-- **`${ … }` párovaně (AB2).** Konec `${` hledalo první `}`; vnořená `${…}` a kvotovaná `}` dělily slovo (za `env`
-  pak zbytek vypadal jako příkaz). `Split-Arguments` i prefix používají `Find-CloseBrace`.
-- **Větve `case` (AB3, AB4).** Za vzorem `)` nemusí být mezera, vzor smí mít kvotované části s mezerou a alternativy `|`,
-  slovo za `case` čte `Get-ShellWordEnd` (i substituce).
-- **Falešné `deny` z AA1 (AB5).** Pojistka „slovo se závorkou za prefixem“ zakazovala i běžné `${HOME}/bin/x` nebo
-  `$(pwd)/venv/…` za přiřazením. Nahradil ji přesný signál: hodnota nebo cíl končí uvnitř neuzavřené substituce či
-  uvozovky → nerozebíratelné.
+**Dvanácté a třinácté kolo `/code-review` (CR-AB, CR-AC) → návrat a jedno pravidlo (`A179-O9`):**
+- Kolo 12 přepsalo slovo shellu na lineární průchod (`Split-CommandPrefix`, `Get-ShellWordEnd`, `Find-CloseBrace`).
+  Kolo 13 nad ním našlo 10 nálezů, z toho 3 regrese kola 12 (CR-AC1–AC3) a časovou regresi řádků `K7-1`. Kód kola 12
+  je **vrácen** na stav kola 11 a nálezy CR-AB1–AB5 a CR-AC6–AC8 zavírá pravidlo z oddílu „Bezpečnost — slovo před
+  příkazem“ výš (skupiny `CR-AB` a `O9`). Řádky „kontrola … ticho“ s neprostou hlavou za přiřazením (CR-AA1, CR-AA2,
+  CR-AB5, CR-Y6, CR-Z3 a výpis 7. 9. `gsd/24`) jsou teď `deny` s hláškou — to je cena pravidla. Totéž platí pro kontrolu
+  `L1` v Bashi (hlava `$_.Name`).
 - **Vědomě beze změny (AB6).** Sdílený rozpočet obou čtení může falešně přetéct jen v okně, kdy první čtení skončí
   méně než ~12 jednotek pod stropem 200 000 (druhé čtení rozdělené substituce znovu nepočítá; změřeno u 400 vnořených
   závorek: první čtení 160 833, druhé 12, u 450 už přeteklo první čtení samo).
@@ -310,7 +342,8 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 ### Konfigurace
 
-Žádný nový klíč. Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace).
+Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace). Nová příčina `gate.opaque.shellWord`
+(výchozí `deny`; přepis smí jen zpřísnit, takže zůstává `deny`) a text `gate.shapes.opaqueShellWord` (`A179-O9`).
 
 ### Testy
 

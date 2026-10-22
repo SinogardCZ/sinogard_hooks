@@ -762,7 +762,9 @@ $amber5bCases = @(
     (Case 'L1 kontrola roura z $_'      'Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force }' 'audit' 'PowerShell')
     # 🔴 v BASHi vyrazove pravidlo NEPLATI - `$cmd -rf src` se tam spousti, takze tvar
     #    zustava NEROZEBRATELNY; od 0.1.10 z toho ale neni dotaz, ale audit.
-    (Case 'L1 kontrola Bash zustava'    '$_.Name -like "*.cs"' 'allow')
+    #    A179-O11 (0.3.1): hlava `$_.Name` neni hola promenna ani proste slovo -> deny `opaque:shellWord` (hola `$cmd` dal audit).
+    (Case 'L1 kontrola Bash zustava'    '$_.Name -like "*.cs"' 'deny')
+    (Case 'L1 kontrola Bash hola promenna' '$cmd -rf src' 'allow')
 
     # K3 - tataz trida jako I2, ale pro telo heredocu
     (Case 'K3 bash heredoc z PS'        ("bash <<'EOF'" + $lf + 'echo \" ; git reset --hard' + $lf + 'EOF') 'deny' 'PowerShell')

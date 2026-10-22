@@ -531,6 +531,24 @@
     { "group": "O9", "name": "A179-O9 kontrola: viceradkovy subshell s presmerovanim -> ticho", "tool": "Bash", "cmd": "(\n  cd x\n  ls\n) > log.txt", "expect": "allow" },
     { "group": "O9", "name": "A179-O10 cena: samostatne prirazeni se substituci -> deny s nahradou", "tool": "Bash", "cmd": "n=$(basename \"$f\" .md)", "expect": "deny", "reasonContains": "do argumentu příkazu" },
     { "group": "O9", "name": "A179-O10 kontrola: tataz substituce v argumentu prikazu -> ticho", "tool": "Bash", "cmd": "grep -n x \"docs/$(basename \"$f\" .md).md\"", "expect": "allow" },
-    { "group": "O9", "name": "A179-O10 kontrola: samostatne prirazeni s prostou hodnotou -> ticho", "tool": "Bash", "cmd": "n=TASK-1", "expect": "allow" }
+    { "group": "O9", "name": "A179-O10 kontrola: samostatne prirazeni s prostou hodnotou -> ticho", "tool": "Bash", "cmd": "n=TASK-1", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 brace expanze jako cela hlava -> deny", "tool": "Bash", "cmd": "{rm,-rf,src}", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "O11", "name": "A179-O11 brace expanze uvnitr hlavy -> deny", "tool": "Bash", "cmd": "r{m,} -rf src", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "O11", "name": "A179-O11 zpetne apostrofy jako hlava -> deny", "tool": "Bash", "cmd": "`echo rm` -rf src", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "O11", "name": "A179-O11 substituce jako hlava -> deny", "tool": "Bash", "cmd": "$(echo rm) -rf src", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "O11", "name": "A179-O11 glob v hlave -> deny", "tool": "Bash", "cmd": "/bin/r? -rf src", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "O11", "name": "A179-O11 substituce jako hlava za obalem -> deny", "tool": "Bash", "cmd": "sudo $(echo rm) -rf src", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "O11", "name": "A179-O11 cena: substituce v hlave bez prefixu -> deny s nahradou", "tool": "Bash", "cmd": "$(which python) x.py", "expect": "deny", "reasonContains": "doslovnou cestu" },
+    { "group": "O11", "name": "A179-O11 cena: promenna s cestou v hlave bez prefixu -> deny s nahradou", "tool": "Bash", "cmd": "\"$(pwd)/bin/x\" --help", "expect": "deny", "reasonContains": "doslovnou cestu" },
+    { "group": "O11", "name": "A179-O11 kontrola: hola promenna v uvozovkach jako hlava -> ticho (variable, T36)", "tool": "Bash", "cmd": "\"${TOOL}\" ls", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 kontrola: blok { ...; } -> ticho", "tool": "Bash", "cmd": "{ echo hi; } > out.txt", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 blok s destrukci dal rozebrany -> deny", "tool": "Bash", "cmd": "{ rm -rf src; }", "expect": "deny" },
+    { "group": "O11", "name": "A179-O11 kontrola: viceradkovy blok s presmerovanim -> ticho", "tool": "Bash", "cmd": "{\n  echo a\n  echo b\n} > log.txt", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 kontrola: definice funkce -> ticho", "tool": "Bash", "cmd": "f() { echo hi; }; f", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 kontrola: komentar se substituci -> ticho", "tool": "Bash", "cmd": "#$(x) poznamka\necho ok", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 kontrola: test [ a [[ -> ticho", "tool": "Bash", "cmd": "[ -f x ] && [[ -d y ]] && echo ok", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 kontrola: cesta s mezerou v uvozovkach a vlnovka -> ticho", "tool": "Bash", "cmd": "\"C:/Program Files/nodejs/node.exe\" x.js && ~/bin/tool --help", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 kontrola: aritmetika (( )) -> ticho", "tool": "Bash", "cmd": "((i++)); echo $i", "expect": "allow" },
+    { "group": "O11", "name": "A179-O11 konec viceradkoveho bloku a dalsi prikaz na radku -> deny", "tool": "Bash", "cmd": "{\n  echo a\n} > log.txt; rm -rf src", "expect": "deny" }
   ]
 }

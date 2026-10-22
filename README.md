@@ -755,6 +755,25 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     všude v pluginu — **z vnitřního příkazu**: `psql` bez `-h` uvnitř kontejneru na vzdáleném enginu je „místní" a končí
     `ask` (s `gate.dbDestroyLocal = deny` `deny`), **nikdy ticho**. Řádky skupiny `O26` v `tests/fixtures/task179-gate.json`
     to přibíjejí; `deny` by vyžadovalo pravidlo, které cíl enginu rozezná — dnes žádné není.
+27. **Slovo Bashe čtou dvě ruční gramatiky; v hlavě příkazu a před ní platí místo gramatiky fail-closed pravidlo** (0.3.1,
+    GSD TASK-179, `A179-O9`–`O11`). Hlava příkazu i všechno před ní musí být prosté slovo. Před hlavou může stát hodnota
+    přiřazení, cíl přesměrování, slovo a vzor `case` nebo přiřazení za obalem (`env`, `sudo` …). Prosté slovo nemá `$`,
+    zpětný apostrof, závorku, escape ani uvozovku uprostřed; prostý je i celý řetězec v apostrofech či uvozovkách.
+    Nekvotovaná hlava navíc nesmí mít `*`, `?` ani `[`. Výjimky hlavy bez prefixu: holá proměnná (`$X`, `${X}`, `"$X"`,
+    `"${X}"` → `opaque:variable`, ticho + audit), začátek bloku, subshellu a aritmetiky, definice funkce a komentář. Jinak
+    hook vrátí `deny` (`opaque:shellWord`) a hláška jmenuje náhradu: hlavu jako doslovnou cestu, hodnotu jako prosté
+    slovo, substituci v argumentu příkazu, nebo výsledek spočítaný samostatným příkazem.
+    - **Cena:** `deny` i u běžných tvarů:
+      - proměnná nebo substituce v hlavě (`NODE_ENV=test ${HOME}/bin/tool`, `$(which python) x.py`, `"$(pwd)/bin/x"`);
+      - substituce nebo uvozovka uprostřed v hodnotě přiřazení (`X=$(echo a b) git status`, `X=a"b c" git status`);
+      - samostatné přiřazení se substitucí (`n=$(basename "$f" .md)`, `A179-O10`).
+    - **Co pravidlo nezavírá:** slova v **argumentech** příkazu čte vlastní smyčka `Split-Arguments`. Ta zná uvozovky,
+      escape, `$( … )`, `${ … }` (do první `}`) a zpětné apostrofy, ale ne ANSI-C `$'…'`, uvozovky uvnitř `${ … }`
+      a zpětných apostrofů v uvozovkách ani vnořené `${ … }`. Špatně určená hranice slova posune argumenty, takže pravidlo
+      nad argumenty může minout cíl (nálezy `/code-review` kol 12–13 CR-AB2 a CR-AC4–AC5 mimo prefix). Změřeno
+      2026-10-22: ze 32 sond recenzentů kol 12–13 projdou tichem 4, všechny s `${ … }` v argumentu.
+    - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.3.2. Kola `/code-review`
+      10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
 
 ---
 
