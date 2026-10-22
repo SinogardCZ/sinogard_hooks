@@ -589,11 +589,14 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     # CR-W5/W6 (kolo 7): porovnani textu bez operatoru spusteni a obalovych zavorek (`& x`, `(x)`); hloubka se nezvysuje
     # (prikaz ve vyrazu je na teze urovni jako statement).
     # List z parseru nese `FromAst` - Test-DbAllowContext ho bere jako slozeny tvar (prikaz uvnitr vyrazu).
-    # CR-X1 (kolo 8): parser bezi pro KAZDY text PowerShellu - prikaz spusti i `return` / `throw` bez zavorky.
+    # CR-X1 (kolo 8): prikaz spusti i `return` / `throw` bez zavorky.
     # CR-Z1/Z2 (kolo 10): odhad "zavorka, @{ nebo return/throw/exit za oddelovacem" z kola 9 (CR-Y5) minul statement za
-    # zaviraci slozenou zavorkou (`try {} catch {} <prikaz>`, `function f {} <prikaz>`) i za samotnym CR - zrusen.
+    # zaviraci slozenou zavorkou (`try {} catch {} <prikaz>`, `function f {} <prikaz>`) i za samotnym CR.
+    # CR-AA6 (kolo 11): parser se nespousti jen u textu BEZ jakekoli zavorky `( ) { }`, `@`, CR a slov return/throw/exit
+    # (kdekoli, ne jen za oddelovacem) - takovy text nema vyraz ani blok, ve kterem by prikaz stal mimo statement.
     # CR-X8: obalova zavorka se strhava jen jako JEDEN par (`(a) + (b)` ne).
-    if ((Get-ScannerEscape) -eq '`') {
+    if ((Get-ScannerEscape) -eq '`' -and ($pl.Rest.IndexOfAny([char[]]@('(', ')', '{', '}', '@', "`r")) -ge 0 -or
+        $pl.Rest -match '(?i)\b(?:return|throw|exit)\b')) {
         $normCmd = {
             param($s)
             $t = ([string]$s).Trim()
@@ -747,6 +750,25 @@ function Expand-LiteralHead([string]$Head, [string]$Raw) {
     return $out
 }
 
+# Prirazeni a presmerovani pred prikazem (Get-CommandLeaf). CR-Z3 (kolo 10): hodnota prirazeni i cil presmerovani je cele
+# SLOVO shellu - kvotovane casti, escape a nekvotovane znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni).
+# CR-AA1 (kolo 11): slovo tvori i substituce `$( ... )` / `$(( ... ))` (zavorky parovane, kvotovane zavorky se nepocitaji),
+# `${ ... }` a v Bashi zpetne apostrofy. CR-AA8: regex se sestavi jednou pro kazdy escape znak.
+$script:PrefixStripRegexes = @{}
+function Get-PrefixStripRegex {
+    $esc = [string](Get-ScannerEscape)
+    if ($script:PrefixStripRegexes.ContainsKey($esc)) { return $script:PrefixStripRegexes[$esc] }
+    $escRx = [regex]::Escape($esc)
+    $subst = '\$\((?>"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]|[^()"''' + $escRx + ']+|\((?<d>)|\)(?<-d>))*(?(d)(?!))\)|\$\{[^}]*\}'
+    if ($esc -eq '\') { $subst += '|`(?:[^`\\]|\\[\s\S])*`' }
+    $wq = $subst + '|"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]'
+    $wordValue = '(?:' + $wq + '|[^\s"''' + $escRx + '])*'
+    $wordTarget = '(?:' + $wq + '|[^\s"''<>' + $escRx + '])+'
+    $rx = [regex]::new('^\s*(?:[A-Za-z_][A-Za-z0-9_]*=' + $wordValue + '\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*' + $wordTarget + '\s*)+')
+    $script:PrefixStripRegexes[$esc] = $rx
+    return $rx
+}
+
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.
 # Obal s literalem -> rozebrat vnitrek. Obal s promennou -> 'opaque' (= ask).
 function Get-CommandLeaf([string]$Sub, [int]$Depth) {
@@ -811,14 +833,33 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # v cmd) - jinak by exe vyslo `>out` a zadne pravidlo nesedlo. Zbyde-li na zacatku `<` nebo `>`, tvar je nerozebratelny.
     # CR-Z3 (kolo 10): hodnota prirazeni i cil presmerovani je cele SLOVO shellu - kvotovane casti, escape a nekvotovane
     # znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni, ne `X=a"b` a prikaz `c"`).
-    $escRx = [regex]::Escape([string](Get-ScannerEscape))
-    $wq = '"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]'
-    $wordValue = '(?:' + $wq + '|[^\s"''' + $escRx + '])*'
-    $wordTarget = '(?:' + $wq + '|[^\s"''<>' + $escRx + '])+'
-    $stripped = [regex]::Replace($trimmed,
-        ('^\s*(?:[A-Za-z_][A-Za-z0-9_]*=' + $wordValue + '\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*' + $wordTarget + '\s*)+'), '')
+    # CR-AA1/AA2 (kolo 11): i substituce s mezerou uvnitr (`X=$(echo a b)`, `$((1 + 2))`, `${Y:-a b}`, zpetne apostrofy
+    # v Bashi). Zbude-li za prefixem slovo se zavorkou, slozenou zavorkou nebo zpetnym apostrofem z neuzavrene substituce,
+    # tvar je nerozebratelny. Regex je jeden na escape znak (Get-PrefixStripRegex).
+    $stripped = (Get-PrefixStripRegex).Replace($trimmed, '')
     if ($stripped.Trim() -eq '' -and $trimmed -match '^\s*[0-9]*[<>&]') { return $out }
     if ($stripped -match '^\s*[<>]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
+    if ($stripped.Length -lt $trimmed.Length -and $stripped -match '^\s*[^\s]*[)}`]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
+    # CR-AA9 (kolo 11, dira i v 0.3.0): `case` v Bashi. Prikaz vetve stoji za vzorem `<vzor>)` - prvni vetev za
+    # `case <slovo> in`, dalsi za `;;` (vlastni segment). Do 0.3.0 byl prikazem `case` nebo `<vzor>)` a zadne pravidlo
+    # nesedlo (`case x in a) rm -rf src;; esac`, i `esac) <prikaz>` za vzorem `case` v substituci). Slovo zakoncene `)`
+    # a za nim dalsi slovo (ne presmerovani) se proto bere jako vzor a rozebere se prikaz za nim. Konec subshellu
+    # (`(cd x; ls)`, `ls) > out`) tim neni dotceny.
+    # CR-AA10 (kolo 11, dira i v 0.3.0): rezervovana slova Bashe pred prikazem (`if rm ...`, `then rm ...`, `else`, `elif`,
+    # `do`, `while`, `until`, `!`, `coproc`) - do 0.3.0 byl prikazem `then` a `if true; then rm -rf src; fi` prosel.
+    if ((Get-ScannerEscape) -eq '\') {
+        $kw = [regex]::Match($stripped, '^\s*(?:(?:then|do|else|elif|if|while|until|coproc|!)\s+)+(\S[\s\S]*)$')
+        if ($kw.Success) {
+            foreach ($l in (Get-CommandLeaf $kw.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
+            return $out
+        }
+        $caseArm = $stripped
+        if ($caseArm -match '^\s*case\s+(?:"[^"]*"|''[^'']*''|\S)+\s+in\s+(.*)$') { $caseArm = $Matches[1] }
+        if ($caseArm -match '^\s*\(?[^\s()]+\)\s+(?![0-9]*[<>&])(\S[\s\S]*)$') {
+            foreach ($l in (Get-CommandLeaf $Matches[1] ($Depth + 1))) { [void]$out.Add($l) }
+            return $out
+        }
+    }
 
     # PowerShellove PRIRAZENI `$x = <prikaz>` neni volani promenne v pozici prikazu.
     # Bez teto vetve bral Test-Unexpandable `$out` jako promennou v pozici prikazu
@@ -2571,13 +2612,13 @@ foreach ($leaf in $leaves) {
 # CR-W (kolo 7): protokol druheho cteni je v _common.ps1 (Invoke-PlainCommentReading), spolecny se secrets.ps1.
 if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
     # CR-Y2 (kolo 9): druhe cteni narazilo na strop prace - nevime, co by nasel, takze nerozebratelne (depth, deny).
-    # CR-Z5/Z6 (kolo 10): druhe cteni ma VLASTNI rozpocet - sdileny po prvnim cteni bud chybel (druhe cteni nic nenaslo
-    # a mlcelo), nebo neskodny prikaz s komentarem pretekl jen soucetem obou cteni. Narazilo-li na strop uz prvni cteni,
-    # druhe se nespousti a plati deny.
+    # CR-Z5 (kolo 10): narazilo-li na strop uz prvni cteni, druhe by substituce neslepilo a mlcelo - nespousti se a plati
+    # deny (nerozebratelne). Bez `#` plati dal zaloha K7-1 (jen DB literal) - pro druhe cteni neni zaloha za co.
+    # CR-AA4 (kolo 11): rozpocet se mezi ctenimi NEnuluje (strop prace jednoho behu hooku drzi timeout 10 s). Druhe cteni
+    # spany substituci uz rozdelene prvnim ctenim nepocita znovu (zmereno: 12 jednotek u 400 vnorenych zavorek).
     $overflowBefore = $script:SubstOverflow
     $pr = $null
     if (-not $overflowBefore) {
-        $script:SubstWork = 0
         $pr = Invoke-PlainCommentReading {
             Set-ScannerEscape $toolName
             $plainLeaves = @(Get-CommandLineLeaves $command 0)

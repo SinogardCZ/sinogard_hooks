@@ -424,7 +424,10 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
 7. **Timeout hooku propouští.** Když handler nestihne `timeout` z `hooks/hooks.json`,
    Claude Code ho na `PreToolUse` **neblokuje** — příkaz projde. Timeouty jsou proto
    nastavené vysoko nad naměřený studený start a hook nedělá nic, co by mohlo čekat
-   na síť nebo na člověka.
+   na síť nebo na člověka. Doba ale roste s délkou příkazu: skript PowerShellu o 150
+   řádcích s bloky `{ }` trvá gate ~6,2 s (0.3.0 ~5,5 s), bez bloků ~3,6 s (0.3.0 ~2,5 s;
+   změřeno 2026-10-22, TASK-179). Výrazně delší skript v jednom volání může timeout 10 s
+   překročit a projít bez verdiktu.
 8. **Proměnná v pozici příkazu končí auditem, i když jde o výraz.** `[Math]::Truncate($x)`
    se nerozebere. Do 0.1.9 z toho byl `ask`; od 0.1.10 je to příčina `variable`, tedy
    audit. Přiřazení `$x = <příkaz>` je výjimka: rozebere se jeho pravá strana, takže

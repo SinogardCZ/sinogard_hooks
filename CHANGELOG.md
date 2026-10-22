@@ -213,6 +213,27 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   - Pravidlo „token je přiřazení“ je jedna funkce (`Get-AssignmentName`) pro obaly i pro DB `allow`.
   - Věta o `texts.bypassSuffix` je zpět u konfigurace.
 
+**Jedenácté kolo `/code-review` nad CR-Z (CR-AA, skupina `CR-AA`):**
+- **Substituce v přiřazení a přesměrování před příkazem (AA1–AA3, díra i v 0.3.0).** Oprava Z3 znala jen uvozovky
+  a escape. Substituce s mezerou uvnitř (`X=$(echo a b) <příkaz>`, `$((1 + 2))`, `${Y:-a b}`, zpětné apostrofy
+  v Bashi) proto dál skrývala příkaz všem pravidlům, i za obalem (`env X=$(echo a b) <příkaz>`). Slovo shellu teď tvoří
+  i substituce, jak v přiřazení před příkazem, tak v tokenech (`Split-Arguments`). Zbyde-li za přiřazením nebo
+  přesměrováním slovo se závorkou z neuzavřené substituce, tvar je nerozebíratelný (`deny`). Věta „pro všechna
+  pravidla“ u Z3 platila jen pro uvozovky.
+- **Rozpočet druhého čtení (AA4, AA5).** Vlastní rozpočet z Z5/Z6 je pryč, strop práce zase platí pro celý běh hooku
+  (drží timeout). Druhé čtení už rozdělené substituce nepočítá znovu (změřeno: 12 jednotek u 400 vnořených závorek),
+  takže součet obou čtení falešné `deny` nedává. Přetečení v prvním čtení u příkazu s `#` zůstává `deny`; bez `#`
+  platí dál záloha K7-1 (jen DB literál) — u příkazu bez komentáře není druhé čtení, které by chybělo.
+- **Parser PowerShellu (AA6, AA8).** Nespouští se jen u textu bez jakékoli závorky `( ) { }`, bez `@`, bez CR a bez
+  slov `return`/`throw`/`exit` (kdekoli v textu). Regex přiřazení před příkazem se sestaví jednou pro každý escape znak.
+- **Řídicí konstrukce Bashe (AA9, AA10, díry i v 0.3.0 — nalezeno při ověřování AA1).** Příkaz za rezervovaným slovem
+  (`then`, `else`, `elif`, `do`, `if`, `while`, `until`, `!`, `coproc`) i za vzorem větve `case` (`a) <příkaz>`) neviděla
+  žádná pravidla: `if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`
+  a `X=$(case x in a) echo;; esac) <příkaz>` prošly. Brána slova strhne a rozebere příkaz za nimi. Konec subshellu
+  (`(cd x; ls) > out`) zůstává beze změny. Secrets čte tokeny bez ohledu na pozici a díru neměl.
+- **Známá mez (AA7, beze změny).** Gramatika slova shellu je dál na dvou místech (regex v `Get-CommandLeaf`
+  a `Split-Arguments`); sjednocení do jednoho tokenizéru přechází na 0.3.2.
+
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)
 
 README omezení 11 tvrdilo, že destrukce databáze v kontejneru je krytá. Platilo to jen pro tělo heredocu a rouru do

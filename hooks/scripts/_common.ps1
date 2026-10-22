@@ -411,8 +411,8 @@ $script:BlockCommentSplit = $false
 # CR-W2/W3/W8 + CR-X + CR-Y (TASK-179, kola 7 az 9): druhe cteni prikazu BEZ komentare - jeden protokol pro gate.ps1
 # i secrets.ps1. Spousti se, kdyz prikaz obsahuje `#`, nebo kdyz prvni cteni dekodovalo `-EncodedCommand` s `#` v tele
 # (ConvertFrom-EncodedCommandText) ci rozebralo jiny text s `#` (Register-ParsedText) - oboje $script:DecodedHasHash.
-# CR-Z5/Z6 (kolo 10): gate.ps1 dava druhemu cteni VLASTNI rozpocet prace na substituce (prvni cteni ho nevycerpa);
-# narazi-li druhe cteni na strop, nebo uz prvni cteni na nej narazilo, rozhodne `deny` (nerozebratelne).
+# Rozpocet prace na substituce se NEnuluje (strop jednoho behu hooku drzi timeout 10 s); narazi-li na nej druhe cteni,
+# nebo uz prvni cteni (CR-Z5, kolo 10), gate.ps1 rozhodne `deny` (nerozebratelne).
 # Z druheho cteni plati jen `deny`, audit je ztlumeny.
 $script:DecodedHasHash = $false
 function Test-NeedsPlainReading([string]$Command) {
@@ -932,6 +932,24 @@ function Split-Arguments([string]$Command) {
                 continue
             }
             [void]$buffer.Append($c); [void]$buffer.Append($Command[$i + 1]); $any = $true; $i += 2; continue
+        }
+        # CR-AA1 (TASK-179, kolo 11): substituce `$( ... )` / `$(( ... ))`, `${ ... }` a v Bashi zpetne apostrofy jsou cast
+        # JEDNOHO slova i s mezerami uvnitr - `env X=$(echo a b) rm -rf src` nesmi dat prikaz `a`. Obsah se opisuje beze zmeny
+        # (substituce rozebira Get-Substitution zvlast).
+        if ($c -eq '$' -and ($i + 1) -lt $n -and $Command[$i + 1] -eq '(') {
+            $e = Find-CloseParen $Command ($i + 2)
+            [void]$buffer.Append($Command.Substring($i, $e - $i)); $any = $true; $i = $e; continue
+        }
+        if ($c -eq '$' -and ($i + 1) -lt $n -and $Command[$i + 1] -eq '{') {
+            $e = $Command.IndexOf('}', $i + 2)
+            $e = if ($e -lt 0) { $n } else { $e + 1 }
+            [void]$buffer.Append($Command.Substring($i, $e - $i)); $any = $true; $i = $e; continue
+        }
+        if ($c -eq '`' -and $esc -eq '\') {
+            $e = $i + 1
+            while ($e -lt $n -and $Command[$e] -ne '`') { if ($Command[$e] -eq '\') { $e++ }; $e++ }
+            $e = [Math]::Min($n, $e + 1)
+            [void]$buffer.Append($Command.Substring($i, $e - $i)); $any = $true; $i = $e; continue
         }
         if ($inDouble) {
             if ($c -eq '"') { $inDouble = $false } else { [void]$buffer.Append($c); $any = $true }
