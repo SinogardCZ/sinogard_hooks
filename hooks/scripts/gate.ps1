@@ -833,6 +833,12 @@ function Get-BashCommandStart([string]$Text) {
         if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
         # Komentar: segment konci koncem radku (Split-CommandLine deli i na nem), takze za `#` uz zadny prikaz nestoji.
         if ($Text[$pos] -eq [char]'#') { return @{ Start = $pos; Bad = $false } }
+        # CR-AF1 (kolo 16, vyjimka O11 pro subshell): Split-CommandLine deli i uvnitr `( ... )`, takze prvni prikaz subshellu
+        # prijde jako segment `(rm -rf src` bez `)` - zavorkovy obal ho nerozbali. `(` bez `)` v segmentu se preskoci jako
+        # rezervovane slovo a prikaz za ni se cte jako kazdy jiny (konec subshellu odlomi CR-AE4).
+        if ($Text[$pos] -eq [char]'(' -and ($pos + 1) -lt $n -and $Text[$pos + 1] -ne [char]'(' -and $Text.IndexOf(')', $pos) -lt 0) {
+            $pos++; $first = $false; continue
+        }
         $m = $r.Keyword.Match($Text, $pos)
         if (-not $m.Success) { $m = $r.FuncDef.Match($Text, $pos) }
         if ($m.Success) { $pos += $m.Length; $first = $false; continue }
@@ -867,6 +873,11 @@ function Get-BashCommandStart([string]$Text) {
                 # jako hlava (`)` odlomi Get-CommandLeaf, `(sh)` rozbali zavorkovy obal). Glob se tu nehlida: vzor `*)` je
                 # bezny a jedno slovo bez argumentu zadne pravidlo neporusi.
                 if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
+                # CR-AF3 (kolo 16): za `)` jen presmerovani (`psql) < drop.sql`) = konec subshellu jednim slovem; jako vetev
+                # `case` by se prikaz zahodil. Slovo je hlava, `)` odlomi Get-CommandLeaf. Presmerovani + prikaz = vetev (CR-AC6).
+                $armTail = $Text.Substring($pos + $m.Length)
+                $tz = Get-BashCommandStart $armTail
+                if (-not $tz.Bad -and $tz.Start -ge $armTail.Length) { return @{ Start = $pos; Bad = $false } }
                 $pos += $m.Length; $prefix = $true; $first = $false; continue
             }
             # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
@@ -952,17 +963,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # jako `& $x`, jen v aktualnim scope. Resi se tady vedle `&`, ne jako `exe`: kdyby
     # se cekalo az na Split-Arguments, byl by argv[0] jen tecka a priznak by se ztratil.
     # Bila znaka za teckou je podminka - `./script.sh` ani `cd ..` dot-source nejsou.
-    elseif ($trimmed -match '^\.\s') {
+    # CR-AE6 (kolo 15): `source` je v Bashi synonymum tecky (jen malymi pismeny - CR-AF7, kolo 16; jedna vetev - CR-AF9).
+    elseif ($trimmed -cmatch '^\.\s' -or ((Get-ScannerEscape) -eq '\' -and $trimmed -cmatch '^source\s')) {
         $invoked = $true
         $trimmedHadDot = $true
-        $trimmed = $trimmed.Substring(1).Trim()
-        if ($trimmed -eq '') { return $out }
-    }
-    # CR-AE6 (kolo 15): `source` je v Bashi synonymum tecky.
-    elseif ((Get-ScannerEscape) -eq '\' -and $trimmed -match '^source\s') {
-        $invoked = $true
-        $trimmedHadDot = $true
-        $trimmed = $trimmed.Substring(6).Trim()
+        $trimmed = $trimmed.Substring($(if ($trimmed[0] -eq [char]'.') { 1 } else { 6 })).Trim()
         if ($trimmed -eq '') { return $out }
     }
 
@@ -1011,11 +1016,15 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # (nebo hlava za prefixem) = nerozebiratelne = deny `opaque:shellWord`.
     if ((Get-ScannerEscape) -eq '\') {
         $zone = Get-BashCommandStart $trimmed
+        # CR-AF4 (kolo 16, regrese O11): za teckou / `source` je slovo CESTA spousteneho souboru, ne hlava prikazu - cesta
+        # s promennou (`source $VIRTUAL_ENV/bin/activate`) je spusteni obsahu, ktery hook nevidi = `invoked` (audit) jako do
+        # 0.3.0, ne `shellWord`.
+        if ($zone.Bad -and $trimmedHadDot -and $zone.Start -eq 0) { [void]$out.Add((New-OpaqueLeaf $raw 'invoked')); return $out }
         if ($zone.Bad) { [void]$out.Add((New-OpaqueLeaf $trimmed 'shellWord')); return $out }
         $stripped = $trimmed.Substring($zone.Start)
         # CR-AD5 (kolo 14): tecka (dot-source = spusteni) za rezervovanym slovem nebo vzorem (`then . $x`) - do kola 13 se
         # slova strhavala rekurzi, ktera `. ` poznala nahore. Rekurze tu zustava jen pro tenhle tvar.
-        if ($zone.Start -gt 0 -and $stripped -match '^(?:\.|source)\s') {
+        if ($zone.Start -gt 0 -and $stripped -cmatch '^(?:\.|source)\s') {
             foreach ($l in (Get-CommandLeaf $stripped ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
@@ -1118,16 +1127,17 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         # ktery ma vic `)` nez `(` a na `)` konci, se o prebytecne `)` zkrati (`$(date))` -> `$(date)`, `src)` -> `src`).
         for ($k = 0; $k -lt $argv.Count; $k++) {
             $t = [string]$argv[$k]
-            if ($t.Length -lt 2 -or -not $t.EndsWith(')')) { continue }
-            $extra = ([regex]::Matches($t, '\)')).Count - ([regex]::Matches($t, '\(')).Count
-            while ($extra -gt 0 -and $t.Length -gt 1 -and $t.EndsWith(')')) { $t = $t.Substring(0, $t.Length - 1); $extra-- }
+            # CR-AF6 (kolo 16): escapovana zavorka (`find \( ... \)`) se nepocita ani neodlamuje.
+            if ($t.Length -lt 2 -or -not $t.EndsWith(')') -or $t.EndsWith('\)')) { continue }
+            $extra = ([regex]::Matches($t, '(?<!\\)\)')).Count - ([regex]::Matches($t, '(?<!\\)\(')).Count
+            while ($extra -gt 0 -and $t.Length -gt 1 -and $t.EndsWith(')') -and -not $t.EndsWith('\)')) { $t = $t.Substring(0, $t.Length - 1); $extra-- }
             $argv[$k] = $t
         }
     }
 
     # CR-AE1/AE3 (kolo 15): pozicni a specialni parametr v hlave (`$1`, `"$@"`) je hola promenna stejne jako `$X` (A179-O11)
     # - Test-Unexpandable zna jen jmena, takze bez tohohle byla hlava `$1` obycejny list bez pravidla a bez auditu.
-    if ((Test-Unexpandable $argv[0]) -or ((Get-ScannerEscape) -eq '\' -and [string]$argv[0] -match '^\$[0-9@*#?$!-]')) {
+    if ((Test-Unexpandable $argv[0]) -or ((Get-ScannerEscape) -eq '\' -and [string]$argv[0] -match ('^' + $script:BashVarRef))) {
         # `& $cmd` obsah promenne SPUSTI, `$out` nebo `"EXIT=$code"` ne. Priznak `$invoked`
         # se proto musi DONEST az sem - jinak by obe veci mely tutez politiku.
         # TASK-106 bod 15: uvnitr obalu, ktery text spousti (Get-InvokedLeaves), je promenna

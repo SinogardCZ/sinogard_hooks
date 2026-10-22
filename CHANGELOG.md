@@ -84,6 +84,19 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   - test výpisu kontroluje úplnost klíčů změny (AE9).
 
   Skupina `CR-AE`.
+- **Kolo 16 `/code-review` (CR-AF) — od něj platí `A179-O13`:** v 0.3.1 se opravují jen regrese 0.3.1 a nálezy
+  v pravidle. Díry 0.3.0 mimo něj jdou do README meze 27 a do verze 0.3.2.
+  - Opraveno:
+    - výjimka O11 pro `(` platila i pro první příkaz subshellu, který skener oddělí bez `)` (`(rm -rf src; ls)`). Teď se
+      `(` bez `)` v segmentu přeskočí a příkaz se čte (AF1);
+    - poslední slovo subshellu s přesměrováním (`psql) < drop.sql`) se četlo jako větev `case` a příkaz zmizel (AF3);
+    - cesta s proměnnou za tečkou nebo `source` je zase `invoked` (audit), ne `deny` (AF4, regrese AE6);
+    - escapovaná `\)` se neodlamuje (AF6);
+    - `source` jen malými písmeny (AF7), jeden vzor proměnné (AF8), jedna větev tečky a `source` (AF9).
+  - **Odloženo (`A179-O13`):** `)` slepená s přesměrováním bez mezery (AF2, díra 0.3.0) a hloubka `( )` ve skeneru (AF5)
+    → 0.3.2, README mez 27.
+
+  Skupina `CR-AF`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).

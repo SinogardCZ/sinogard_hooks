@@ -774,6 +774,11 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       a zpětných apostrofů v uvozovkách ani vnořené `${ … }`. Špatně určená hranice slova posune argumenty, takže pravidlo
       nad argumenty může minout cíl (nálezy `/code-review` kol 12–13 CR-AB2 a CR-AC4–AC5 mimo prefix). Změřeno
       2026-10-22: ze 32 sond recenzentů kol 12–13 projdou tichem 4, všechny s `${ … }` v argumentu.
+    - **Subshell dělí skener na segmenty** (`Split-CommandLine` nepočítá hloubku holé `(`). První a poslední příkaz
+      subshellu proto nesou `(` a `)` a 0.3.1 je odlamuje heuristikou (`A179-O13`, nálezy `/code-review` kola 16). Nezavřené
+      zůstává: `)` slepená s přesměrováním bez mezery na konci posledního příkazu (`… --hard)>/dev/null`, CR-AF2) — pravidla
+      nad tokenem `--hard)>/dev/null` ho minou. Díra existovala už v 0.3.0. Oprava = hloubka `( )` ve skeneru (CR-AF5)
+      v 0.3.2.
     - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.3.2. Kola `/code-review`
       10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
 
