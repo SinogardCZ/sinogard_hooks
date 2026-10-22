@@ -1800,6 +1800,7 @@ function Test-GitPushRule($Leaf, $Config) {
     $plusForce = $false
     $deletesRef = $false
     $wildcardTarget = $false
+    $unknownTarget = $false
     foreach ($r in $refspecs) {
         $spec = $r
         if ($spec.StartsWith('+')) { $plusForce = $true; $spec = $spec.Substring(1) }
@@ -1812,6 +1813,10 @@ function Test-GitPushRule($Leaf, $Config) {
         $target = $target -replace '^refs/heads/', ''
         # Nalez Metis 15: `+refs/heads/*:refs/heads/*` cil `*` chranenou vetev OBSAHUJE.
         if ($target -match '[\*\?]') { $wildcardTarget = $true }
+        # A179-O15 (Amber 2026-10-22): cil, ktery neni doslovne jmeno vetve (promenna, substituce, `HEAD`, `@`), muze byt
+        # chranena vetev - porovnani s `protectedBranches` o nem nic nerekne. `$env:BR` / `${env:BR}` nese dvojtecku promenne,
+        # ne refspecu (cil by vysel `BR`) - takovy refspec je necitelny cely (Bash `$SRC:vetev` tim plati cenu deny).
+        if ($target -eq '' -or $target -match '[$`%]' -or $target -eq 'HEAD' -or $target -eq '@' -or $spec -match '\$\{?\w+:') { $unknownTarget = $true }
         foreach ($p in $protected) {
             if ($target.ToLowerInvariant() -eq ([string]$p).ToLowerInvariant()) { $hitsProtected = $true }
         }
@@ -1826,6 +1831,11 @@ function Test-GitPushRule($Leaf, $Config) {
 
     if ($plusForce -and $hitsProtected) {
         return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
+    }
+    # A179-O15: force push (prepinac i `+` v refspecu) s necitelnym cilem = `forcePushUnknown` jako force push bez cile.
+    # Do 0.3.0 `ask`, v 0.3.1 do O15 `forcePushOther` (ticho); `+` bez prepinace nehlidala ani 0.3.0.
+    if (($force -or $plusForce) -and $unknownTarget) {
+        return (New-PolicyVerdict (Get-Field $Config 'gate') 'forcePushUnknown' ([string](Get-Field $shapes 'forcePushUnknown' 'force push')))
     }
     if (-not $force) { return $null }
     if ($hitsProtected) {

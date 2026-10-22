@@ -93,7 +93,8 @@ $msgRej = Get-CanaryWithOverride 'rej' '{"gate":{"denyPatterns":[],"localDbHosts
 $expRej = $msg + $rejText.Replace('{count}', '2').Replace('{keys}', 'gate.denyPatterns, gate.localDbHosts')
 Assert-Equal $expRej $msgRej '[H-c] kanarek jmenuje oba odmitnute klice'
 Assert-True (-not $msgRej.Contains('db.firma.cz')) '[H-c] kanarek NEnese hodnotu klice'
-$msgOk = Get-CanaryWithOverride 'ok' '{"gate":{"opaque":{"invoked":"audit","variable":"audit","interpreter":"audit","heredocUnterminated":"audit","depth":"audit"}}}'
+# A179-O1 (0.3.1): `depth` ma vychozi `deny`, prepis `audit` by ho uvolnil (odmitnuto) - zprisnujici prepis nese `deny`.
+$msgOk = Get-CanaryWithOverride 'ok' '{"gate":{"opaque":{"invoked":"audit","variable":"audit","interpreter":"audit","heredocUnterminated":"audit","depth":"deny"}}}'
 Assert-Equal $msg $msgOk '[H-c] dnesni prepis GSD kanarek nemeni (zadny odmitnuty klic)'
 
 # ------------------------------------------------------ resume s hodnotami ---

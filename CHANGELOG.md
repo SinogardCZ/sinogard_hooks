@@ -59,7 +59,9 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   - substituce nebo uvozovka uprostřed v hodnotě přiřazení (`X=$(echo a b) git status`, `X=a"b c" git status`);
   - **samostatné přiřazení se substitucí** bez příkazu za ním (`n=$(basename "$f" .md)`; `A179-O10`). Hook bez gramatiky
     nepozná, že za hodnotou nic nestojí. Náhrada je substituce v argumentu příkazu;
-  - substituce nebo cesta s proměnnou jako hlava bez prefixu (`$(which python) x.py`, `"$(pwd)/bin/x"`; `A179-O11`).
+  - substituce nebo cesta s proměnnou jako hlava bez prefixu (`$(which python) x.py`, `"$(pwd)/bin/x"`; `A179-O11`),
+    i uvnitř obalu: `bash -c "$(cat cmd.txt)"` bylo do 0.3.0 `invoked` (ticho + audit), od 0.3.1 je `deny`. Holá
+    proměnná (`bash -c "$x"`) zůstává `invoked`.
 - **Zavřené tvary:**
   - nálezy CR-AB1–AB5 a CR-AC6–AC8 (větev `case` začínající přesměrováním, vzor s escapem nebo substitucí, přiřazení
     pole `NAME=(…)`);
@@ -135,6 +137,21 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
     z kola 19, ne tento návrat. Od celého subshellu s globem v hlavě ji nejde rozeznat (AJ4, vědomě fail-closed).
 
   Skupina `CR-AJ`.
+- **Finále (mutanti a plné sady nad `dc0b1de`):**
+  - fixtura CR-AI1 slibovala u `(psql) < drop.sql` řádek auditu `sqlFromFile`. Přesměrování celého subshellu se ale
+    do vnitřního příkazu nepřenáší, stejně jako v 0.3.0. Rozhodnutí je stejné (ticho), chybí jen řádek auditu → README
+    mez 27, 0.3.2. Fixtura už řádek auditu nečeká. Kontrolní běh bez mutace (M0) ji ukázal červeně;
+  - test B15 `bash -c "$(cat cmd.txt)"` čekal audit. Od `A179-O11` je to `deny` (cena výše), test i invariant jsou
+    přijaté s citací `A179-O11`;
+  - test kanárku H-c (`resume-cost`) bral jako zpřísňující přepis `depth: audit`. Od `A179-O1` má `depth` výchozí
+    `deny`, takže to je uvolnění a přepis se správně odmítne. Test teď nese `depth: deny`;
+  - rozlišující fixtury pro dva mutanty, které pravidlo přestalo zabíjet jinou cestou: escape PowerShellu ve jménu
+    přiřazení za `env` a `$( … )` s mezerou jako hodnota volby `git -C` (skupina `MUT`);
+  - **`A179-O15` (Amber 2026-10-22, regrese 0.3.1):** force push s cílem, který není doslovné jméno větve (proměnná,
+    substituce, `HEAD`, `@`, i `+` v refspecu), mapování Q102 zařadilo jako `forcePushOther` — ticho, i když cíl může
+    být chráněná větev. Teď je to `forcePushUnknown` (`deny`) jako force push bez cíle. **Cena:** `deny` i u force push
+    na vlastní feature větev přes proměnnou nebo `HEAD` (`git push --force-with-lease origin HEAD`) — náhrada je
+    doslovné jméno větve. Skupina `O15`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).
@@ -150,6 +167,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 |---|---|---|---|
 | force push na nechráněnou větev (`forcePushOther`) | `ask` | ticho + audit | Q2 (zakázaný je jen přepis historie `main`) |
 | force push bez cíle (`forcePushUnknown`) | `ask` | `deny` | Q1 (může mířit na `main`) |
+| force push s cílem, který není doslovné jméno větve — proměnná, substituce, `HEAD`, `@` (`forcePushUnknown`; i `+` v refspecu bez přepínače) | `ask` (`+` bez přepínače: ticho) | `deny` | `A179-O15` (může mířit na `main`; do O15 omylem `forcePushOther` = ticho) |
 | `git -c alias.…` (`gitAlias`) | `ask` | `deny` | Q3 (alias spustí cokoli) |
 | `git branch -d` (git sám odmítne nesloučenou větev) | `deny` | **ticho** | Q11, mění `ZOPT-Q40` |
 | `git branch -D`, `-d -f`, `--delete --force` | `deny` | `deny` (vzor `git-branch-delete-force`) | Q11 |

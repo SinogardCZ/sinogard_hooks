@@ -1195,7 +1195,8 @@ $d1Cases = @(
     (Case 'B15 kontrola pwsh -c $x'                'pwsh -c "$x"' 'audit' 'PowerShell')
     (Case 'B15 kontrola pwsh -Command $cmd -Force' 'pwsh -Command "$cmd -Force"' 'audit' 'PowerShell')
     (Case 'B15 kontrola promenna v DRUHEM statementu' 'bash -c "echo hi; $cmd"' 'audit')
-    (Case 'B15 kontrola substituce v hlave'        'bash -c "$(cat cmd.txt)"' 'audit')
+    #    A179-O11 (0.3.1): substituce jako hlava vnitrniho prikazu neni hola promenna -> deny `opaque:shellWord` (cena O11).
+    (Case 'B15 kontrola substituce v hlave'        'bash -c "$(cat cmd.txt)"' 'deny')
     (Case 'B15 kontrola cmd /c %X%'                'cmd /c %X%' 'audit')
     (Case 'B15 kontrola eval $cmd'                 'eval $cmd' 'audit')
     (Case 'B15 kontrola iex $cmd'                  'iex $cmd' 'audit' 'PowerShell')

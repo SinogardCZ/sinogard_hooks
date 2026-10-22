@@ -766,7 +766,8 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     hook vrátí `deny` (`opaque:shellWord`) a hláška jmenuje náhradu: hlavu jako doslovnou cestu, hodnotu jako prosté
     slovo, substituci v argumentu příkazu, nebo výsledek spočítaný samostatným příkazem.
     - **Cena:** `deny` i u běžných tvarů:
-      - proměnná nebo substituce v hlavě (`NODE_ENV=test ${HOME}/bin/tool`, `$(which python) x.py`, `"$(pwd)/bin/x"`);
+      - proměnná nebo substituce v hlavě (`NODE_ENV=test ${HOME}/bin/tool`, `$(which python) x.py`, `"$(pwd)/bin/x"`),
+        i uvnitř obalu (`bash -c "$(cat cmd.txt)"`);
       - substituce nebo uvozovka uprostřed v hodnotě přiřazení (`X=$(echo a b) git status`, `X=a"b c" git status`);
       - samostatné přiřazení se substitucí (`n=$(basename "$f" .md)`, `A179-O10`).
     - **Co pravidlo nezavírá:** slova v **argumentech** příkazu čte vlastní smyčka `Split-Arguments`. Ta zná uvozovky,
@@ -782,6 +783,9 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       skeneru (CR-AF5) ve verzi 0.3.2, s vysokou prioritou. Do té doby piš příkazy bez subshellu (`cd x && git status`).
       Starou cestou 0.3.0 jde i celý subshell, jehož konec `Find-CloseParen` nenajde: ANSI-C `$'…'` uvnitř, vnořený
       subshell `((…) )` podobný aritmetice, uvozovky vnořené v `$( … )` (CR-AJ5, CR-AK1, CR-AK2).
+    - **Přesměrování celého subshellu se do vnitřního příkazu nepřenáší** (jako v 0.3.0): `(psql) < drop.sql` rozebere
+      `psql` bez `< drop.sql`, takže projde tichem bez řádku auditu `sqlFromFile`. Rozhodnutí je stejné jako u
+      `psql < drop.sql` (ticho), chybí jen řádek auditu. Oprava s tokenizérem ve verzi 0.3.2.
     - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.3.2. Kola `/code-review`
       10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
 
