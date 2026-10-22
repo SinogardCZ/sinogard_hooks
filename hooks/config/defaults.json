@@ -165,7 +165,7 @@
       "_shortAbsolutePathComment": "TASK-106 bod 4 (nález Amber I6, 0.2.0): `rm -rf /srv` končilo ask s hláškou o rouře. Skutečná příčina: `/xxx` do tří znaků je od přepínače cmd (`/s`, `/q`) k nerozeznání, cíl není vidět. Rozhodnutí se nemění, věta ano.",
       "shortAbsolutePath": "rekurzivní mazání s krátkou absolutní cestou ({target}) — do tří znaků je od přepínače cmd (/s, /q) k nerozeznání, cíl není vidět",
       "opaque": "příkaz, který nejde rozebrat ({text})",
-      "opaqueShellWord": "před příkazem nebo v hlavě příkazu za přiřazením / přesměrováním stojí slovo, které hook neumí přečíst ($, zpětný apostrof, závorka, uvozovka uprostřed) ({text}) — napiš hlavu jako doslovnou cestu a hodnotu jako prosté slovo; potřebuješ-li výsledek substituce, spočítej ho samostatným příkazem a sem dej doslovnou hodnotu",
+      "opaqueShellWord": "před příkazem nebo v hlavě příkazu za přiřazením / přesměrováním stojí slovo, které hook neumí přečíst ($, zpětný apostrof, závorka, uvozovka uprostřed) ({text}) — napiš hlavu jako doslovnou cestu a hodnotu jako prosté slovo; substituci dej do argumentu příkazu (ne do přiřazení), nebo ji spočítej samostatným příkazem a sem dej doslovnou hodnotu",
       "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})",
       "interpreterDestructiveDb": "kód interpretu ruší databázi, jejíž jméno nejde přečíst ({token})",
       "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})",

@@ -421,7 +421,8 @@
     { "group": "CR-W", "name": "CR-W1/X2 env PGPASSWORD=x psql -> deny (obal: CR-X2)", "tool": "Bash", "cmd": "env PGPASSWORD=x psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "deny" },
     { "group": "CR-W", "name": "CR-W1/X2 bash -c s jedinym psql -> deny (obal: CR-X2)", "tool": "Bash", "cmd": "bash -c \"psql -d gsd_test_1 -c 'DROP TABLE t'\"", "expect": "deny" },
     { "group": "CR-W", "name": "CR-W1 (psql ...) v PowerShellu -> ticho", "tool": "PowerShell", "cmd": "(psql -d gsd_test_1 -c \"DROP TABLE t\")", "expect": "allow" },
-    { "group": "CR-Y", "name": "CR-Y6 prirazeni s uvozovkou uprostred hodnoty pred psql -> ticho", "tool": "Bash", "cmd": "PGPASSWORD=a\"b c\" psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "allow" },
+    { "group": "CR-Y", "name": "CR-Y6 / A179-O9 cena: prirazeni s uvozovkou uprostred hodnoty pred psql -> deny s nahradou", "tool": "Bash", "cmd": "PGPASSWORD=a\"b c\" psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "deny", "reasonContains": "prosté slovo" },
+    { "group": "CR-Y", "name": "CR-Y6 / A179-O9 kontrola: prirazeni s hodnotou celou v uvozovkach pred psql -> ticho", "tool": "Bash", "cmd": "PGPASSWORD=\"ab c\" psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "allow" },
     { "group": "CR-Y", "name": "CR-Y5 prikaz v hodnote hashtable -> deny", "tool": "PowerShell", "cmd": "@{a = git reset --hard}", "expect": "deny" },
     { "group": "CR-X", "name": "CR-X1 return prikaz bez zavorky -> deny", "tool": "PowerShell", "cmd": "return git reset --hard", "expect": "deny" },
     { "group": "CR-X", "name": "CR-X1 throw prikaz -> deny", "tool": "PowerShell", "cmd": "throw git reset --hard", "expect": "deny" },
@@ -459,7 +460,7 @@
     { "group": "CR-Z", "name": "CR-Z3 prirazeni s uvozovkou uprostred hodnoty pred dropdb produkcni -> deny", "tool": "Bash", "cmd": "X=a\"b c\" dropdb prod_db", "expect": "deny" },
     { "group": "CR-Z", "name": "CR-Z4 PGPASSWORD s uvozovkou uprostred hodnoty, psql na vzdaleny hostitel -> deny", "tool": "Bash", "cmd": "PGPASSWORD=a\"b c\" psql -h db.prod.firma.cz -d app -c \"DROP TABLE users\"", "expect": "deny" },
     { "group": "CR-Z", "name": "CR-Z3 cil presmerovani s uvozovkou uprostred pred rm -rf -> deny", "tool": "Bash", "cmd": ">a\"b c\" rm -rf src", "expect": "deny" },
-    { "group": "CR-Z", "name": "CR-Z3 kontrola: prirazeni s uvozovkou uprostred hodnoty pred git status -> ticho", "tool": "Bash", "cmd": "X=a\"b c\" git status", "expect": "allow" },
+    { "group": "CR-Z", "name": "CR-Z3 / A179-O9 cena: prirazeni s uvozovkou uprostred hodnoty pred git status -> deny s nahradou", "tool": "Bash", "cmd": "X=a\"b c\" git status", "expect": "deny", "reasonContains": "prosté slovo" },
     { "group": "CR-Z", "name": "CR-Z5 strop prace v prvnim cteni a komentar -> deny (nerozebratelne) do 5 s", "tool": "PowerShell", "cmd": "Write-Output '{REP}1{REP2}'; docker exec (docker ps -q) ls # c", "repText": "(", "repCount": 3000, "repText2": ")", "repCount2": 3000, "expect": "deny", "maxMs": 5000 },
     { "group": "CR-Z", "name": "CR-Z5/Z6 kontrola: 400 vnorenych zavorek pod stropem a komentar -> ticho", "tool": "PowerShell", "cmd": "Write-Output '{REP}1{REP2}'; docker exec (docker ps -q) ls # c", "repText": "(", "repCount": 400, "repText2": ")", "repCount2": 400, "expect": "allow", "maxMs": 5000 },
     { "group": "CR-AA", "name": "CR-AA1 substituce s mezerou v hodnote prirazeni pred rm -rf -> deny", "tool": "Bash", "cmd": "X=$(echo a b) rm -rf src", "expect": "deny" },
@@ -527,6 +528,9 @@
     { "group": "O9", "name": "A179-O9 kontrola: prirazeni za env s prostou hodnotou -> ticho", "tool": "Bash", "cmd": "env NODE_ENV=test npm test", "expect": "allow" },
     { "group": "O9", "name": "A179-O9 vetev case se vzorem a|b -> deny", "tool": "Bash", "cmd": "case x in a|b) rm -rf src;; esac", "expect": "deny" },
     { "group": "O9", "name": "A179-O9 vetev case s alternativou ze substituce za | -> deny", "tool": "Bash", "cmd": "case x in a|$(x)) dropdb gsd_test_1;; esac", "expect": "deny", "reasonContains": "neumí přečíst" },
-    { "group": "O9", "name": "A179-O9 kontrola: viceradkovy subshell s presmerovanim -> ticho", "tool": "Bash", "cmd": "(\n  cd x\n  ls\n) > log.txt", "expect": "allow" }
+    { "group": "O9", "name": "A179-O9 kontrola: viceradkovy subshell s presmerovanim -> ticho", "tool": "Bash", "cmd": "(\n  cd x\n  ls\n) > log.txt", "expect": "allow" },
+    { "group": "O9", "name": "A179-O10 cena: samostatne prirazeni se substituci -> deny s nahradou", "tool": "Bash", "cmd": "n=$(basename \"$f\" .md)", "expect": "deny", "reasonContains": "do argumentu příkazu" },
+    { "group": "O9", "name": "A179-O10 kontrola: tataz substituce v argumentu prikazu -> ticho", "tool": "Bash", "cmd": "grep -n x \"docs/$(basename \"$f\" .md).md\"", "expect": "allow" },
+    { "group": "O9", "name": "A179-O10 kontrola: samostatne prirazeni s prostou hodnotou -> ticho", "tool": "Bash", "cmd": "n=TASK-1", "expect": "allow" }
   ]
 }

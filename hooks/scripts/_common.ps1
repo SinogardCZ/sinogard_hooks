@@ -732,7 +732,9 @@ function Find-CloseParen([string]$Text, [int]$Start) {
         if ($c -eq '"') { $inDouble = -not $inDouble; $j++; continue }
         if ($inDouble) { $j++; continue }
         # CR-T (kolo 4): zavorka ani uvozovka v komentari se nepocita (`$( # it's)` + novy radek + `rm -rf x )`).
-        $cl = Get-CommentStart $Text $j
+        # A179-O9 / K7-1: Get-CommentStart vraci nenulu jen u `#` a `<` - volani funkce na kazdy znak zpomalilo Split-Arguments
+        # (od CR-AA1 vola Find-CloseParen pro kazdou substituci) nad 3000 vnorenymi substitucemi z ~2 s na ~6 s.
+        $cl = if ($c -eq '#' -or $c -eq '<') { Get-CommentStart $Text $j } else { 0 }
         if ($cl -gt 0) { $j = Get-CommentEnd $Text $j $cl; continue }
         if ($c -eq "'") { $inSingle = $true; $j++; continue }
         if ($c -eq '(') { $depth++ }

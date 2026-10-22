@@ -774,7 +774,7 @@ function Get-PrefixStripRegex {
 # A179-O9 (Amber 2026-10-22, TASK-179): kola /code-review 10-13 nad rucni gramatikou slova Bashe (substituce, `${}`, uvozovky,
 # `case`, rezervovana slova) nekonvergovala - kazde naslo dalsi konstrukci, kterou skener necte. Misto dalsi gramatiky JEDNO
 # fail-closed pravidlo: pred prikazem smi v Bashi stat jen PROSTA slova (hodnota prirazeni, cil presmerovani, slovo a vzor
-# `case`) a stoji-li tam cokoli z toho, musi byt prostym slovem i hlava prikazu. Prosté slovo = znaky bez `$`, zpetneho
+# `case`) a stoji-li tam cokoli z toho, musi byt prostym slovem i hlava prikazu. Proste slovo = znaky bez `$`, zpetneho
 # apostrofu, zavorek, escape, uvozovek a oddelovacu, NEBO jeden cely retezec v apostrofech / uvozovkach (v uvozovkach bez `$`,
 # zpetneho apostrofu a escape, ktery neco znamena). Uvozovka uprostred slova prosta neni. Cokoli jineho = `Bad` = deny
 # `opaque:shellWord` s hlaskou, ktera jmenuje nahradu. Hlava BEZ prefixu zustava beze zmeny (`$TOOL x` = `variable`, T36/Q102).
@@ -795,7 +795,7 @@ $script:BashZoneRx = @{
 function Test-BashWordEnd([string]$Text, [int]$Pos) {
     return ($Pos -ge $Text.Length -or $Text[$Pos] -match '[\s<>;&|]')
 }
-# Vraci @{ Start = index hlavy prikazu; Bad = $true, kdyz pred prikazem nebo v hlave za prefixem stoji neprosté slovo }.
+# Vraci @{ Start = index hlavy prikazu; Bad = $true, kdyz pred prikazem nebo v hlave za prefixem stoji neproste slovo }.
 # Rezervovana slova (`if`, `then`, `!` ...) se preskoci (CR-AA10), ale hlavu prostou nevyzaduji - nejsou to hodnoty.
 # Vzor vetve `case` (CR-AA9) se cte za `case <slovo> in` a na zacatku segmentu za `;;`; tam jen kdyz za `)` neco stoji -
 # `(rm)` je subshell, ne vetev.
@@ -951,7 +951,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # tvar je nerozebratelny. Regex je jeden na escape znak (Get-PrefixStripRegex).
     # CR-AA9 / CR-AA10 (kolo 11, diry i v 0.3.0): v Bashi pred prikazem stoji i rezervovana slova (`if`, `then`, `do`, `!` ...)
     # a vzor vetve `case` - do 0.3.0 byl prikazem `then` nebo `<vzor>)` a zadne pravidlo nesedlo.
-    # A179-O9 (2026-10-22): v Bashi prefix, rezervovana slova i `case` cte Get-BashCommandStart; neprosté slovo pred prikazem
+    # A179-O9 (2026-10-22): v Bashi prefix, rezervovana slova i `case` cte Get-BashCommandStart; neproste slovo pred prikazem
     # (nebo hlava za prefixem) = nerozebiratelne = deny `opaque:shellWord`.
     if ((Get-ScannerEscape) -eq '\') {
         $zone = Get-BashCommandStart $trimmed
