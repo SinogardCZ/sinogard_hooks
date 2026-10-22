@@ -589,11 +589,11 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     # CR-W5/W6 (kolo 7): porovnani textu bez operatoru spusteni a obalovych zavorek (`& x`, `(x)`); hloubka se nezvysuje
     # (prikaz ve vyrazu je na teze urovni jako statement).
     # List z parseru nese `FromAst` - Test-DbAllowContext ho bere jako slozeny tvar (prikaz uvnitr vyrazu).
-    # CR-X1 + CR-Y5 (kola 8 a 9): prikaz stoji ve vyrazu jen v zavorce, v hodnote hashtable (`@{a = rm -rf x}`) nebo za
-    # klicovym slovem `return` / `throw` / `exit` - jen tehdy se parser spousti (bezny `git status` ho neplati).
+    # CR-X1 (kolo 8): parser bezi pro KAZDY text PowerShellu - prikaz spusti i `return` / `throw` bez zavorky.
+    # CR-Z1/Z2 (kolo 10): odhad "zavorka, @{ nebo return/throw/exit za oddelovacem" z kola 9 (CR-Y5) minul statement za
+    # zaviraci slozenou zavorkou (`try {} catch {} <prikaz>`, `function f {} <prikaz>`) i za samotnym CR - zrusen.
     # CR-X8: obalova zavorka se strhava jen jako JEDEN par (`(a) + (b)` ne).
-    if ((Get-ScannerEscape) -eq '`' -and ($pl.Rest.IndexOf('(') -ge 0 -or $pl.Rest.Contains('@{') -or
-        $pl.Rest -match '(?i)(?:^|[;\n{|&])\s*(?:return|throw|exit)\b')) {
+    if ((Get-ScannerEscape) -eq '`') {
         $normCmd = {
             param($s)
             $t = ([string]$s).Trim()
@@ -809,8 +809,14 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # CR-U2 + CR-V1 (TASK-179, kola 5 a 6): pred prikazem muze stat prirazeni i presmerovani v libovolnem poradi a bez
     # mezery mezi presmerovanimi (`>out X=1 rm -rf src`, `2>/dev/null>out rm -rf src`, `<>f`, `>|f`, `<<<x`, `>nul rd ...`
     # v cmd) - jinak by exe vyslo `>out` a zadne pravidlo nesedlo. Zbyde-li na zacatku `<` nebo `>`, tvar je nerozebratelny.
+    # CR-Z3 (kolo 10): hodnota prirazeni i cil presmerovani je cele SLOVO shellu - kvotovane casti, escape a nekvotovane
+    # znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni, ne `X=a"b` a prikaz `c"`).
+    $escRx = [regex]::Escape([string](Get-ScannerEscape))
+    $wq = '"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]'
+    $wordValue = '(?:' + $wq + '|[^\s"''' + $escRx + '])*'
+    $wordTarget = '(?:' + $wq + '|[^\s"''<>' + $escRx + '])+'
     $stripped = [regex]::Replace($trimmed,
-        '^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|''[^'']*''|\S*)\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*(?:"[^"]*"|''[^'']*''|[^\s<>]+)\s*)+', '')
+        ('^\s*(?:[A-Za-z_][A-Za-z0-9_]*=' + $wordValue + '\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*' + $wordTarget + '\s*)+'), '')
     if ($stripped.Trim() -eq '' -and $trimmed -match '^\s*[0-9]*[<>&]') { return $out }
     if ($stripped -match '^\s*[<>]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
 
@@ -1335,13 +1341,13 @@ function Get-DbCompoundReason($Leaf, [string]$HostExe) {
     # AutoRun, `sudo -i`), ktere mohou nastavit PGHOST; `HOME=/x` presune ~/.psqlrc.
     $head = ([string]$stmts[0]).Trim()
     while ($head.StartsWith('(')) { $head = $head.Substring(1).TrimStart() }
-    # CR-Y6 (kolo 9): prirazeni se ctou z TOKENU (Split-Arguments; jmeno bez escapu a uvozovek jako Get-WrapperTail),
+    # CR-Y6 (kolo 9): prirazeni se ctou z TOKENU (Split-Arguments; Get-AssignmentName jako Get-WrapperTail),
     # ne vlastnim regexem - `PGPASSWORD=a"b c" psql ...` je jedno prirazeni.
     # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
     $first = Split-Arguments $head
     $k = 0
-    while ($k -lt $first.Count -and (([string]$first[$k]) -replace '[\\`''"]', '') -match '^([A-Za-z_][A-Za-z0-9_]*)=') {
-        if ($script:DbPrefixAssignOk -cnotcontains $Matches[1]) { return 'compound' }
+    while ($k -lt $first.Count -and $null -ne ($an = Get-AssignmentName ([string]$first[$k]))) {
+        if ($script:DbPrefixAssignOk -cnotcontains $an) { return 'compound' }
         $k++
     }
     if ($k -ge $first.Count -or ([string](Get-ExecutableName ([string]$first[$k]))).ToLowerInvariant() -cne $HostExe) { return 'compound' }
@@ -2564,20 +2570,27 @@ foreach ($leaf in $leaves) {
 # komentar tak rozbor jen rozsiri.
 # CR-W (kolo 7): protokol druheho cteni je v _common.ps1 (Invoke-PlainCommentReading), spolecny se secrets.ps1.
 if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
+    # CR-Y2 (kolo 9): druhe cteni narazilo na strop prace - nevime, co by nasel, takze nerozebratelne (depth, deny).
+    # CR-Z5/Z6 (kolo 10): druhe cteni ma VLASTNI rozpocet - sdileny po prvnim cteni bud chybel (druhe cteni nic nenaslo
+    # a mlcelo), nebo neskodny prikaz s komentarem pretekl jen soucetem obou cteni. Narazilo-li na strop uz prvni cteni,
+    # druhe se nespousti a plati deny.
     $overflowBefore = $script:SubstOverflow
-    $pr = Invoke-PlainCommentReading {
-        Set-ScannerEscape $toolName
-        $plainLeaves = @(Get-CommandLineLeaves $command 0)
-        $script:AllLeaves = $plainLeaves
-        foreach ($pleaf in $plainLeaves) {
-            $pv = Invoke-LeafVerdict $pleaf $config $false
-            if ($null -ne $pv -and $pv.Decision -eq 'deny') { return $pv }
+    $pr = $null
+    if (-not $overflowBefore) {
+        $script:SubstWork = 0
+        $pr = Invoke-PlainCommentReading {
+            Set-ScannerEscape $toolName
+            $plainLeaves = @(Get-CommandLineLeaves $command 0)
+            $script:AllLeaves = $plainLeaves
+            foreach ($pleaf in $plainLeaves) {
+                $pv = Invoke-LeafVerdict $pleaf $config $false
+                if ($null -ne $pv -and $pv.Decision -eq 'deny') { return $pv }
+            }
+            return $null
         }
-        return $null
     }
     if ($null -ne $pr) { $decision = $pr }
-    # CR-Y2 (kolo 9): druhe cteni narazilo na strop prace - nevime, co by nasel, takze nerozebratelne (depth, deny).
-    elseif ($script:SubstOverflow -and -not $overflowBefore) { $decision = Invoke-LeafVerdict (New-OpaqueLeaf $command 'depth') $config $false }
+    elseif ($script:SubstOverflow) { $decision = Invoke-LeafVerdict (New-OpaqueLeaf $command 'depth') $config $false }
 }
 
 # K7-1 (TASK-179, kolo 7): rozbor substituci v obalu kontejneru narazil na strop prace (_common.ps1, SubstWorkBudget) - cil

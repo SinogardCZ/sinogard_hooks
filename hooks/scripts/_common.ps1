@@ -410,8 +410,9 @@ $script:BlockCommentSplit = $false
 
 # CR-W2/W3/W8 + CR-X + CR-Y (TASK-179, kola 7 az 9): druhe cteni prikazu BEZ komentare - jeden protokol pro gate.ps1
 # i secrets.ps1. Spousti se, kdyz prikaz obsahuje `#`, nebo kdyz prvni cteni dekodovalo `-EncodedCommand` s `#` v tele
-# (ConvertFrom-EncodedCommandText, $script:DecodedHasHash). Rozpocet prace na substituce se NEnuluje (strop jednoho behu
-# hooku drzi timeout 10 s); narazi-li na nej az druhe cteni, gate.ps1 rozhodne `deny` (nerozebratelne).
+# (ConvertFrom-EncodedCommandText) ci rozebralo jiny text s `#` (Register-ParsedText) - oboje $script:DecodedHasHash.
+# CR-Z5/Z6 (kolo 10): gate.ps1 dava druhemu cteni VLASTNI rozpocet prace na substituce (prvni cteni ho nevycerpa);
+# narazi-li druhe cteni na strop, nebo uz prvni cteni na nej narazilo, rozhodne `deny` (nerozebratelne).
 # Z druheho cteni plati jen `deny`, audit je ztlumeny.
 $script:DecodedHasHash = $false
 function Test-NeedsPlainReading([string]$Command) {
@@ -1141,6 +1142,14 @@ $script:WrapperValueFlags = @{
 $script:PlainWrappers = '^(nohup|command|builtin|exec)$'
 $script:ContainerWrappers = '^(docker|podman)$'
 
+# Jmeno promenne, kterou TOKEN (jedno slovo z Split-Arguments) prirazuje, jinak $null.
+# CR-X9 (TASK-179, kolo 8): i se jmenem s escapem nebo uvozovkami (`env PGHO\ST=x dropdb ...` - env dostane PGHOST=x).
+# CR-Z8 (kolo 10): jedno pravidlo pro Get-WrapperTail a Get-DbCompoundReason (gate.ps1).
+function Get-AssignmentName([string]$Token) {
+    if (($Token -replace '[\\`''"]', '') -match '^([A-Za-z_][A-Za-z0-9_]*)=') { return $Matches[1] }
+    return $null
+}
+
 # Odloupne z ARGV vsechny obaly a vrati zbytek - tedy skutecny prikaz vcetne jmena.
 # Kdyz zadny obal nesedi, vraci vstup nedotceny.
 function Get-WrapperTail($Argv, [int]$Depth = 0) {
@@ -1152,8 +1161,7 @@ function Get-WrapperTail($Argv, [int]$Depth = 0) {
         $tok = [string]$arr[$i]
 
         # Prirazeni promenne pred prikazem (`FOO=1 psql ...`)
-        # CR-X9 (TASK-179, kolo 8): i se jmenem s escapem nebo uvozovkami (`env PGHO\ST=x dropdb ...` - env dostane PGHOST=x).
-        if (($tok -replace '[\\`''"]', '') -match '^[A-Za-z_][A-Za-z0-9_]*=') { $i++; continue }
+        if ($null -ne (Get-AssignmentName $tok)) { $i++; continue }
         if ($tok -match '^-') { $i++; continue }   # osamely prepinac bez znameho obalu
 
         $name = Get-ExecutableName $tok
@@ -1344,6 +1352,8 @@ function Register-ParsedText([string]$Text) {
     if ([string]::IsNullOrEmpty($Text)) { return }
     $esc = Get-ScannerEscape
     if (-not $script:ParsedTextKeys.Add($esc + [char]0 + $Text)) { return }
+    # CR-Z7 (kolo 10): `#` v kteremkoli rozebiranem textu (i v textu, ktery v surovem prikazu nebyl) spusti druhe cteni.
+    if ($Text.IndexOf('#') -ge 0) { $script:DecodedHasHash = $true }
     [void]$script:ParsedTexts.Add(@{ Text = $Text; Esc = $esc })
 }
 

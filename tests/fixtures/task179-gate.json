@@ -449,6 +449,18 @@
     { "group": "MUT", "name": "MUT ${#x} je promenna, ne komentar -> ticho", "tool": "PowerShell", "cmd": "${#x} = 1; Write-Output 'a; git reset --hard'", "expect": "allow" },
     { "group": "MUT", "name": "MUT jmeno promenne hostitele v argumentu psql (Bash) -> deny", "tool": "Bash", "cmd": "psql -d gsd_dev -c \"DROP TABLE t\" -v h=$PGHOST", "expect": "deny" },
     { "group": "MUT", "name": "MUT jmeno promenne hostitele v argumentu psql (PowerShell) -> deny", "tool": "PowerShell", "cmd": "psql -d gsd_dev -c \"DROP TABLE t\" -v h=$env:PGHOST", "expect": "deny" },
-    { "group": "MUT", "name": "MUT komentar v substituci skryva zavorku, prikaz za nim je v substituci -> deny", "tool": "Bash", "cmd": "echo $(echo # ) '\ngit reset --hard\n) #'", "expect": "deny" }
+    { "group": "MUT", "name": "MUT komentar v substituci skryva zavorku, prikaz za nim je v substituci -> deny", "tool": "Bash", "cmd": "echo $(echo # ) '\ngit reset --hard\n) #'", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z1 prikaz za try/catch bez oddelovace -> deny", "tool": "PowerShell", "cmd": "try {} catch {} git reset --hard", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z1 prikaz za definici funkce bez oddelovace -> deny", "tool": "PowerShell", "cmd": "function f {} git reset --hard", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z1 prikaz za trap bez oddelovace -> deny", "tool": "PowerShell", "cmd": "trap {} git reset --hard", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z1 throw prikaz za try/finally -> deny", "tool": "PowerShell", "cmd": "try {} finally {} throw git reset --hard", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z2 return prikaz za samotnym CR -> deny", "tool": "PowerShell", "cmd": "Write-Output a\rreturn git reset --hard", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z3 prirazeni s uvozovkou uprostred hodnoty pred rm -rf -> deny", "tool": "Bash", "cmd": "X=a\"b c\" rm -rf src", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z3 prirazeni s uvozovkou uprostred hodnoty pred dropdb produkcni -> deny", "tool": "Bash", "cmd": "X=a\"b c\" dropdb prod_db", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z4 PGPASSWORD s uvozovkou uprostred hodnoty, psql na vzdaleny hostitel -> deny", "tool": "Bash", "cmd": "PGPASSWORD=a\"b c\" psql -h db.prod.firma.cz -d app -c \"DROP TABLE users\"", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z3 cil presmerovani s uvozovkou uprostred pred rm -rf -> deny", "tool": "Bash", "cmd": ">a\"b c\" rm -rf src", "expect": "deny" },
+    { "group": "CR-Z", "name": "CR-Z3 kontrola: prirazeni s uvozovkou uprostred hodnoty pred git status -> ticho", "tool": "Bash", "cmd": "X=a\"b c\" git status", "expect": "allow" },
+    { "group": "CR-Z", "name": "CR-Z5 strop prace v prvnim cteni a komentar -> deny (nerozebratelne) do 5 s", "tool": "PowerShell", "cmd": "Write-Output '{REP}1{REP2}'; docker exec (docker ps -q) ls # c", "repText": "(", "repCount": 3000, "repText2": ")", "repCount2": 3000, "expect": "deny", "maxMs": 5000 },
+    { "group": "CR-Z", "name": "CR-Z5/Z6 kontrola: 400 vnorenych zavorek pod stropem a komentar -> ticho", "tool": "PowerShell", "cmd": "Write-Output '{REP}1{REP2}'; docker exec (docker ps -q) ls # c", "repText": "(", "repCount": 400, "repText2": ")", "repCount2": 400, "expect": "allow", "maxMs": 5000 }
   ]
 }

@@ -66,6 +66,7 @@ Přejmenováno: `gate.askPatterns` → `gate.auditPatterns`, `secrets.askPathPat
 `secrets.envFile.otherPolicy` = `trackedAllowElseAudit`; projektový přepis se starým jménem H-c odmítne (platí výchozí).
 ⚠️ Migrace: přepis `gate.opaque` s `depth: audit` (tvar dřívějšího zúžení GSD) je od 0.3.1 uvolnění → celý klíč
 `gate.opaque` odmítnut (platí výchozí, audit `config:overrideRejected:gate.opaque`). Hodnoty `ask` H-c odmítne také.
+Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
 
 **Po `/code-review` změny `ZOPT-Q102` (CR-Q, řádky `tests/fixtures/task179-gate.json` / `task179-secrets.json`, skupina `CR-Q`):**
 lokální destruktivní DB operace je `deny` (jméno nečitelné) i se seznamem jmen v `DROP DATABASE a, b` (CR-Q1b), s trojdílným
@@ -196,7 +197,21 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
 - **Ostatní (Y5, Y6).**
   - Parser PowerShellu běží jen tam, kde příkaz může stát ve výrazu: závorka, `@{`, nebo `return`/`throw`/`exit`.
   - Přiřazení před SQL klientem se čtou z tokenů, takže `PGPASSWORD=a"b c" psql …` je jedno přiřazení.
-Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
+
+**Desáté kolo `/code-review` nad CR-Y (CR-Z, skupina `CR-Z`):**
+- **Moje regrese z CR-Y5 (Z1, Z2).** Odhad „závorka, `@{` nebo `return`/`throw`/`exit` za oddělovačem“ minul statement
+  za zavírací složenou závorkou (`try {} catch {} …`, `function f {} …`, `trap {} …`) i za samotným CR. Parser
+  PowerShellu proto znovu běží pro každý text PowerShellu, jako v CR-X. Věta o Y5 výše už neplatí.
+- **Přiřazení a přesměrování před příkazem (Z3, Z4).** Hodnota přiřazení i cíl přesměrování se čtou jako celé slovo
+  shellu (kvotované části, escape a nekvotované znaky v libovolném pořadí). Do teď `X=a"b c" <příkaz>` skrylo příkaz
+  pro všechna pravidla, nejen pro DB. Řádek CR-Y6 díky tomu skutečně testuje čtení přiřazení; přibyly řádky `deny`.
+- **Rozpočet druhého čtení (Z5, Z6).** Druhé čtení bez komentáře má vlastní rozpočet práce na substituce. Když na strop
+  narazilo už první čtení, příkaz s `#` je `deny` (nerozebíratelné). Dřív druhé čtení po vyčerpaném rozpočtu nic
+  nenašlo a mlčelo, a neškodný příkaz s komentářem mohl přetéct jen součtem obou čtení.
+- **Ostatní (Z7, Z8, Z9).**
+  - Druhé čtení spouští `#` v kterémkoli rozebíraném textu (`Register-ParsedText`), ne jen v dekódovaném těle.
+  - Pravidlo „token je přiřazení“ je jedna funkce (`Get-AssignmentName`) pro obaly i pro DB `allow`.
+  - Věta o `texts.bypassSuffix` je zpět u konfigurace.
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)
 
