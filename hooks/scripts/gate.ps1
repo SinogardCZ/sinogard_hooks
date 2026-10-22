@@ -818,7 +818,7 @@ $script:BashZoneRx = @{
 function Test-BashWordEnd([string]$Text, [int]$Pos) {
     return ($Pos -ge $Text.Length -or $Text[$Pos] -match '[\s<>;&|]')
 }
-# CR-AG7 (kolo 17): ocas za `)` je jen prosta presmerovani (zadna hlava, nic neprosteho) - jedna definice pro CR-AD1 a CR-AF3.
+# CR-AG7 (kolo 17): ocas za `)` je jen prosta presmerovani (zadna hlava, nic neprosteho) - pro CR-AD1 (CR-AF3 vracen, A179-O14).
 function Test-BashRedirectOnlyTail([string]$Tail) {
     $tz = Get-BashCommandStart $Tail -NoArm
     return (-not $tz.Bad -and $tz.Start -ge $Tail.Length)
@@ -840,16 +840,10 @@ function Get-BashCommandStart([string]$Text, [switch]$NoArm) {
         if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
         # Komentar: segment konci koncem radku (Split-CommandLine deli i na nem), takze za `#` uz zadny prikaz nestoji.
         if ($Text[$pos] -eq [char]'#') { return @{ Start = $pos; Bad = $false } }
-        # CR-AF1 (kolo 16, vyjimka O11 pro subshell): Split-CommandLine deli i uvnitr `( ... )`, takze prvni prikaz subshellu
-        # prijde jako segment `(rm -rf src` bez `)` - zavorkovy obal ho nerozbali. `(` bez `)` v segmentu se preskoci jako
-        # rezervovane slovo a prikaz za ni se cte jako kazdy jiny (konec subshellu odlomi CR-AE4).
-        # CR-AG1 (kolo 17): `)` uvnitr `$( ... )` nebo uvozovek prvniho prikazu (`(cd "$(git rev-parse ...)" && make)`) -
-        # rozhoduje pocet: segment, ve kterem `(` od teto pozice prevazuji nad `)`, subshell neuzavira (pocita se stejne
-        # naivne jako odlamovani `)` v Get-CommandLeaf).
-        if ($Text[$pos] -eq [char]'(' -and ($pos + 1) -lt $n -and -not $r.Arith.IsMatch($Text, $pos)) {
-            $rest = $Text.Substring($pos)
-            if (([regex]::Matches($rest, '\(')).Count -gt ([regex]::Matches($rest, '\)')).Count) { $pos++; $first = $false; continue }
-        }
+        # A179-O14 (Amber 2026-10-22): heuristiky fragmentu ROZDELENEHO subshellu (Split-CommandLine deli i uvnitr `( ... )`;
+        # kola 15-17: odlamovani `)` CR-AE4/AF6/AG4, preskok `(` CR-AF1/AG1, ocas za slovem s `)` CR-AF3/AG2) jsou vraceny -
+        # kola 16-18 v nich nachazela regrese. Prvni a posledni prikaz rozdeleneho subshellu je dira 0.3.0 (README mez 27),
+        # oprava = hloubka `( )` ve skeneru (CR-AF5) ve verzi 0.3.2.
         $m = $r.Keyword.Match($Text, $pos)
         if (-not $m.Success) { $m = $r.FuncDef.Match($Text, $pos) }
         if ($m.Success) { $pos += $m.Length; $first = $false; continue }
@@ -880,19 +874,10 @@ function Get-BashCommandStart([string]$Text, [switch]$NoArm) {
             $m = $r.Pattern.Match($Text, $pos)
             if ($m.Success) {
                 # CR-AD2/AD3 (kolo 14): bez niceho za `)` je to konec subshellu jednim slovem (`(cd x; ls)` -> segment
-                # `ls)`), cely subshell `(sh)` nebo vzor `case` na samostatnem radku. CR-AE5 (kolo 15): slovo se dal rozebira
-                # jako hlava (`)` odlomi Get-CommandLeaf, `(sh)` rozbali zavorkovy obal). Glob se tu nehlida: vzor `*)` je
-                # bezny a jedno slovo bez argumentu zadne pravidlo neporusi.
-                $armTail = $Text.Substring($pos + $m.Length)
-                if ($armTail.Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
-                # CR-AF3 (kolo 16): za `)` jen presmerovani (`psql) < drop.sql`) = konec subshellu jednim slovem; jako vetev
-                # `case` by se prikaz zahodil. Slovo je hlava, `)` odlomi Get-CommandLeaf. Presmerovani + prikaz = vetev (CR-AC6).
-                # CR-AG2 (kolo 17): slovo s presmerovanim je hlava, ktera dostava vstup - nekvotovany glob = nerozebiratelne (O11).
-                if (Test-BashRedirectOnlyTail $armTail) {
-                    $w = $r.Word.Match($Text, $pos)
-                    $bad = ($w.Success -and $w.Value[0] -ne [char]"'" -and $w.Value[0] -ne [char]'"' -and $r.Glob.IsMatch($w.Value))
-                    return @{ Start = $pos; Bad = $bad }
-                }
+                # `ls)`), cely subshell `(sh)` nebo vzor `case` na samostatnem radku. CR-AE5 (kolo 15): rozebira se dal od
+                # zacatku (`(sh)` rozbali zavorkovy obal; `ls)` zustava listem jako v 0.3.0, A179-O14). Glob se tu nehlida:
+                # vzor `*)` je bezny.
+                if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
                 $pos += $m.Length; $prefix = $true; $first = $false; continue
             }
             # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
@@ -1106,12 +1091,16 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # CR-AD1 (kolo 14, dira i v 0.3.0): subshell, za kterym stoji jen presmerovani (`( ... ) > log`, `( ... ) 2>&1`) - regex
     # nize chtel `)` na konci, takze vnitrek nikdo nerozebral. Ocas se cte Get-BashCommandStart: musi to byt jen prosta
     # presmerovani (skoncit na konci textu bez hlavy), jinak se tvar posuzuje jako dosud.
-    if ((Get-ScannerEscape) -eq '\') {
-        # Pozor na jmeno: `$sub` by byl parametr `$Sub` (PowerShell nerozlisuje velikost pismen) a Match by se prevedl na text.
-        $subshell = [regex]::Match($stripped, '^\s*\((?!\()([\s\S]*)\)([^)]*)$')
-        if ($subshell.Success -and $subshell.Groups[2].Value.Trim() -ne '' -and $subshell.Groups[1].Value.Trim() -ne '') {
-            if (Test-BashRedirectOnlyTail $subshell.Groups[2].Value) {
-                foreach ($l in (Get-CommandLeaf $subshell.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
+    # A179-O14: konec subshellu hleda Find-CloseParen (uvozovky, escape, komentar) - regex `)` posledni v textu bral i `)`
+    # z `$( ... )` uvnitr uvozovek prvniho prikazu rozdeleneho subshellu (`(cd "$(git rev-parse ...)" && make)`) a ocas `"`
+    # skoncil falesnym deny (regrese CR-AE2). Neuzavreny `(` (fragment rozdeleneho subshellu) sem nepatri - jde starou cestou.
+    $lead = [regex]::Match($stripped, '^\s*\((?!\()')
+    if ((Get-ScannerEscape) -eq '\' -and $lead.Success) {
+        $close = Find-CloseParen $stripped $lead.Length
+        if ($close -lt $stripped.Length -and $stripped.Substring($close).Trim() -ne '') {
+            $inner = $stripped.Substring($lead.Length, $close - 1 - $lead.Length)
+            if ($inner.Trim() -ne '' -and (Test-BashRedirectOnlyTail $stripped.Substring($close))) {
+                foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
                 return $out
             }
             # CR-AE2 (kolo 15): ocas, ktery neni jen prosta presmerovani (`> "$LOG"`, `<<EOF`, slovo za `)`), = nerozebiratelne.
@@ -1134,20 +1123,6 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $argv = Split-Arguments $stripped
     if ($argv.Count -eq 0) { return $out }
-    if ((Get-ScannerEscape) -eq '\') {
-        # CR-AE4 (kolo 15, dira i v 0.3.0): Split-CommandLine deli i uvnitr subshellu, takze posledni slovo segmentu nese
-        # konec subshellu (`(cd x && git reset --hard)` -> `--hard)`) a vzory `(\s|$)` ho minuly. Token delsi nez jeden znak,
-        # ktery ma vic `)` nez `(` a na `)` konci, se o prebytecne `)` zkrati (`$(date))` -> `$(date)`, `src)` -> `src`).
-        for ($k = 0; $k -lt $argv.Count; $k++) {
-            $t = [string]$argv[$k]
-            # CR-AF6 (kolo 16): escapovana zavorka (`find \( ... \)`) se nepocita ani neodlamuje. CR-AG4 (kolo 17): escapovana
-            # je jen za LICHYM poctem `\` (`build\\)` = `build\` + konec subshellu).
-            if ($t.Length -lt 2 -or -not $t.EndsWith(')') -or $t -match '(?<!\\)(?:\\\\)*\\\)$') { continue }
-            $extra = ([regex]::Matches($t, '(?<!\\)(?:\\\\)*\)')).Count - ([regex]::Matches($t, '(?<!\\)(?:\\\\)*\(')).Count
-            while ($extra -gt 0 -and $t.Length -gt 1 -and $t.EndsWith(')') -and $t -notmatch '(?<!\\)(?:\\\\)*\\\)$') { $t = $t.Substring(0, $t.Length - 1); $extra-- }
-            $argv[$k] = $t
-        }
-    }
 
     # CR-AE1/AE3 (kolo 15): pozicni a specialni parametr v hlave (`$1`, `"$@"`) je hola promenna stejne jako `$X` (A179-O11)
     # - Test-Unexpandable zna jen jmena, takze bez tohohle byla hlava `$1` obycejny list bez pravidla a bez auditu.

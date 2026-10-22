@@ -73,8 +73,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   (dot-source) za `then` a `do`, která zase vede na příčinu `invoked` (AD5), hláška jmenující `[` (AD8) a řádek výpisu
   gsd/24 s novým verdiktem ve fixtuře místo testu (AD10). Skupina `CR-AD`.
 - **Kolo 15 `/code-review` (CR-AE) nad opravami kola 14:**
-  - díra 0.3.0: poslední příkaz subshellu nese `)` (`(cd x && git reset --hard)` → token `--hard)`) a vzory ho minuly.
-    Token, který má víc `)` než `(`, se o přebytečné `)` zkrátí (AE4);
+  - ~~díra 0.3.0: poslední příkaz subshellu nese `)` — odlamování `)` z tokenu (AE4)~~ **vráceno `A179-O14`** (kolo 18);
   - regrese kola 14: poziční parametr v hlavě (`$1`, `"$@"`, i za obalem) je zase holá proměnná. Je to `opaque:variable`
     s auditem a kontrolou destruktivního literálu, ne list bez pravidla (AE1, AE3);
   - subshell s ocasem, který není prosté přesměrování (`( … ) > "$LOG"`), je nerozebíratelný → `deny` (AE2);
@@ -87,27 +86,33 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 - **Kolo 16 `/code-review` (CR-AF) — od něj platí `A179-O13`:** v 0.3.1 se opravují jen regrese 0.3.1 a nálezy
   v pravidle. Díry 0.3.0 mimo něj jdou do README meze 27 a do verze 0.3.2.
   - Opraveno:
-    - výjimka O11 pro `(` platila i pro první příkaz subshellu, který skener oddělí bez `)` (`(rm -rf src; ls)`). Teď se
-      `(` bez `)` v segmentu přeskočí a příkaz se čte (AF1);
-    - poslední slovo subshellu s přesměrováním (`psql) < drop.sql`) se četlo jako větev `case` a příkaz zmizel (AF3);
+    - ~~přeskok `(` prvního příkazu rozděleného subshellu (AF1) a slovo s `)` + přesměrování jako hlava (AF3)~~
+      **vráceno `A179-O14`** (kolo 18);
     - cesta s proměnnou za tečkou nebo `source` je zase `invoked` (audit), ne `deny` (AF4, regrese AE6);
-    - escapovaná `\)` se neodlamuje (AF6);
+    - ~~escapovaná `\)` se neodlamuje (AF6)~~ — s AE4 vráceno;
     - `source` jen malými písmeny (AF7), jeden vzor proměnné (AF8), jedna větev tečky a `source` (AF9).
   - **Odloženo (`A179-O13`):** `)` slepená s přesměrováním bez mezery (AF2, díra 0.3.0) a hloubka `( )` ve skeneru (AF5)
     → 0.3.2, README mez 27.
 
   Skupina `CR-AF`.
 - **Kolo 17 `/code-review` (CR-AG) nad opravami kola 16:**
-  - falešné `deny` u subshellu s `$( … )` v prvním příkazu (`(cd "$(git rev-parse --show-toplevel)" && make)`). `(` se
-    přeskočí podle počtu závorek v segmentu, ne podle přítomnosti `)` (AG1);
-  - glob v posledním slově subshellu s přesměrováním → `deny` (AG2);
+  - ~~počet závorek místo přítomnosti `)` u přeskoku `(` (AG1), glob ve slově s `)` + přesměrováním (AG2)~~ **vráceno
+    `A179-O14`**. Falešné `deny` u `(cd "$(git rev-parse --show-toplevel)" && make)` po návratu řeší kolo 18 jinak (níž);
   - řada vzorů větví za sebou se rekurzí kopírovala kvadraticky. Červená fáze: 2000 vzorů = 21 s, tedy hook po timeoutu
     prošel **bez verdiktu**. Ocas za `)` se teď čte bez větví (`-NoArm`, AG3);
-  - escape před `)` se počítá podle parity (AG4);
-  - rozlišující fixtury pro AF7 (AG6), jedna funkce „ocas je jen přesměrování“ (AG7) a sdílený vzor aritmetiky (AG8).
-  - AG5: fixtura `dropdb` z kola 16 je přejmenovaná na kontrolu mimo větev AF3. Rozlišující řádek pro AF3 je AG2.
+  - ~~escape před `)` podle parity (AG4)~~ — s AE4 vráceno;
+  - rozlišující fixtury pro AF7 (AG6) a jedna funkce „ocas je jen přesměrování“ (AG7).
 
   Skupina `CR-AG`.
+- **Kolo 18 `/code-review` (CR-AH) → návrat (`A179-O14`, Amber 2026-10-22):** všech 8 nálezů kola 18 byly regrese
+  heuristik pro **rozdělený subshell**, tedy pro úlomky, které vzniknou, když skener dělí příkaz i uvnitř `( … )`
+  (CR-AF5). Ty heuristiky jsou vrácené na stav kola 14: AE4/AF6/AG4, AF1/AG1, AF3/AG2.
+  - **Tiché projití shodné s 0.3.0** (README mez 27, oprava ve verzi 0.3.2 s vysokou prioritou): první a poslední příkaz
+    rozděleného subshellu, např. **`(cd x && git reset --hard)`** a **`(rm -rf src; ls)`**.
+  - Zůstávají opravy, které na úlomcích nestojí: celý subshell s přesměrováním za ním (AD1, AE2), funkce (AD4, AE7),
+    poziční parametr v hlavě (AE1, AE3), `source` (AE6, AF4) a lineární čtení ocasu (AG3).
+  - Konec celého subshellu teď hledá `Find-CloseParen` (uvozovky, escape, komentář), ne poslední `)` v textu. Úlomek
+    `(cd "$(git rev-parse --show-toplevel)"` proto už neskončí falešným `deny` (regrese AE2, CR-AG1, CR-AH2).
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).

@@ -580,7 +580,7 @@
     { "group": "CR-AE", "name": "CR-AE3 kontrola: \"$@\" jako hlava -> ticho s auditem variable", "tool": "Bash", "cmd": "\"$@\" --version", "expect": "allow", "auditShape": "opaque:variable", "auditDecision": "allow" },
     { "group": "CR-AE", "name": "CR-AE2 subshell s presmerovanim do promenne -> deny", "tool": "Bash", "cmd": "(rm -rf src) > \"$LOG\"", "expect": "deny" },
     { "group": "CR-AE", "name": "CR-AE2 subshell s neproste presmerovanym ocasem, neskodny -> deny (nerozebiratelne)", "tool": "Bash", "cmd": "(git status) 2>$ERR", "expect": "deny", "reasonContains": "neumí přečíst" },
-    { "group": "CR-AE", "name": "CR-AE4 posledni prikaz subshellu s ) na konci, git reset --hard -> deny (dira i v 0.3.0)", "tool": "Bash", "cmd": "(cd repo && git reset --hard)", "expect": "deny" },
+    { "group": "CR-AE", "name": "README mez 27 (A179-O14): posledni prikaz rozdeleneho subshellu, git reset --hard -> ticho shodne s 0.3.0 (oprava 0.3.2)", "tool": "Bash", "cmd": "(cd repo && git reset --hard)", "expect": "allow" },
     { "group": "CR-AE", "name": "CR-AE4 posledni prikaz subshellu s ) na konci, branch -D -> deny", "tool": "Bash", "cmd": "(cd repo; git branch -D x)", "expect": "deny" },
     { "group": "CR-AE", "name": "CR-AE4 kontrola: substituce na konci argumentu se nezkracuje -> ticho", "tool": "Bash", "cmd": "echo $(date)", "expect": "allow" },
     { "group": "CR-AE", "name": "CR-AE5 cely subshell jednim slovem se rozebere -> deny pro git", "tool": "Bash", "cmd": "(git reset --hard)", "expect": "deny" },
@@ -590,12 +590,12 @@
     { "group": "CR-AE", "name": "CR-AE7 function f s telem v subshellu -> deny", "tool": "Bash", "cmd": "function f ( rm -rf src ); f", "expect": "deny" },
     { "group": "CR-AE", "name": "CR-AE7 function f() s telem v subshellu -> deny", "tool": "Bash", "cmd": "function f() ( git reset --hard ); f", "expect": "deny" },
     { "group": "CR-AE", "name": "CR-AE8 kontrola: funkce se jmenem s teckou a dvojteckou -> ticho", "tool": "Bash", "cmd": "lib.helper() { git status; }; ns::f() { echo; }", "expect": "allow" },
-    { "group": "CR-AF", "name": "CR-AF1 prvni prikaz subshellu se dvema prikazy, rm -> deny", "tool": "Bash", "cmd": "(rm -rf src; ls)", "expect": "deny" },
-    { "group": "CR-AF", "name": "CR-AF1 prvni prikaz subshellu za &&, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard && echo ok)", "expect": "deny" },
-    { "group": "CR-AF", "name": "CR-AF1 prvni prikaz subshellu s mezerou za (, rm -> deny", "tool": "Bash", "cmd": "( rm -rf src; ls )", "expect": "deny" },
+    { "group": "CR-AF", "name": "README mez 27 (A179-O14): prvni prikaz rozdeleneho subshellu, rm -> ticho shodne s 0.3.0 (oprava 0.3.2)", "tool": "Bash", "cmd": "(rm -rf src; ls)", "expect": "allow" },
+    { "group": "CR-AF", "name": "README mez 27 (A179-O14): prvni prikaz rozdeleneho subshellu za &&, git reset --hard -> ticho shodne s 0.3.0", "tool": "Bash", "cmd": "(git reset --hard && echo ok)", "expect": "allow" },
+    { "group": "CR-AF", "name": "README mez 27 (A179-O14): prvni prikaz rozdeleneho subshellu s mezerou za ( -> ticho shodne s 0.3.0", "tool": "Bash", "cmd": "( rm -rf src; ls )", "expect": "allow" },
     { "group": "CR-AF", "name": "CR-AF3 kontrola mimo vetev AF3 (dve slova): posledni prikaz subshellu s presmerovanim, dropdb -> deny", "tool": "Bash", "cmd": "(cd x; dropdb gsd_prod) < /dev/null", "expect": "deny" },
     { "group": "CR-AF", "name": "CR-AF3 kontrola: konec subshellu jednim slovem s presmerovanim -> ticho", "tool": "Bash", "cmd": "(cd x; make) > build.log", "expect": "allow" },
-    { "group": "CR-AF", "name": "CR-AF3 klient SQL jako posledni slovo subshellu se vstupem ze souboru -> ticho s auditem (neni vetev case)", "tool": "Bash", "cmd": "(cd db && psql) < drop.sql", "expect": "allow", "auditShape": "sqlFrom", "auditDecision": "allow" },
+    { "group": "CR-AF", "name": "README mez 27 (A179-O14): klient SQL jako posledni slovo rozdeleneho subshellu se vstupem ze souboru -> ticho (cte se jako vetev case, 0.3.0 taky ticho)", "tool": "Bash", "cmd": "(cd db && psql) < drop.sql", "expect": "allow" },
     { "group": "CR-AF", "name": "CR-AF4 kontrola: source cesty s promennou -> ticho s auditem invoked", "tool": "Bash", "cmd": "source $VIRTUAL_ENV/bin/activate", "expect": "allow", "auditShape": "opaque:invoked", "auditDecision": "allow" },
     { "group": "CR-AF", "name": "CR-AF4 kontrola: tecka s cestou s promennou v uvozovkach -> ticho", "tool": "Bash", "cmd": ". \"$HOME/.cargo/env\" && cargo -V", "expect": "allow" },
     { "group": "CR-AF", "name": "CR-AF4 source cesty s promennou a destruktivnim literalem -> deny", "tool": "Bash", "cmd": "source $DIR/x.sh git reset --hard", "expect": "deny" },
@@ -603,9 +603,9 @@
     { "group": "CR-AF", "name": "CR-AF7 kontrola: SOURCE velkymi pismeny neni tecka -> ticho", "tool": "Bash", "cmd": "SOURCE $x", "expect": "allow" },
     { "group": "CR-AG", "name": "CR-AG6 SOURCE velkymi pismeny s destruktivnim literalem neni invoked -> ticho (rozlisuje AF7)", "tool": "Bash", "cmd": "SOURCE $x reset --hard", "expect": "allow" },
     { "group": "CR-AG", "name": "CR-AG1 kontrola: subshell s $( ... ) v prvnim prikazu -> ticho", "tool": "Bash", "cmd": "(cd \"$(git rev-parse --show-toplevel)\" && make)", "expect": "allow" },
-    { "group": "CR-AG", "name": "CR-AG1 prvni prikaz subshellu s $( ... ) v cili, rm -> deny", "tool": "Bash", "cmd": "(rm -rf \"$(pwd)/x\"; ls)", "expect": "deny" },
-    { "group": "CR-AG", "name": "CR-AG2 glob v poslednim slove subshellu s presmerovanim -> deny", "tool": "Bash", "cmd": "(cd db; /usr/bin/ps?l) < drop.sql", "expect": "deny", "reasonContains": "neumí přečíst" },
     { "group": "CR-AG", "name": "CR-AG3 2000 vzoru vetve za sebou -> deny do 5 s", "tool": "Bash", "cmd": "{REP}echo ok", "repText": "a) ", "repCount": 2000, "expect": "deny", "maxMs": 5000 },
-    { "group": "CR-AG", "name": "CR-AG4 sudy pocet escape pred ) konce subshellu, git reset --hard -> deny", "tool": "Bash", "cmd": "(cd x && git reset --hard \\\\)", "expect": "deny" }
+    { "group": "CR-AG", "name": "A179-O14 kontrola: uvozovka s ) v prvnim prikazu rozdeleneho subshellu -> ticho (CR-AH2)", "tool": "Bash", "cmd": "(echo \"done :)\"; ls)", "expect": "allow" },
+    { "group": "CR-AG", "name": "A179-O14 cely subshell s $( ... ) uvnitr uvozovek a presmerovanim -> deny pro rm", "tool": "Bash", "cmd": "(rm -rf \"$(pwd)/x\") > log.txt", "expect": "deny" },
+    { "group": "CR-AG", "name": "A179-O14 cely subshell s ) v uvozovkach a presmerovanim, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard \")\") 2>&1", "expect": "deny" }
   ]
 }
