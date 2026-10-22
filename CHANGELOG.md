@@ -26,6 +26,16 @@ dělí příkaz a skener navíc spojí výsledek čtení s komentářem i bez n�
 `${x:- #}`, zpětné apostrofy), tak skener vidí víc příkazů, ne méně. Cenou je, že `;` uvnitř komentáře taky dělí,
 třeba `true # pak ; rm -rf x` → `deny`. Případy hlídá skupina `CR-S` v `tests/fixtures/task179-gate.json` a `task179-secrets.json`.
 
+### Bezpečnost — oprava chyby 0.3.0: příkaz za řídicím slovem Bashe a za substitucí v přiřazení (CR-AA1, CR-AA9, CR-AA10, `A179-O8`)
+
+Gate bral jako jméno příkazu první slovo statementu. Za rezervovaným slovem Bashe (`then`, `else`, `elif`, `do`, `if`,
+`while`, `until`, `!`, `coproc`), za vzorem větve `case` (`a) …`) a za přiřazením nebo přesměrováním se substitucí
+s mezerou (`X=$(echo a b) …`, i za `env`/`sudo`) proto skutečný příkaz nesedl na žádné pravidlo a prošel tichem:
+`if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`. Chyba se
+změřila v nasazené 0.3.0 i ve verzích 0.2.0 a 0.1.9 (cache pluginu, Bash, 2026-10-22). Secrets čte tokeny bez ohledu
+na pozici a chybu neměl. Od 0.3.1 gate tato slova a vzory strhne a rozebere příkaz za nimi; substituce je část slova.
+Případy hlídá skupina `CR-AA` v `tests/fixtures/task179-gate.json`.
+
 ### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
 
 | místo (id v auditu) | do 0.3.0 | od 0.3.1 | rozhodnutí |
