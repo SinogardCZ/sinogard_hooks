@@ -1100,8 +1100,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # skoncil falesnym deny (regrese CR-AE2). Neuzavreny `(` (fragment rozdeleneho subshellu) sem nepatri - jde starou cestou.
     # CR-AI7 (kolo 19): escape a aritmetika `((` ze sdileneho vzoru.
     # CR-AJ1-AJ3 (kolo 20): zaloha "posledni `)` v textu" z kola 19 (CR-AI2/AI5) poslala celou cestu starym regexem i u `)`
-    # procesni substituce nebo komentare (`( ... ) > >(tee log)`) - z deny bylo allow. Vracena: konec urcuje jen Find-CloseParen,
-    # ocas, ktery neni jen presmerovani, je deny (CR-AE2). Cena: vnoreny subshell s presmerovanim na konci rozdeleneho subshellu
+    # procesni substituce nebo komentare (`( ... ) > >(tee log)`) - z deny bylo allow. Vracena: uzavre-li Find-CloseParen subshell
+    # pred koncem textu, rozhoduje jeho konec a ocas, ktery neni jen presmerovani, je deny (CR-AE2); neuzavre-li ho, jde tvar
+    # starou cestou 0.3.0 (CR-AK1/AK2: ANSI-C `$'...'`, `((...) )` - README mez 27). Cena: vnoreny subshell s presmerovanim na konci rozdeleneho subshellu
     # a uvozovky vnorene v `$( ... )` uvnitr uvozovek (Find-CloseParen je nevnoruje, CR-AJ5 -> 0.3.2) = falesny deny.
     if ((Get-ScannerEscape) -eq '\') {
         $lead = [regex]::Match($stripped, '^\s*\(')

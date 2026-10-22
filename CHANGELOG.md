@@ -123,13 +123,16 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   Skupina `CR-AI`.
 - **Kolo 20 `/code-review` (CR-AJ):** záloha „poslední `)` v textu“ z kola 19 poslala celý subshell starou cestou i tehdy,
   když poslední `)` patřila procesní substituci, substituci v cíli přesměrování nebo komentáři. Např. `(git reset --hard)
-  > >(tee log)` prošlo tichem místo `deny` (AJ1–AJ3). Je vrácená: konec určuje jen `Find-CloseParen` a ocas, který
-  není jen přesměrování, je `deny`.
+  > >(tee log)` prošlo tichem místo `deny` (AJ1–AJ3). Je vrácená. Když `Find-CloseParen` subshell uzavře před koncem
+  textu, rozhoduje jeho konec a ocas, který není jen přesměrování, je `deny`. Když ho neuzavře (vrátí konec textu), jde tvar
+  dál starou cestou z 0.3.0 (líný regex do poslední `)`). Tou cestou projdou i tvary, které `Find-CloseParen` nepřečte:
+  ANSI-C `$'…'` (AK1) a vnořený subshell `((…) )`, který vypadá jako aritmetika (AK2). Obojí byla díra už v 0.3.0 →
+  README mez 27, 0.3.2 (`A179-O13`; kolo 21).
   - **Cena (fail-closed):** falešné `deny` u vnořeného subshellu s přesměrováním na konci rozděleného subshellu
     (`(cd x; (git status) 2>/dev/null)`) a u uvozovek vnořených v `$( … )` uvnitř uvozovek. `Find-CloseParen` kontext
     uvozovek nevnořuje (AJ5) → oprava ve verzi 0.3.2.
-  - Větev `case` se závorkou, globem a tělem jen z přesměrování (`(*) > /dev/null ;;`) je `deny`. Od celého subshellu
-    s globem v hlavě ji nejde rozeznat (AJ4, vědomě fail-closed).
+  - Větev `case` se závorkou, globem a tělem jen z přesměrování (`(*) > /dev/null ;;`) je `deny`. Příčinou je CR-AI1
+    z kola 19, ne tento návrat. Od celého subshellu s globem v hlavě ji nejde rozeznat (AJ4, vědomě fail-closed).
 
   Skupina `CR-AJ`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`

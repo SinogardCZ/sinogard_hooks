@@ -618,6 +618,8 @@
     { "group": "CR-AJ", "name": "CR-AJ1 cely subshell s presmerovanim do substituce, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard) 2>$(mktemp)", "expect": "deny" },
     { "group": "CR-AJ", "name": "CR-AJ2 procesni substituce a dalsi presmerovani, git reset --hard -> deny", "tool": "Bash", "cmd": "(git reset --hard) > >(tee log) 2>&1", "expect": "deny" },
     { "group": "CR-AJ", "name": "CR-AJ3 neproste presmerovani a komentar s ) -> deny", "tool": "Bash", "cmd": "(git reset --hard) > \"$LOG\" # hotovo :)", "expect": "deny" },
-    { "group": "CR-AJ", "name": "cena CR-AI1 (kolo 20, fail-closed): vetev case (glob) s telem jen z presmerovani -> deny", "tool": "Bash", "cmd": "case $x in\n  (*) > /dev/null ;;\nesac", "expect": "deny", "reasonContains": "neumí přečíst" }
+    { "group": "CR-AJ", "name": "cena CR-AI1 (kolo 19; CR-AJ4 fail-closed): vetev case (glob) s telem jen z presmerovani -> deny", "tool": "Bash", "cmd": "case $x in\n  (*) > /dev/null ;;\nesac", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "CR-AK", "name": "README mez 27 (CR-AK2, dira 0.3.0): vnoreny subshell ((...) ) s presmerovanim -> ticho (oprava 0.3.2)", "tool": "Bash", "cmd": "((git reset --hard) ) 2>&1", "expect": "allow" },
+    { "group": "CR-AK", "name": "kontrola (CR-AK5): cely subshell uzavreny az na konci textu jde starou cestou a rozebere se -> deny", "tool": "Bash", "cmd": "(git reset --hard)", "expect": "deny" }
   ]
 }

@@ -780,6 +780,8 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       Heuristiky, které úlomky ořezávaly (kola 15–17), byly vráceny, protože každé další kolo `/code-review` v nich našlo
       regresi. Celý subshell v jednom úlomku (`(git reset --hard)`, `( … ) > log`) se rozebere. Oprava je hloubka `( )` ve
       skeneru (CR-AF5) ve verzi 0.3.2, s vysokou prioritou. Do té doby piš příkazy bez subshellu (`cd x && git status`).
+      Starou cestou 0.3.0 jde i celý subshell, jehož konec `Find-CloseParen` nenajde: ANSI-C `$'…'` uvnitř, vnořený
+      subshell `((…) )` podobný aritmetice, uvozovky vnořené v `$( … )` (CR-AJ5, CR-AK1, CR-AK2).
     - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.3.2. Kola `/code-review`
       10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
 
