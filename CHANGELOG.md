@@ -47,7 +47,8 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   přesměrování, slovo a vzor `case` nebo přiřazení za obalem (`env`, `sudo` …). Prosté slovo nemá `$`, zpětný apostrof,
   závorku, escape ani uvozovku uprostřed. Prostý je i celý řetězec v apostrofech nebo uvozovkách (v uvozovkách bez `$`,
   zpětného apostrofu a escape, který něco znamená). Nekvotovaná hlava navíc nesmí mít `*`, `?` ani `[` (glob vybere
-  program až shell). Slovo `case` smí být i holá proměnná (`case "$1" in`).
+  program až shell). Slovo `case` smí být i holá proměnná (`case "$1" in`). **Hodnota přiřazení** smí navíc nést prostý
+  odkaz na proměnnou (`f=$1`, `PATH="$PATH:/usr/local/bin" npm test`; `A179-O12`), ale ne operátor `${A:-…}`.
 - **Výjimky hlavy bez prefixu (`A179-O11`):** holá proměnná (`$X`, `${X}`, `"$X"`, `"${X}"`, i za obalem) zůstává
   `opaque:variable` (ticho + audit, T36 / `ZOPT-Q102`). Dále začátek bloku `{ …; }` a subshellu `( … )`, aritmetika
   `(( … ))`, definice funkce `f()` a komentář. Bloky a subshelly se rozebírají dál jako dřív.
@@ -64,7 +65,13 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
     pole `NAME=(…)`);
   - regrese kola 12 CR-AC1–AC3 (kód kola 12 je pryč);
   - hlavy, které 0.3.0 propouštěla tichem nebo jen auditem: brace expanze, zpětné apostrofy a `$( … )` jako hlava, glob
-    v hlavě, i za obalem (`A179-O11`).
+    v hlavě, i za obalem (`A179-O11`);
+  - díry 0.3.0 z kola 14 (CR-AD1, CR-AD4): subshell, za kterým stojí přesměrování (`( … ) > log`, `( … ) 2>&1`), a funkce
+    s tělem v subshellu (`f() ( … )`). Vnitřek nerozebral nikdo a prošel tichem. Teď se rozebere.
+- **Kolo 14 `/code-review` (CR-AD) nad pravidlem:** opravené falešné `deny` jsou konec subshellu jedním slovem
+  (`(cd x && make)`), vzor `case` na samostatném řádku a `exec "$@"` za obalem (CR-AD2, AD3, AD7). Dále tečka
+  (dot-source) za `then` a `do`, která zase vede na příčinu `invoked` (AD5), hláška jmenující `[` (AD8) a řádek výpisu
+  gsd/24 s novým verdiktem ve fixtuře místo testu (AD10). Skupina `CR-AD`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).

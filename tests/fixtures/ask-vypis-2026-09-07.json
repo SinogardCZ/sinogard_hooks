@@ -170,6 +170,9 @@
       "order": 24,
       "tool": "Bash",
       "expect": "allow",
+      "expect0310": "deny",
+      "reasonContains0310": "do argumentu příkazu",
+      "zmena0310": "A179-O10 (Amber 2026-10-22): samostatne prirazeni se substituci `n=$(basename ...)` = deny opaque:shellWord; `expect` dal nese mereni 7. 9.",
       "cmd": "cd /w/dev/gsd/repo\necho \"=== TASK-36 Stav ===\"; grep -n '\\*\\*Stav\\*\\*' docs/tasks/TASK-36.md\necho \"=== TASK-105 Stav ===\"; grep -n '\\*\\*Stav\\*\\*' docs/tasks/TASK-105.md\necho \"=== TASK-107 Stav ===\"; grep -n '\\*\\*Stav\\*\\*' docs/tasks/TASK-107.md\necho \"=== ktere L2 maji 'kostra' a pritom nejsou v sekci Kostry ===\"\nfor f in docs/tasks/TASK-*.md; do\n  n=$(basename \"$f\" .md)\n  if grep -q '\\*\\*Stav\\*\\*.*kostra' \"$f\"; then\n    if ! grep -q \"\\[$n\\](tasks/$n.md)\" <(sed -n '/^## Kostry/,/^## .*Mlhy/p' docs/backlog.md); then echo \"  $n\"; fi\n  fi\ndone"
     },
     {

@@ -759,8 +759,10 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     GSD TASK-179, `A179-O9`–`O11`). Hlava příkazu i všechno před ní musí být prosté slovo. Před hlavou může stát hodnota
     přiřazení, cíl přesměrování, slovo a vzor `case` nebo přiřazení za obalem (`env`, `sudo` …). Prosté slovo nemá `$`,
     zpětný apostrof, závorku, escape ani uvozovku uprostřed; prostý je i celý řetězec v apostrofech či uvozovkách.
-    Nekvotovaná hlava navíc nesmí mít `*`, `?` ani `[`. Výjimky hlavy bez prefixu: holá proměnná (`$X`, `${X}`, `"$X"`,
-    `"${X}"` → `opaque:variable`, ticho + audit), začátek bloku, subshellu a aritmetiky, definice funkce a komentář. Jinak
+    Nekvotovaná hlava navíc nesmí mít `*`, `?` ani `[`. Hodnota přiřazení smí nést prostý odkaz na proměnnou (`$NAME`,
+    `${NAME}`, `$1`, `$@`, i v uvozovkách; ne operátor `${A:-…}`). Výjimky hlavy bez prefixu: holá proměnná (`$X`, `${X}`,
+    `$1`, `$@`, `"$X"` → `opaque:variable`, ticho + audit), začátek bloku, subshellu a aritmetiky, definice funkce
+    a komentář. Jinak
     hook vrátí `deny` (`opaque:shellWord`) a hláška jmenuje náhradu: hlavu jako doslovnou cestu, hodnotu jako prosté
     slovo, substituci v argumentu příkazu, nebo výsledek spočítaný samostatným příkazem.
     - **Cena:** `deny` i u běžných tvarů:

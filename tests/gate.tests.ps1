@@ -1516,16 +1516,15 @@ if (-not (Test-SafePath $vypisPath)) {
         $template = if ([string]$vr.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
         $json = New-HookInput $template @{ 'tool_input.command' = [string]$vr.cmd }
         $r = Invoke-Hook -Script 'gate.ps1' -InputJson $json
-        # A179-O9 / A179-O10 (Amber 2026-10-22), 0.3.1: samostatne prirazeni se substituci (`n=$(basename "$f" .md)` ve smycce)
-        # je deny `opaque:shellWord` - hook nepozna, ze za neprostou hodnotou zadny prikaz nestoji. Fixtura nese mereni 7. 9.
-        # (ticho) doslovne, zmenu verdiktu drzi tenhle vycet.
-        if (@('gsd/24') -ccontains $vid) {
-            Assert-Equal 'deny' (Get-Decision $r) ("[vypis/{0}] rozhodnuti deny (A179-O10, do 0.3.1 ticho)" -f $vid)
-            $reasonO9 = ''
+        # A179-O10 (Amber 2026-10-22), 0.3.1: radek, jehoz verdikt se od 0.3.1 zmenil, nese `expect0310` + `reasonContains0310`
+        # + `zmena0310` (citace); `expect` dal nese mereni 7. 9. doslovne (CR-AD10, kolo 14: zmena patri do fixtury, ne do testu).
+        if ($vr.PSObject.Properties['expect0310']) {
+            Assert-Equal ([string]$vr.expect0310) (Get-Decision $r) ("[vypis/{0}] rozhodnuti od 0.3.1 ({1})" -f $vid, $vr.zmena0310)
+            $reason0310 = ''
             if (-not [string]::IsNullOrWhiteSpace($r.Stdout)) {
-                $reasonO9 = [string]($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason
+                $reason0310 = [string]($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason
             }
-            Assert-True ($reasonO9.Contains('neumí přečíst')) ("[vypis/{0}] duvod jmenuje neproste slovo: {1}" -f $vid, $reasonO9)
+            Assert-True ($reason0310.Contains([string]$vr.reasonContains0310)) ("[vypis/{0}] duvod nese <{1}>: {2}" -f $vid, $vr.reasonContains0310, $reason0310)
             continue
         }
         # N46: slovnik je jeden. `allow` = hook MLCI a Get-Decision to od

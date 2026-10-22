@@ -781,7 +781,14 @@ function Get-PrefixStripRegex {
 # A179-O11 (Amber 2026-10-22): pravidlo plati pro KAZDOU hlavu prikazu (brace expanze, zpetne apostrofy, `$( ... )` a
 # glob v hlave spusti neco, co hook nevidi). Vyjimky bez prefixu: hola promenna (`$X`, `${X}`, `"$X"`, `"${X}"` = `variable`,
 # audit T36/Q102), zacatek bloku `{ ...; }`, subshellu `( ... )` a definice funkce `f()` - ty rozebira Get-CommandLeaf dal.
+# A179-O12 (Amber 2026-10-22): HODNOTA prirazeni smi navic nest prosty odkaz na promennou (`$NAME`, `${NAME}`, `$1`, `$@`,
+# i v uvozovkach) - nic nespousti a konec slova se urci stejne trivialne (nic se nevnoruje). Operatory `${A:-...}`, `$(`,
+# zpetne apostrofy a uvozovka uprostred dal ne; v hlave prikazu jen hola promenna (O11).
+$script:BashVarRef = '\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-z0-9_]*\})'
 $script:BashPlainWord = '(?:[^\s$`"''\\(){}<>;&|]+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n])*")'
+$script:BashValueWord = '(?:(?:[^\s$`"''\\(){}<>;&|]|' + $script:BashVarRef + ')+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n]|' + $script:BashVarRef + ')*")'
+$script:BashBareVar = '(?<q>"?)' + $script:BashVarRef + '\k<q>'
+$script:BashFuncDef = '[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\)'
 $script:BashZoneRx = @{
     Ws      = [regex]'\G\s*'
     Keyword = [regex]'\G(?:then|do|else|elif|if|while|until|coproc|!)(?=\s|$)'
@@ -790,14 +797,17 @@ $script:BashZoneRx = @{
     Assign  = [regex]'\G[A-Za-z_][A-Za-z0-9_]*\+?='
     Redir   = [regex]'\G[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)'
     Word    = [regex]('\G' + $script:BashPlainWord)
+    Value   = [regex]('\G' + $script:BashValueWord)
     # Slovo `case` smi byt i HOLA promenna (`case $1 in`, `case "${x}" in`) - nic nespousti a je to bezny tvar.
-    CaseWord = [regex]('\G(?:' + $script:BashPlainWord + '|(?<q>"?)\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-z0-9_]*\})\k<q>)')
+    CaseWord = [regex]('\G(?:' + $script:BashPlainWord + '|' + $script:BashBareVar + ')')
     Pattern = [regex]('\G\(?\s*' + $script:BashPlainWord + '(?:\s*\|\s*' + $script:BashPlainWord + ')*\s*\)')
     ArmLike = [regex]'\G(?!\)(?:\s|$))\S*\)(?=\s|$)'
-    BareVar = [regex]'\G(?<q>"?)\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-z0-9_]*\})\k<q>'
-    # Zacatek bloku / subshellu a definice funkce `f()` (komentar `#` konci rozbor hned na zacatku smycky).
-    Structural = [regex]'\G(?:\(|\{(?=\s)|[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\))'
-    FuncDef = [regex]'\G[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\)'
+    BareVar = [regex]('\G' + $script:BashBareVar)
+    # Zacatek bloku / subshellu (komentar `#` konci rozbor hned na zacatku smycky, definice funkce se preskoci jako slovo).
+    Structural = [regex]'\G(?:\(|\{(?=\s))'
+    # CR-AD4 (kolo 14, dira i v 0.3.0): `f()` se preskoci jako rezervovane slovo - telo (`{ ... }` i `( ... )`) se pak cte
+    # jako statement (do kola 14 byla hlava `f()` a telo v subshellu nerozebral nikdo).
+    FuncDef = [regex]('\G' + $script:BashFuncDef + '(?=\s|$|[({])')
     Arith   = [regex]'\G\(\('
     # Konec viceradkoveho bloku / subshellu (segment `} > log`, `) > log`) - cte se jako prefix: za nim smi stat jen
     # presmerovani nebo prosta hlava.
@@ -823,6 +833,7 @@ function Get-BashCommandStart([string]$Text) {
         # Komentar: segment konci koncem radku (Split-CommandLine deli i na nem), takze za `#` uz zadny prikaz nestoji.
         if ($Text[$pos] -eq [char]'#') { return @{ Start = $pos; Bad = $false } }
         $m = $r.Keyword.Match($Text, $pos)
+        if (-not $m.Success) { $m = $r.FuncDef.Match($Text, $pos) }
         if ($m.Success) { $pos += $m.Length; $first = $false; continue }
         $m = $r.Case.Match($Text, $pos)
         if ($m.Success) {
@@ -849,11 +860,15 @@ function Get-BashCommandStart([string]$Text) {
         }
         if ($first) {
             $m = $r.Pattern.Match($Text, $pos)
-            if ($m.Success -and ($Text.Substring($pos + $m.Length).Trim() -ne '')) { $pos += $m.Length; $prefix = $true; $first = $false; continue }
+            if ($m.Success) {
+                # CR-AD2/AD3 (kolo 14): bez niceho za `)` je to konec subshellu jednim slovem (`(cd x; ls)` -> segment
+                # `ls)`) nebo vzor `case` na samostatnem radku - prikaz bez argumentu nebo zadny; ani jeden nic nerusi.
+                if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $n; Bad = $false } }
+                $pos += $m.Length; $prefix = $true; $first = $false; continue
+            }
             # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
-            # Neni to definice funkce `f()` ani aritmetika `(( ... ))`.
-            if (-not $m.Success -and $r.ArmLike.IsMatch($Text, $pos) -and -not $r.FuncDef.IsMatch($Text, $pos) -and
-                -not $r.Arith.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $true } }
+            # Neni to aritmetika `(( ... ))`.
+            if ($r.ArmLike.IsMatch($Text, $pos) -and -not $r.Arith.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $true } }
         }
         $first = $false
         $m = $r.Closer.Match($Text, $pos)
@@ -861,7 +876,7 @@ function Get-BashCommandStart([string]$Text) {
         $m = $r.Assign.Match($Text, $pos)
         if ($m.Success) {
             $pos += $m.Length
-            $w = $r.Word.Match($Text, $pos)
+            $w = $r.Value.Match($Text, $pos)
             if ($w.Success) { $pos += $w.Length }
             if (-not (Test-BashWordEnd $Text $pos)) { return @{ Start = $pos; Bad = $true } }
             $prefix = $true; continue
@@ -902,13 +917,15 @@ function Test-WrapperPrefixUnplain($Argv, $Tail) {
         $t = [string]$Argv[$i]
         if ($null -eq (Get-AssignmentName $t)) { continue }
         $seen = $true
-        if ($t.Substring($t.IndexOf('=') + 1) -match '[$`(){}]') { return $true }
+        # A179-O12: prosty odkaz na promennou v hodnote smi (`env PATH=$PATH:/x ...`).
+        if (([regex]::Replace($t.Substring($t.IndexOf('=') + 1), $script:BashVarRef, '')) -match '[$`(){}]') { return $true }
     }
     $head = [string]$Tail[0]
     if ($seen) { return ($head -match '[$`(){}]') }
-    # A179-O11: hlava za obalem bez prirazeni smi byt hola promenna (`sudo $TOOL x` = `variable`). Join-Argument by jinak
-    # token se substituci a mezerou (`$(echo rm)`) obalil apostrofy a rekurze by ho cetla jako proste slovo.
-    return ($head -match '[$`(){}]' -and $head -notmatch '^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$')
+    # A179-O11: hlava za obalem bez prirazeni smi byt hola promenna (`sudo $TOOL x`, `exec "$@"` = `variable`; CR-AD7 kolo 14:
+    # tataz mnozina jako BareVar). Join-Argument by jinak token se substituci a mezerou (`$(echo rm)`) obalil apostrofy
+    # a rekurze by ho cetla jako proste slovo.
+    return ($head -match '[$`(){}]' -and $head -notmatch ('^' + $script:BashVarRef + '$'))
 }
 
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.
@@ -986,12 +1003,18 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         $zone = Get-BashCommandStart $trimmed
         if ($zone.Bad) { [void]$out.Add((New-OpaqueLeaf $trimmed 'shellWord')); return $out }
         $stripped = $trimmed.Substring($zone.Start)
+        # CR-AD5 (kolo 14): tecka (dot-source = spusteni) za rezervovanym slovem nebo vzorem (`then . $x`) - do kola 13 se
+        # slova strhavala rekurzi, ktera `. ` poznala nahore. Rekurze tu zustava jen pro tenhle tvar.
+        if ($zone.Start -gt 0 -and $stripped -match '^\.\s') {
+            foreach ($l in (Get-CommandLeaf $stripped ($Depth + 1))) { [void]$out.Add($l) }
+            return $out
+        }
     } else {
         $stripped = (Get-PrefixStripRegex).Replace($trimmed, '')
+        if ($stripped.Length -lt $trimmed.Length -and $stripped -match '^\s*[^\s]*[)}`]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
     }
     if ($stripped.Trim() -eq '' -and $trimmed -match '^\s*[0-9]*[<>&]') { return $out }
     if ($stripped -match '^\s*[<>]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
-    if ((Get-ScannerEscape) -ne '\' -and $stripped.Length -lt $trimmed.Length -and $stripped -match '^\s*[^\s]*[)}`]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
 
     # PowerShellove PRIRAZENI `$x = <prikaz>` neni volani promenne v pozici prikazu.
     # Bez teto vetve bral Test-Unexpandable `$out` jako promennou v pozici prikazu
@@ -1045,6 +1068,22 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # a `return` po nem schoval mazani. Kdyz hlava (nebo ocas) neco nese, statement se
     # rozebira DAL jako bezny prikaz; rekurze tu neni, bloky uz v `$out` jsou.
     if ($blocks.Whole) { return $out }
+
+    # CR-AD1 (kolo 14, dira i v 0.3.0): subshell, za kterym stoji jen presmerovani (`( ... ) > log`, `( ... ) 2>&1`) - regex
+    # nize chtel `)` na konci, takze vnitrek nikdo nerozebral. Ocas se cte Get-BashCommandStart: musi to byt jen prosta
+    # presmerovani (skoncit na konci textu bez hlavy), jinak se tvar posuzuje jako dosud.
+    if ((Get-ScannerEscape) -eq '\') {
+        # Pozor na jmeno: `$sub` by byl parametr `$Sub` (PowerShell nerozlisuje velikost pismen) a Match by se prevedl na text.
+        $subshell = [regex]::Match($stripped, '^\s*\((?!\()([\s\S]*)\)([^)]*)$')
+        if ($subshell.Success -and $subshell.Groups[2].Value.Trim() -ne '' -and $subshell.Groups[1].Value.Trim() -ne '') {
+            $redirTail = $subshell.Groups[2].Value
+            $tz = Get-BashCommandStart $redirTail
+            if (-not $tz.Bad -and $tz.Start -ge $redirTail.Length) {
+                foreach ($l in (Get-CommandLeaf $subshell.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
+                return $out
+            }
+        }
+    }
 
     $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
     if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
