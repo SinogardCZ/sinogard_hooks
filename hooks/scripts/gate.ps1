@@ -821,7 +821,8 @@ function Test-BashWordEnd([string]$Text, [int]$Pos) {
 # CR-AG7 (kolo 17): ocas za `)` je jen prosta presmerovani (zadna hlava, nic neprosteho) - pro CR-AD1 (CR-AF3 vracen, A179-O14).
 function Test-BashRedirectOnlyTail([string]$Tail) {
     $tz = Get-BashCommandStart $Tail -NoArm
-    return (-not $tz.Bad -and $tz.Start -ge $Tail.Length)
+    # CR-AI4 (kolo 19): komentar za presmerovanim (`( ... ) > out # log`) nic nespousti.
+    return (-not $tz.Bad -and ($tz.Start -ge $Tail.Length -or $Tail[$tz.Start] -eq [char]'#'))
 }
 # Vraci @{ Start = index hlavy prikazu; Bad = $true, kdyz pred prikazem nebo v hlave za prefixem stoji neproste slovo }.
 # Rezervovana slova (`if`, `then`, `!` ...) se preskoci (CR-AA10), ale hlavu prostou nevyzaduji - nejsou to hodnoty.
@@ -878,6 +879,9 @@ function Get-BashCommandStart([string]$Text, [switch]$NoArm) {
                 # zacatku (`(sh)` rozbali zavorkovy obal; `ls)` zustava listem jako v 0.3.0, A179-O14). Glob se tu nehlida:
                 # vzor `*)` je bezny.
                 if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
+                # CR-AI1 (kolo 19): CELY subshell jednim slovem s presmerovanim (`(psql) < drop.sql`) neni vetev `case`
+                # - rozebere ho cesta celeho subshellu v Get-CommandLeaf (Find-CloseParen, ocas jen presmerovani).
+                if ($Text[$pos] -eq [char]'(' -and (Test-BashRedirectOnlyTail $Text.Substring($pos + $m.Length))) { return @{ Start = $pos; Bad = $false } }
                 $pos += $m.Length; $prefix = $true; $first = $false; continue
             }
             # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
@@ -1094,17 +1098,28 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # A179-O14: konec subshellu hleda Find-CloseParen (uvozovky, escape, komentar) - regex `)` posledni v textu bral i `)`
     # z `$( ... )` uvnitr uvozovek prvniho prikazu rozdeleneho subshellu (`(cd "$(git rev-parse ...)" && make)`) a ocas `"`
     # skoncil falesnym deny (regrese CR-AE2). Neuzavreny `(` (fragment rozdeleneho subshellu) sem nepatri - jde starou cestou.
-    $lead = [regex]::Match($stripped, '^\s*\((?!\()')
-    if ((Get-ScannerEscape) -eq '\' -and $lead.Success) {
-        $close = Find-CloseParen $stripped $lead.Length
-        if ($close -lt $stripped.Length -and $stripped.Substring($close).Trim() -ne '') {
-            $inner = $stripped.Substring($lead.Length, $close - 1 - $lead.Length)
-            if ($inner.Trim() -ne '' -and (Test-BashRedirectOnlyTail $stripped.Substring($close))) {
-                foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
-                return $out
+    # CR-AI2/AI5 (kolo 19): kdyz ocas za koncem podle Find-CloseParen neni jen presmerovani, zkusi se jeste posledni `)` v textu
+    # (Find-CloseParen nezna uvozovky vnorene v `$( ... )` uvnitr uvozovek). Konci-li text tou `)` (ulomek vnejsiho rozdeleneho
+    # subshellu, `(git status) 2>/dev/null)`), jde tvar starou cestou; deny jen kdyz ani jeden konec nedava cisty ocas.
+    # CR-AI7: escape a aritmetika `((` ze sdileneho vzoru.
+    if ((Get-ScannerEscape) -eq '\') {
+        $lead = [regex]::Match($stripped, '^\s*\(')
+        if ($lead.Success -and -not $script:BashZoneRx.Arith.IsMatch($stripped, $lead.Index + $lead.Length - 1)) {
+            $close = Find-CloseParen $stripped $lead.Length
+            if ($close -lt $stripped.Length -and $stripped.Substring($close).Trim() -ne '') {
+                foreach ($c in @($close, ($stripped.LastIndexOf(')') + 1))) {
+                    if ($c -le $lead.Length) { continue }
+                    $tailText = $stripped.Substring($c)
+                    if ($tailText.Trim() -eq '') { $c = -1; break }
+                    $inner = $stripped.Substring($lead.Length, $c - 1 - $lead.Length)
+                    if ($inner.Trim() -ne '' -and (Test-BashRedirectOnlyTail $tailText)) {
+                        foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
+                        return $out
+                    }
+                }
+                # CR-AE2 (kolo 15): ocas, ktery neni jen prosta presmerovani (`> "$LOG"`, `<<EOF`, slovo za `)`), = nerozebiratelne.
+                if ($c -ne -1) { [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out }
             }
-            # CR-AE2 (kolo 15): ocas, ktery neni jen prosta presmerovani (`> "$LOG"`, `<<EOF`, slovo za `)`), = nerozebiratelne.
-            [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out
         }
     }
 

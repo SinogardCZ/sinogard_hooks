@@ -113,6 +113,15 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
     poziční parametr v hlavě (AE1, AE3), `source` (AE6, AF4) a lineární čtení ocasu (AG3).
   - Konec celého subshellu teď hledá `Find-CloseParen` (uvozovky, escape, komentář), ne poslední `)` v textu. Úlomek
     `(cd "$(git rev-parse --show-toplevel)"` proto už neskončí falešným `deny` (regrese AE2, CR-AG1, CR-AH2).
+- **Kolo 19 `/code-review` (CR-AI) nad návratem:**
+  - celý subshell jedním slovem s přesměrováním (`(psql) < drop.sql`) se četl jako větev `case` a příkaz zmizel. Teď ho
+    rozebere cesta celého subshellu, glob v něm je `deny` (AI1, AI3);
+  - falešné `deny` u vnořeného subshellu s přesměrováním na konci rozděleného subshellu (AI2), u komentáře za
+    přesměrováním (AI4) a u uvozovek vnořených v `$( … )` uvnitř uvozovek (AI5). Když ocas za koncem podle
+    `Find-CloseParen` není čistý, zkusí se poslední `)` v textu a teprve pak `deny`;
+  - názvy fixtur bez vrácených heuristik (AI6) a sdílený vzor aritmetiky (AI7).
+
+  Skupina `CR-AI`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).
