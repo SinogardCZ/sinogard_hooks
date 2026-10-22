@@ -753,20 +753,40 @@ function Expand-LiteralHead([string]$Head, [string]$Raw) {
 # Prirazeni a presmerovani pred prikazem (Get-CommandLeaf). CR-Z3 (kolo 10): hodnota prirazeni i cil presmerovani je cele
 # SLOVO shellu - kvotovane casti, escape a nekvotovane znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni).
 # CR-AA1 (kolo 11): slovo tvori i substituce `$( ... )` / `$(( ... ))` (zavorky parovane, kvotovane zavorky se nepocitaji),
-# `${ ... }` a v Bashi zpetne apostrofy. CR-AA8: regex se sestavi jednou pro kazdy escape znak.
-$script:PrefixStripRegexes = @{}
-function Get-PrefixStripRegex {
-    $esc = [string](Get-ScannerEscape)
-    if ($script:PrefixStripRegexes.ContainsKey($esc)) { return $script:PrefixStripRegexes[$esc] }
-    $escRx = [regex]::Escape($esc)
-    $subst = '\$\((?>"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]|[^()"''' + $escRx + ']+|\((?<d>)|\)(?<-d>))*(?(d)(?!))\)|\$\{[^}]*\}'
-    if ($esc -eq '\') { $subst += '|`(?:[^`\\]|\\[\s\S])*`' }
-    $wq = $subst + '|"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]'
-    $wordValue = '(?:' + $wq + '|[^\s"''' + $escRx + '])*'
-    $wordTarget = '(?:' + $wq + '|[^\s"''<>' + $escRx + '])+'
-    $rx = [regex]::new('^\s*(?:[A-Za-z_][A-Za-z0-9_]*=' + $wordValue + '\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*' + $wordTarget + '\s*)+')
-    $script:PrefixStripRegexes[$esc] = $rx
-    return $rx
+# `${ ... }` a v Bashi zpetne apostrofy.
+# CR-AB1/AB7 (kolo 12): prefix se cte LINEARNE po slovech (Get-ShellWordEnd v _common.ps1, tataz gramatika slova jako
+# Split-Arguments) - regex z kola 11 se pri neuspesne shode vracel exponencialne (hook za timeoutem = propusteni).
+# Unclosed = hodnota nebo cil konci uvnitr neuzavrene substituce ci uvozovky (tvar nerozebratelny).
+$script:PrefixAssignRx = [regex]'\G[A-Za-z_][A-Za-z0-9_]*='
+$script:PrefixRedirectRx = [regex]'\G[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)'
+function Split-CommandPrefix([string]$Text) {
+    $n = $Text.Length
+    $pos = 0
+    while ($true) {
+        while ($pos -lt $n -and [char]::IsWhiteSpace($Text[$pos])) { $pos++ }
+        if ($pos -ge $n) { break }
+        $m = $script:PrefixAssignRx.Match($Text, $pos)
+        if ($m.Success) {
+            $w = Get-ShellWordEnd $Text ($pos + $m.Length)
+            if ($w.Unclosed) { return @{ Rest = ''; Unclosed = $true } }
+            # Samotne prirazeni bez prikazu za nim se nestrhava (zustane jako jmeno prikazu, zadne pravidlo).
+            if ($w.End -ge $n) { break }
+            $pos = $w.End
+            continue
+        }
+        $m = $script:PrefixRedirectRx.Match($Text, $pos)
+        if ($m.Success) {
+            $p2 = $pos + $m.Length
+            while ($p2 -lt $n -and [char]::IsWhiteSpace($Text[$p2])) { $p2++ }
+            $w = Get-ShellWordEnd $Text $p2 -StopAtRedirect
+            if ($w.Unclosed) { return @{ Rest = ''; Unclosed = $true } }
+            if ($w.End -eq $p2) { break }
+            $pos = $w.End
+            continue
+        }
+        break
+    }
+    return @{ Rest = $Text.Substring($pos); Unclosed = $false }
 }
 
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.
@@ -834,12 +854,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # CR-Z3 (kolo 10): hodnota prirazeni i cil presmerovani je cele SLOVO shellu - kvotovane casti, escape a nekvotovane
     # znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni, ne `X=a"b` a prikaz `c"`).
     # CR-AA1/AA2 (kolo 11): i substituce s mezerou uvnitr (`X=$(echo a b)`, `$((1 + 2))`, `${Y:-a b}`, zpetne apostrofy
-    # v Bashi). Zbude-li za prefixem slovo se zavorkou, slozenou zavorkou nebo zpetnym apostrofem z neuzavrene substituce,
-    # tvar je nerozebratelny. Regex je jeden na escape znak (Get-PrefixStripRegex).
-    $stripped = (Get-PrefixStripRegex).Replace($trimmed, '')
+    # v Bashi). CR-AB1/AB5 (kolo 12): prefix cte Split-CommandPrefix linearne; hodnota nebo cil v neuzavrene substituci
+    # ci uvozovce = nerozebratelne. Uzavrena substituce v prvnim slove prikazu (`${HOME}/bin/x`) uz deny nedava.
+    $pfx = Split-CommandPrefix $trimmed
+    if ($pfx.Unclosed) { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
+    $stripped = [string]$pfx.Rest
     if ($stripped.Trim() -eq '' -and $trimmed -match '^\s*[0-9]*[<>&]') { return $out }
     if ($stripped -match '^\s*[<>]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
-    if ($stripped.Length -lt $trimmed.Length -and $stripped -match '^\s*[^\s]*[)}`]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
     # CR-AA9 (kolo 11, dira i v 0.3.0): `case` v Bashi. Prikaz vetve stoji za vzorem `<vzor>)` - prvni vetev za
     # `case <slovo> in`, dalsi za `;;` (vlastni segment). Do 0.3.0 byl prikazem `case` nebo `<vzor>)` a zadne pravidlo
     # nesedlo (`case x in a) rm -rf src;; esac`, i `esac) <prikaz>` za vzorem `case` v substituci). Slovo zakoncene `)`
@@ -853,10 +874,19 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             foreach ($l in (Get-CommandLeaf $kw.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
+        # CR-AB3/AB4 (kolo 12): slovo za `case` cte Get-ShellWordEnd (substituce i mezera v uvozovkach); vzor smi mit
+        # kvotovane casti s mezerou a alternativy `|`, za `)` nemusi byt mezera (`a)prikaz`).
         $caseArm = $stripped
-        if ($caseArm -match '^\s*case\s+(?:"[^"]*"|''[^'']*''|\S)+\s+in\s+(.*)$') { $caseArm = $Matches[1] }
-        if ($caseArm -match '^\s*\(?[^\s()]+\)\s+(?![0-9]*[<>&])(\S[\s\S]*)$') {
-            foreach ($l in (Get-CommandLeaf $Matches[1] ($Depth + 1))) { [void]$out.Add($l) }
+        $cm = [regex]::Match($caseArm, '^\s*case\s+')
+        if ($cm.Success) {
+            $cw = Get-ShellWordEnd $caseArm $cm.Length
+            $inM = [regex]::Match($caseArm.Substring($cw.End), '^\s+in\s+([\s\S]*)$')
+            if (-not $cw.Unclosed -and $inM.Success) { $caseArm = $inM.Groups[1].Value }
+        }
+        $arm = [regex]::Match($caseArm,
+            '^\s*\(?(?>(?>"[^"]*"|''[^'']*''|[^\s()"''|])+)(?>\s*\|\s*(?>(?>"[^"]*"|''[^'']*''|[^\s()"''|])+))*\s*\)\s*(?![0-9]*[<>&])(\S[\s\S]*)$')
+        if ($arm.Success) {
+            foreach ($l in (Get-CommandLeaf $arm.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
     }

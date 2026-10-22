@@ -241,8 +241,25 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   žádná pravidla: `if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`
   a `X=$(case x in a) echo;; esac) <příkaz>` prošly. Brána slova strhne a rozebere příkaz za nimi. Konec subshellu
   (`(cd x; ls) > out`) zůstává beze změny. Secrets čte tokeny bez ohledu na pozici a díru neměl.
-- **Známá mez (AA7, beze změny).** Gramatika slova shellu je dál na dvou místech (regex v `Get-CommandLeaf`
-  a `Split-Arguments`); sjednocení do jednoho tokenizéru přechází na 0.3.2.
+- **Známá mez (AA7, v kole 12 vyřešeno — CR-AB1).** Gramatika slova shellu byla na dvou místech (regex v `Get-CommandLeaf`
+  a `Split-Arguments`).
+
+**Dvanácté kolo `/code-review` nad CR-AA (CR-AB, skupina `CR-AB`):**
+- **Regex prefixu se vracel exponenciálně (AB1, moje regrese z AA1).** Při neúspěšné shodě (substituce nebo zpětné
+  apostrofy v hodnotě a za nimi další statement) trval rozbor desítky sekund až minuty — za timeoutem hooku příkaz
+  projde. Prefix (přiřazení a přesměrování před příkazem) teď čte lineární průchod po slovech `Split-CommandPrefix`
+  a slovo shellu určuje jedna funkce `Get-ShellWordEnd` (kvotované části, escape, `$( … )` přes `Find-CloseParen`,
+  `${ … }` přes nové `Find-CloseBrace`, zpětné apostrofy v Bashi). Regex z kola 11 zmizel. Tím je vyřešená i mez AA7.
+- **`${ … }` párovaně (AB2).** Konec `${` hledalo první `}`; vnořená `${…}` a kvotovaná `}` dělily slovo (za `env`
+  pak zbytek vypadal jako příkaz). `Split-Arguments` i prefix používají `Find-CloseBrace`.
+- **Větve `case` (AB3, AB4).** Za vzorem `)` nemusí být mezera, vzor smí mít kvotované části s mezerou a alternativy `|`,
+  slovo za `case` čte `Get-ShellWordEnd` (i substituce).
+- **Falešné `deny` z AA1 (AB5).** Pojistka „slovo se závorkou za prefixem“ zakazovala i běžné `${HOME}/bin/x` nebo
+  `$(pwd)/venv/…` za přiřazením. Nahradil ji přesný signál: hodnota nebo cíl končí uvnitř neuzavřené substituce či
+  uvozovky → nerozebíratelné.
+- **Vědomě beze změny (AB6).** Sdílený rozpočet obou čtení může falešně přetéct jen v okně, kdy první čtení skončí
+  méně než ~12 jednotek pod stropem 200 000 (druhé čtení rozdělené substituce znovu nepočítá; změřeno u 400 vnořených
+  závorek: první čtení 160 833, druhé 12, u 450 už přeteklo první čtení samo).
 
 ### Opraveno — díra 0.3.0 (všechny projekty na stroji)
 

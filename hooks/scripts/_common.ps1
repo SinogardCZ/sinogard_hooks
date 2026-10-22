@@ -739,7 +739,84 @@ function Find-CloseParen([string]$Text, [int]$Start) {
         elseif ($c -eq ')') { $depth-- }
         $j++
     }
+    # CR-AB1 (kolo 12): neuzavrena zavorka (konec textu pri hloubce > 0) - cte Get-ShellWordEnd.
+    $script:CloseUnclosed = ($depth -gt 0)
     return $j
+}
+
+# CR-AB2 (TASK-179, kolo 12): pozice ZA zaviraci `}` k `${` otevrene pred $Start - parovane (`${A:-${B} c}`), kvotovana `}`
+# se nepocita, vnorena `$( ... )` se preskoci cela.
+function Find-CloseBrace([string]$Text, [int]$Start) {
+    $esc = $script:ScannerEscape
+    $n = $Text.Length
+    $depth = 1
+    $j = $Start
+    $inSingle = $false
+    $inDouble = $false
+    while ($j -lt $n -and $depth -gt 0) {
+        $c = $Text[$j]
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false }; $j++; continue }
+        if ($c -eq $esc -and ($j + 1) -lt $n) { $j += 2; continue }
+        if ($c -eq '"') { $inDouble = -not $inDouble; $j++; continue }
+        if ($c -eq '$' -and ($j + 1) -lt $n -and $Text[$j + 1] -eq '(') { $j = Find-CloseParen $Text ($j + 2); continue }
+        if ($inDouble) { $j++; continue }
+        if ($c -eq "'") { $inSingle = $true; $j++; continue }
+        if ($c -eq '{') { $depth++ }
+        elseif ($c -eq '}') { $depth-- }
+        $j++
+    }
+    $script:CloseUnclosed = ($depth -gt 0)
+    return $j
+}
+
+# CR-AB1/AB7 (kolo 12): konec JEDNOHO slova shellu od $Start - kvotovane casti, escape, `$( ... )` / `$(( ... ))`
+# (Find-CloseParen), `${ ... }` (Find-CloseBrace) a v Bashi zpetne apostrofy; slovo konci nekvotovanym bilym znakem
+# (s -StopAtRedirect i `<` / `>`). Linearni pruchod bez regexu (regex z kola 11 se pri neuspesne shode vracel exponencialne).
+# Unclosed = slovo konci koncem textu uvnitr neuzavrene konstrukce. Jediny zdroj pravidla "co je jedno slovo" pro
+# Split-Arguments i pro prefix prikazu (Get-CommandLeaf v gate.ps1).
+function Get-ShellWordEnd([string]$Text, [int]$Start, [switch]$StopAtRedirect) {
+    $esc = $script:ScannerEscape
+    $n = $Text.Length
+    $j = $Start
+    while ($j -lt $n) {
+        $c = $Text[$j]
+        if ([char]::IsWhiteSpace($c)) { break }
+        if ($StopAtRedirect -and ($c -eq '<' -or $c -eq '>')) { break }
+        if ($c -eq $esc) { if (($j + 1) -ge $n) { return @{ End = $n; Unclosed = $true } }; $j += 2; continue }
+        if ($c -eq "'") {
+            $e = $Text.IndexOf("'", $j + 1)
+            if ($e -lt 0) { return @{ End = $n; Unclosed = $true } }
+            $j = $e + 1; continue
+        }
+        if ($c -eq '"') {
+            $k = $j + 1
+            while ($k -lt $n -and $Text[$k] -ne '"') {
+                if ($Text[$k] -eq $esc) { $k++ }
+                elseif ($Text[$k] -eq '$' -and ($k + 1) -lt $n -and $Text[$k + 1] -eq '(') { $k = Find-CloseParen $Text ($k + 2); continue }
+                $k++
+            }
+            if ($k -ge $n) { return @{ End = $n; Unclosed = $true } }
+            $j = $k + 1; continue
+        }
+        if ($c -eq '$' -and ($j + 1) -lt $n -and $Text[$j + 1] -eq '(') {
+            $e = Find-CloseParen $Text ($j + 2)
+            if ($script:CloseUnclosed) { return @{ End = $n; Unclosed = $true } }
+            $j = $e; continue
+        }
+        if ($c -eq '$' -and ($j + 1) -lt $n -and $Text[$j + 1] -eq '{') {
+            $e = Find-CloseBrace $Text ($j + 2)
+            if ($script:CloseUnclosed) { return @{ End = $n; Unclosed = $true } }
+            $j = $e; continue
+        }
+        if ($c -eq '`' -and $esc -eq '\') {
+            $k = $j + 1
+            while ($k -lt $n -and $Text[$k] -ne '`') { if ($Text[$k] -eq '\') { $k++ }; $k++ }
+            if ($k -ge $n) { return @{ End = $n; Unclosed = $true } }
+            $j = $k + 1; continue
+        }
+        $j++
+    }
+    return @{ End = $j; Unclosed = $false }
 }
 
 # Obsah vsech `$( ... )` v textu (kvotove korektne, vcetne zanoreni).
@@ -941,8 +1018,8 @@ function Split-Arguments([string]$Command) {
             [void]$buffer.Append($Command.Substring($i, $e - $i)); $any = $true; $i = $e; continue
         }
         if ($c -eq '$' -and ($i + 1) -lt $n -and $Command[$i + 1] -eq '{') {
-            $e = $Command.IndexOf('}', $i + 2)
-            $e = if ($e -lt 0) { $n } else { $e + 1 }
+            # CR-AB2 (kolo 12): `${ ... }` parovane (Find-CloseBrace), ne do prvni `}`.
+            $e = Find-CloseBrace $Command ($i + 2)
             [void]$buffer.Append($Command.Substring($i, $e - $i)); $any = $true; $i = $e; continue
         }
         if ($c -eq '`' -and $esc -eq '\') {
