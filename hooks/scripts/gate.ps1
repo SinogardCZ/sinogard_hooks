@@ -788,7 +788,8 @@ $script:BashVarRef = '\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-
 $script:BashPlainWord = '(?:[^\s$`"''\\(){}<>;&|]+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n])*")'
 $script:BashValueWord = '(?:(?:[^\s$`"''\\(){}<>;&|]|' + $script:BashVarRef + ')+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n]|' + $script:BashVarRef + ')*")'
 $script:BashBareVar = '(?<q>"?)' + $script:BashVarRef + '\k<q>'
-$script:BashFuncDef = '[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\)'
+# CR-AE7/AE8 (kolo 15): i tvar `function f`, `function f()` a jmeno s teckou / dvojteckou (`lib.helper()`, `ns::f()`).
+$script:BashFuncDef = '(?:function\s+[^\s$`"''\\(){}<>;&|]+(?:\s*\(\s*\))?|[A-Za-z_][A-Za-z0-9_.:-]*\s*\(\s*\))'
 $script:BashZoneRx = @{
     Ws      = [regex]'\G\s*'
     Keyword = [regex]'\G(?:then|do|else|elif|if|while|until|coproc|!)(?=\s|$)'
@@ -807,7 +808,7 @@ $script:BashZoneRx = @{
     Structural = [regex]'\G(?:\(|\{(?=\s))'
     # CR-AD4 (kolo 14, dira i v 0.3.0): `f()` se preskoci jako rezervovane slovo - telo (`{ ... }` i `( ... )`) se pak cte
     # jako statement (do kola 14 byla hlava `f()` a telo v subshellu nerozebral nikdo).
-    FuncDef = [regex]('\G' + $script:BashFuncDef + '(?=\s|$|[({])')
+    FuncDef = [regex]('\G' + $script:BashFuncDef + '(?=\s|$|[({<>])')
     Arith   = [regex]'\G\(\('
     # Konec viceradkoveho bloku / subshellu (segment `} > log`, `) > log`) - cte se jako prefix: za nim smi stat jen
     # presmerovani nebo prosta hlava.
@@ -862,8 +863,10 @@ function Get-BashCommandStart([string]$Text) {
             $m = $r.Pattern.Match($Text, $pos)
             if ($m.Success) {
                 # CR-AD2/AD3 (kolo 14): bez niceho za `)` je to konec subshellu jednim slovem (`(cd x; ls)` -> segment
-                # `ls)`) nebo vzor `case` na samostatnem radku - prikaz bez argumentu nebo zadny; ani jeden nic nerusi.
-                if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $n; Bad = $false } }
+                # `ls)`), cely subshell `(sh)` nebo vzor `case` na samostatnem radku. CR-AE5 (kolo 15): slovo se dal rozebira
+                # jako hlava (`)` odlomi Get-CommandLeaf, `(sh)` rozbali zavorkovy obal). Glob se tu nehlida: vzor `*)` je
+                # bezny a jedno slovo bez argumentu zadne pravidlo neporusi.
+                if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
                 $pos += $m.Length; $prefix = $true; $first = $false; continue
             }
             # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
@@ -955,6 +958,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         $trimmed = $trimmed.Substring(1).Trim()
         if ($trimmed -eq '') { return $out }
     }
+    # CR-AE6 (kolo 15): `source` je v Bashi synonymum tecky.
+    elseif ((Get-ScannerEscape) -eq '\' -and $trimmed -match '^source\s') {
+        $invoked = $true
+        $trimmedHadDot = $true
+        $trimmed = $trimmed.Substring(6).Trim()
+        if ($trimmed -eq '') { return $out }
+    }
 
     # Raw se bere PRED odstranenim prefixu promennych - hostitel DB muze byt prave tam
     # (ConnectionStrings__Default="Host=..." dotnet ef database update).
@@ -1005,7 +1015,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         $stripped = $trimmed.Substring($zone.Start)
         # CR-AD5 (kolo 14): tecka (dot-source = spusteni) za rezervovanym slovem nebo vzorem (`then . $x`) - do kola 13 se
         # slova strhavala rekurzi, ktera `. ` poznala nahore. Rekurze tu zustava jen pro tenhle tvar.
-        if ($zone.Start -gt 0 -and $stripped -match '^\.\s') {
+        if ($zone.Start -gt 0 -and $stripped -match '^(?:\.|source)\s') {
             foreach ($l in (Get-CommandLeaf $stripped ($Depth + 1))) { [void]$out.Add($l) }
             return $out
         }
@@ -1082,6 +1092,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 foreach ($l in (Get-CommandLeaf $subshell.Groups[1].Value ($Depth + 1))) { [void]$out.Add($l) }
                 return $out
             }
+            # CR-AE2 (kolo 15): ocas, ktery neni jen prosta presmerovani (`> "$LOG"`, `<<EOF`, slovo za `)`), = nerozebiratelne.
+            [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out
         }
     }
 
@@ -1100,8 +1112,22 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $argv = Split-Arguments $stripped
     if ($argv.Count -eq 0) { return $out }
+    if ((Get-ScannerEscape) -eq '\') {
+        # CR-AE4 (kolo 15, dira i v 0.3.0): Split-CommandLine deli i uvnitr subshellu, takze posledni slovo segmentu nese
+        # konec subshellu (`(cd x && git reset --hard)` -> `--hard)`) a vzory `(\s|$)` ho minuly. Token delsi nez jeden znak,
+        # ktery ma vic `)` nez `(` a na `)` konci, se o prebytecne `)` zkrati (`$(date))` -> `$(date)`, `src)` -> `src`).
+        for ($k = 0; $k -lt $argv.Count; $k++) {
+            $t = [string]$argv[$k]
+            if ($t.Length -lt 2 -or -not $t.EndsWith(')')) { continue }
+            $extra = ([regex]::Matches($t, '\)')).Count - ([regex]::Matches($t, '\(')).Count
+            while ($extra -gt 0 -and $t.Length -gt 1 -and $t.EndsWith(')')) { $t = $t.Substring(0, $t.Length - 1); $extra-- }
+            $argv[$k] = $t
+        }
+    }
 
-    if (Test-Unexpandable $argv[0]) {
+    # CR-AE1/AE3 (kolo 15): pozicni a specialni parametr v hlave (`$1`, `"$@"`) je hola promenna stejne jako `$X` (A179-O11)
+    # - Test-Unexpandable zna jen jmena, takze bez tohohle byla hlava `$1` obycejny list bez pravidla a bez auditu.
+    if ((Test-Unexpandable $argv[0]) -or ((Get-ScannerEscape) -eq '\' -and [string]$argv[0] -match '^\$[0-9@*#?$!-]')) {
         # `& $cmd` obsah promenne SPUSTI, `$out` nebo `"EXIT=$code"` ne. Priznak `$invoked`
         # se proto musi DONEST az sem - jinak by obe veci mely tutez politiku.
         # TASK-106 bod 15: uvnitr obalu, ktery text spousti (Get-InvokedLeaves), je promenna

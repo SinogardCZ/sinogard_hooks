@@ -72,6 +72,18 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   (`(cd x && make)`), vzor `case` na samostatném řádku a `exec "$@"` za obalem (CR-AD2, AD3, AD7). Dále tečka
   (dot-source) za `then` a `do`, která zase vede na příčinu `invoked` (AD5), hláška jmenující `[` (AD8) a řádek výpisu
   gsd/24 s novým verdiktem ve fixtuře místo testu (AD10). Skupina `CR-AD`.
+- **Kolo 15 `/code-review` (CR-AE) nad opravami kola 14:**
+  - díra 0.3.0: poslední příkaz subshellu nese `)` (`(cd x && git reset --hard)` → token `--hard)`) a vzory ho minuly.
+    Token, který má víc `)` než `(`, se o přebytečné `)` zkrátí (AE4);
+  - regrese kola 14: poziční parametr v hlavě (`$1`, `"$@"`, i za obalem) je zase holá proměnná. Je to `opaque:variable`
+    s auditem a kontrolou destruktivního literálu, ne list bez pravidla (AE1, AE3);
+  - subshell s ocasem, který není prosté přesměrování (`( … ) > "$LOG"`), je nerozebíratelný → `deny` (AE2);
+  - celý subshell jedním slovem (`(sh)`) se zase rozbalí (AE5);
+  - `source` je synonymum tečky (AE6);
+  - funkce `function f …` se čte jako `f()` a jména funkcí smějí mít tečku a dvojtečku (AE7, AE8);
+  - test výpisu kontroluje úplnost klíčů změny (AE9).
+
+  Skupina `CR-AE`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).

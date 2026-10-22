@@ -1519,6 +1519,11 @@ if (-not (Test-SafePath $vypisPath)) {
         # A179-O10 (Amber 2026-10-22), 0.3.1: radek, jehoz verdikt se od 0.3.1 zmenil, nese `expect0310` + `reasonContains0310`
         # + `zmena0310` (citace); `expect` dal nese mereni 7. 9. doslovne (CR-AD10, kolo 14: zmena patri do fixtury, ne do testu).
         if ($vr.PSObject.Properties['expect0310']) {
+            # CR-AE9 (kolo 15): radek se zmenou nese vsechny tri klice - bez duvodu by tvrzeni o hlasce bylo prazdne.
+            $hasAll = ($null -ne $vr.PSObject.Properties['reasonContains0310'] -and $null -ne $vr.PSObject.Properties['zmena0310'] -and
+                       [string]$vr.reasonContains0310 -ne '' -and [string]$vr.zmena0310 -ne '')
+            Assert-True $hasAll ("[vypis/{0}] radek s expect0310 nese neprazdne reasonContains0310 a zmena0310" -f $vid)
+            if (-not $hasAll) { continue }
             Assert-Equal ([string]$vr.expect0310) (Get-Decision $r) ("[vypis/{0}] rozhodnuti od 0.3.1 ({1})" -f $vid, $vr.zmena0310)
             $reason0310 = ''
             if (-not [string]::IsNullOrWhiteSpace($r.Stdout)) {

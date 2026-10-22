@@ -574,6 +574,21 @@
     { "group": "O12", "name": "A179-O12 operator ${A:-$( ... )} v hodnote -> deny", "tool": "Bash", "cmd": "x=${A:-$(rm -rf src)}", "expect": "deny", "reasonContains": "neumí přečíst" },
     { "group": "O12", "name": "A179-O12 operator ${A:-...} s mezerou pred prikazem -> deny", "tool": "Bash", "cmd": "x=${A:-a b} git status", "expect": "deny", "reasonContains": "neumí přečíst" },
     { "group": "O12", "name": "A179-O12 promenna a uvozovka uprostred hodnoty -> deny", "tool": "Bash", "cmd": "x=$A\"b c\" git status", "expect": "deny", "reasonContains": "neumí přečíst" },
-    { "group": "O12", "name": "A179-O12 promenna za prirazenim v hlave dal deny (O9)", "tool": "Bash", "cmd": "X=$HOME $TOOL ls", "expect": "deny", "reasonContains": "neumí přečíst" }
+    { "group": "O12", "name": "A179-O12 promenna za prirazenim v hlave dal deny (O9)", "tool": "Bash", "cmd": "X=$HOME $TOOL ls", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "CR-AE", "name": "CR-AE1 pozicni promenna za obalem s destruktivnim literalem -> deny", "tool": "Bash", "cmd": "sudo $1 reset --hard", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE3 pozicni promenna jako hlava s destruktivnim literalem -> deny", "tool": "Bash", "cmd": "$1 rm -rf src", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE3 kontrola: \"$@\" jako hlava -> ticho s auditem variable", "tool": "Bash", "cmd": "\"$@\" --version", "expect": "allow", "auditShape": "opaque:variable", "auditDecision": "allow" },
+    { "group": "CR-AE", "name": "CR-AE2 subshell s presmerovanim do promenne -> deny", "tool": "Bash", "cmd": "(rm -rf src) > \"$LOG\"", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE2 subshell s neproste presmerovanym ocasem, neskodny -> deny (nerozebiratelne)", "tool": "Bash", "cmd": "(git status) 2>$ERR", "expect": "deny", "reasonContains": "neumí přečíst" },
+    { "group": "CR-AE", "name": "CR-AE4 posledni prikaz subshellu s ) na konci, git reset --hard -> deny (dira i v 0.3.0)", "tool": "Bash", "cmd": "(cd repo && git reset --hard)", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE4 posledni prikaz subshellu s ) na konci, branch -D -> deny", "tool": "Bash", "cmd": "(cd repo; git branch -D x)", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE4 kontrola: substituce na konci argumentu se nezkracuje -> ticho", "tool": "Bash", "cmd": "echo $(date)", "expect": "allow" },
+    { "group": "CR-AE", "name": "CR-AE5 cely subshell jednim slovem se rozebere -> deny pro git", "tool": "Bash", "cmd": "(git reset --hard)", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE5 kontrola: vzor * na samostatnem radku -> ticho", "tool": "Bash", "cmd": "case $1 in\n  *)\n    echo x\n    ;;\nesac", "expect": "allow" },
+    { "group": "CR-AE", "name": "CR-AE6 source promenne za then s destruktivnim literalem -> deny", "tool": "Bash", "cmd": "if true; then source $x reset --hard; fi", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE6 kontrola: source souboru -> ticho", "tool": "Bash", "cmd": "source venv/bin/activate && python -V", "expect": "allow" },
+    { "group": "CR-AE", "name": "CR-AE7 function f s telem v subshellu -> deny", "tool": "Bash", "cmd": "function f ( rm -rf src ); f", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE7 function f() s telem v subshellu -> deny", "tool": "Bash", "cmd": "function f() ( git reset --hard ); f", "expect": "deny" },
+    { "group": "CR-AE", "name": "CR-AE8 kontrola: funkce se jmenem s teckou a dvojteckou -> ticho", "tool": "Bash", "cmd": "lib.helper() { git status; }; ns::f() { echo; }", "expect": "allow" }
   ]
 }
