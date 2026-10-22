@@ -440,6 +440,15 @@
     { "group": "CR-U", "name": "CR-U5 presmerovani na $null.psqlr? pred SQL klientem -> deny", "tool": "Bash", "cmd": "printf 'x' > $null.psqlr?; psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "deny" },
     { "group": "CR-U", "name": "CR-U6 sort -o pred SQL klientem -> deny", "tool": "Bash", "cmd": "sort -o ~/.psqlr? p.txt; psql -d gsd_test_1 -c \"DROP TABLE t\"", "expect": "deny" },
     { "group": "CR-U", "name": "CR-U10 jmeno tabulky s pghost neni promenna prostredi -> ticho", "tool": "Bash", "cmd": "psql -d gsd_test_1 -c \"DROP TABLE pghost_log\"", "expect": "allow" },
-    { "group": "CR-S", "name": "CR-S10 dalsi klient z gate.sqlClients cte PGHOST -> deny", "tool": "Bash", "cmd": "mypg -d gsd_dev -c \"TRUNCATE users\"", "override": "{\"gate\":{\"sqlClients\":[\"psql\",\"pgcli\",\"dropdb\",\"sqlcmd\",\"mypg\"]}}", "env": { "PGHOST": "db.firma.cz" }, "expect": "deny" }
+    { "group": "CR-S", "name": "CR-S10 dalsi klient z gate.sqlClients cte PGHOST -> deny", "tool": "Bash", "cmd": "mypg -d gsd_dev -c \"TRUNCATE users\"", "override": "{\"gate\":{\"sqlClients\":[\"psql\",\"pgcli\",\"dropdb\",\"sqlcmd\",\"mypg\"]}}", "env": { "PGHOST": "db.firma.cz" }, "expect": "deny" },
+    { "group": "MUT", "name": "MUT dva statementy psql s vyvojovou DB (Bash) -> deny se jmenem povoleneho tvaru", "tool": "Bash", "cmd": "psql -d gsd_dev -c \"DROP TABLE a\"; psql -d gsd_dev -c \"DROP TABLE b\"", "expect": "deny", "reasonContains": "povolený je jen samostatný příkaz" },
+    { "group": "MUT", "name": "MUT dva statementy psql s vyvojovou DB (PowerShell) -> deny", "tool": "PowerShell", "cmd": "psql -d gsd_dev -c \"DROP TABLE a\"; psql -d gsd_dev -c \"DROP TABLE b\"", "expect": "deny" },
+    { "group": "MUT", "name": "MUT psql v zavorce jako argument psql (prikaz ve vyrazu) -> deny", "tool": "PowerShell", "cmd": "psql -d gsd_dev -c \"DROP TABLE a\" -v (psql -d gsd_dev -c \"DROP TABLE b\")", "expect": "deny" },
+    { "group": "MUT", "name": "MUT presmerovani <> pred prikazem se strhava -> ticho", "tool": "Bash", "cmd": "<>f.txt git status", "expect": "allow" },
+    { "group": "MUT", "name": "MUT presmerovani <<< pred prikazem se strhava -> ticho", "tool": "Bash", "cmd": "<<<x git status", "expect": "allow" },
+    { "group": "MUT", "name": "MUT ${#x} je promenna, ne komentar -> ticho", "tool": "PowerShell", "cmd": "${#x} = 1; Write-Output 'a; git reset --hard'", "expect": "allow" },
+    { "group": "MUT", "name": "MUT jmeno promenne hostitele v argumentu psql (Bash) -> deny", "tool": "Bash", "cmd": "psql -d gsd_dev -c \"DROP TABLE t\" -v h=$PGHOST", "expect": "deny" },
+    { "group": "MUT", "name": "MUT jmeno promenne hostitele v argumentu psql (PowerShell) -> deny", "tool": "PowerShell", "cmd": "psql -d gsd_dev -c \"DROP TABLE t\" -v h=$env:PGHOST", "expect": "deny" },
+    { "group": "MUT", "name": "MUT komentar v substituci skryva zavorku, prikaz za nim je v substituci -> deny", "tool": "Bash", "cmd": "echo $(echo # ) '\ngit reset --hard\n) #'", "expect": "deny" }
   ]
 }
