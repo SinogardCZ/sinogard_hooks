@@ -10525,6 +10525,420 @@
       "expect": "deny",
       "since": "CR-Y1 cesta k interpretu v uvozovkach (Bash) -> deny",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(rm -rf src) > /dev/null",
+      "expect": "deny",
+      "since": "CR-AD1 subshell s presmerovanim za nim, rm -> deny (dira i v 0.3.0)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard) 2>&1",
+      "expect": "deny",
+      "since": "CR-AD1 subshell s presmerovanim 2>&1, git -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "if (rm -rf src) >/dev/null; then echo; fi",
+      "expect": "deny",
+      "since": "CR-AD1 subshell s presmerovanim za if -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git status) > out.txt 2>&1",
+      "expect": "allow",
+      "since": "CR-AD1 kontrola: neskodny subshell s presmerovanim -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd sub && make)",
+      "expect": "allow",
+      "since": "CR-AD2 kontrola: konec subshellu jednim slovem -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd x; ls)",
+      "expect": "allow",
+      "since": "CR-AD2 kontrola: subshell cd; ls -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "case $1 in\n  a)\n    git status\n    ;;\n  *)\n    echo x\n    ;;\nesac",
+      "expect": "allow",
+      "since": "CR-AD3 kontrola: viceradkovy case, vzor na samostatnem radku -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "case $1 in\n  a)\n    rm -rf src\n    ;;\nesac",
+      "expect": "deny",
+      "since": "CR-AD3 viceradkovy case s destrukci ve vetvi -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "f() ( rm -rf src ); f",
+      "expect": "deny",
+      "since": "CR-AD4 definice funkce s telem v subshellu -> deny (dira i v 0.3.0)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "f() ( git status ); f",
+      "expect": "allow",
+      "since": "CR-AD4 kontrola: definice funkce s neskodnym telem v subshellu -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "if true; then . $x; fi",
+      "expect": "allow",
+      "since": "CR-AD5 tecka za then -> ticho s auditem invoked"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "for f in a; do . $x reset --hard; done",
+      "expect": "deny",
+      "since": "CR-AD5 tecka za do s destruktivnim literalem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "exec \"$@\"",
+      "expect": "allow",
+      "since": "CR-AD7 kontrola: exec \"$@\" -> ticho (hola promenna za obalem)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "nohup $1 x",
+      "expect": "allow",
+      "since": "CR-AD7 kontrola: nohup $1 x -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "/usr/bin/[x]tool --help",
+      "expect": "deny",
+      "since": "CR-AD8 glob [ ] v hlave -> deny, hlaska jmenuje hranatou zavorku"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "f=$1",
+      "expect": "allow",
+      "since": "A179-O12 kontrola: f=$1 -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "dir=$PWD",
+      "expect": "allow",
+      "since": "A179-O12 kontrola: dir=$PWD -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "PATH=\"$PATH:/usr/local/bin\" npm test",
+      "expect": "allow",
+      "since": "A179-O12 kontrola: PATH s promennou v uvozovkach pred npm test -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "out=$TMPDIR/x",
+      "expect": "allow",
+      "since": "A179-O12 kontrola: out=$TMPDIR/x -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "a=${HOME}/x b=\"$@\" git status",
+      "expect": "allow",
+      "since": "A179-O12 kontrola: ${NAME} a $@ v hodnote -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "X=$HOME rm -rf src",
+      "expect": "deny",
+      "since": "A179-O12 promenna v hodnote, hlava rozhoduje: rm -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "x=${A:-$(rm -rf src)}",
+      "expect": "deny",
+      "since": "A179-O12 operator ${A:-$( ... )} v hodnote -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "x=${A:-a b} git status",
+      "expect": "deny",
+      "since": "A179-O12 operator ${A:-...} s mezerou pred prikazem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "x=$A\"b c\" git status",
+      "expect": "deny",
+      "since": "A179-O12 promenna a uvozovka uprostred hodnoty -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "X=$HOME $TOOL ls",
+      "expect": "deny",
+      "since": "A179-O12 promenna za prirazenim v hlave dal deny (O9)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "sudo $1 reset --hard",
+      "expect": "deny",
+      "since": "CR-AE1 pozicni promenna za obalem s destruktivnim literalem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "$1 rm -rf src",
+      "expect": "deny",
+      "since": "CR-AE3 pozicni promenna jako hlava s destruktivnim literalem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "\"$@\" --version",
+      "expect": "allow",
+      "since": "CR-AE3 kontrola: \"$@\" jako hlava -> ticho s auditem variable"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(rm -rf src) > \"$LOG\"",
+      "expect": "deny",
+      "since": "CR-AE2 subshell s presmerovanim do promenne -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git status) 2>$ERR",
+      "expect": "deny",
+      "since": "CR-AE2 subshell s neproste presmerovanym ocasem, neskodny -> deny (nerozebiratelne)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd repo && git reset --hard)",
+      "expect": "allow",
+      "since": "README mez 27 (A179-O14): posledni prikaz rozdeleneho subshellu, git reset --hard -> ticho shodne s 0.3.0 (oprava 0.3.2)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd repo; git branch -D x)",
+      "expect": "deny",
+      "since": "kontrola (A179-O14): posledni prikaz rozdeleneho subshellu, branch -D jako samostatny token -> deny i bez orezani )"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo $(date)",
+      "expect": "allow",
+      "since": "kontrola: substituce na konci argumentu -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard)",
+      "expect": "deny",
+      "since": "CR-AE5 cely subshell jednim slovem se rozebere -> deny pro git"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "case $1 in\n  *)\n    echo x\n    ;;\nesac",
+      "expect": "allow",
+      "since": "CR-AE5 kontrola: vzor * na samostatnem radku -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "if true; then source $x reset --hard; fi",
+      "expect": "deny",
+      "since": "CR-AE6 source promenne za then s destruktivnim literalem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "source venv/bin/activate && python -V",
+      "expect": "allow",
+      "since": "CR-AE6 kontrola: source souboru -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "function f ( rm -rf src ); f",
+      "expect": "deny",
+      "since": "CR-AE7 function f s telem v subshellu -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "function f() ( git reset --hard ); f",
+      "expect": "deny",
+      "since": "CR-AE7 function f() s telem v subshellu -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "lib.helper() { git status; }; ns::f() { echo; }",
+      "expect": "allow",
+      "since": "CR-AE8 kontrola: funkce se jmenem s teckou a dvojteckou -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(rm -rf src; ls)",
+      "expect": "allow",
+      "since": "README mez 27 (A179-O14): prvni prikaz rozdeleneho subshellu, rm -> ticho shodne s 0.3.0 (oprava 0.3.2)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard && echo ok)",
+      "expect": "allow",
+      "since": "README mez 27 (A179-O14): prvni prikaz rozdeleneho subshellu za &&, git reset --hard -> ticho shodne s 0.3.0"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "( rm -rf src; ls )",
+      "expect": "allow",
+      "since": "README mez 27 (A179-O14): prvni prikaz rozdeleneho subshellu s mezerou za ( -> ticho shodne s 0.3.0"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd x; dropdb gsd_prod) < /dev/null",
+      "expect": "deny",
+      "since": "kontrola (A179-O14): posledni prikaz rozdeleneho subshellu s presmerovanim, dropdb s argumentem -> deny i bez orezani )"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd x; make) > build.log",
+      "expect": "allow",
+      "since": "kontrola: konec rozdeleneho subshellu jednim slovem s presmerovanim -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd db && psql) < drop.sql",
+      "expect": "allow",
+      "since": "README mez 27 (A179-O14): klient SQL jako posledni slovo rozdeleneho subshellu se vstupem ze souboru -> ticho (cte se jako vetev case, 0.3.0 taky ticho)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "source $VIRTUAL_ENV/bin/activate",
+      "expect": "allow",
+      "since": "CR-AF4 kontrola: source cesty s promennou -> ticho s auditem invoked"
+    },
+    {
+      "tool": "Bash",
+      "cmd": ". \"$HOME/.cargo/env\" && cargo -V",
+      "expect": "allow",
+      "since": "CR-AF4 kontrola: tecka s cestou s promennou v uvozovkach -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "source $DIR/x.sh git reset --hard",
+      "expect": "deny",
+      "since": "CR-AF4 source cesty s promennou a destruktivnim literalem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "find src \\( -name a -o -name b \\) -print",
+      "expect": "allow",
+      "since": "kontrola: escapovane zavorky find -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "SOURCE $x",
+      "expect": "allow",
+      "since": "CR-AF7 kontrola: SOURCE velkymi pismeny neni tecka -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "SOURCE $x reset --hard",
+      "expect": "allow",
+      "since": "CR-AG6 SOURCE velkymi pismeny s destruktivnim literalem neni invoked -> ticho (rozlisuje AF7)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd \"$(git rev-parse --show-toplevel)\" && make)",
+      "expect": "allow",
+      "since": "CR-AG1 kontrola: subshell s $( ... ) v prvnim prikazu -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(echo \"done :)\"; ls)",
+      "expect": "allow",
+      "since": "A179-O14 kontrola: uvozovka s ) v prvnim prikazu rozdeleneho subshellu -> ticho (CR-AH2)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(rm -rf \"$(pwd)/x\") > log.txt",
+      "expect": "deny",
+      "since": "A179-O14 cely subshell s $( ... ) uvnitr uvozovek a presmerovanim -> deny pro rm"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard \")\") 2>&1",
+      "expect": "deny",
+      "since": "A179-O14 cely subshell s ) v uvozovkach a presmerovanim, git reset --hard -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(psql) < drop.sql",
+      "expect": "allow",
+      "since": "CR-AI1 cely subshell jednim slovem s presmerovanim vstupu -> klient SQL rozebran (audit sqlFrom)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(/usr/bin/ps?l) < drop.sql",
+      "expect": "deny",
+      "since": "CR-AI1 cely subshell jednim slovem s globem a presmerovanim -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd x; (git status) 2>/dev/null)",
+      "expect": "deny",
+      "since": "cena CR-AE2/CR-AJ (kolo 20): vnoreny subshell s presmerovanim na konci rozdeleneho -> deny (nerozebiratelne)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git status) > out.txt # log it",
+      "expect": "allow",
+      "since": "CR-AI4 kontrola: cely subshell s presmerovanim a komentarem -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(rm -rf src) 2>&1 # build",
+      "expect": "deny",
+      "since": "CR-AI4 cely subshell s presmerovanim a komentarem, rm -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(echo \"$(printf \")\")\") > log.txt",
+      "expect": "deny",
+      "since": "cena CR-AJ5 (0.3.2): vnorene uvozovky v $( ) uvnitr uvozovek celeho subshellu -> deny (Find-CloseParen je nevnoruje)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(rm -rf src) > \"$(x)\"",
+      "expect": "deny",
+      "since": "CR-AI5 presmerovani do substituce za celym subshellem, rm -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard) > >(tee log)",
+      "expect": "deny",
+      "since": "CR-AJ1 cely subshell s procesni substituci za presmerovanim, git reset --hard -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard) 2>$(mktemp)",
+      "expect": "deny",
+      "since": "CR-AJ1 cely subshell s presmerovanim do substituce, git reset --hard -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard) > >(tee log) 2>&1",
+      "expect": "deny",
+      "since": "CR-AJ2 procesni substituce a dalsi presmerovani, git reset --hard -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(git reset --hard) > \"$LOG\" # hotovo :)",
+      "expect": "deny",
+      "since": "CR-AJ3 neproste presmerovani a komentar s ) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "case $x in\n  (*) > /dev/null ;;\nesac",
+      "expect": "deny",
+      "since": "cena CR-AI1 (kolo 19; CR-AJ4 fail-closed): vetev case (glob) s telem jen z presmerovani -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "((git reset --hard) ) 2>&1",
+      "expect": "allow",
+      "since": "README mez 27 (CR-AK2, dira 0.3.0): vnoreny subshell ((...) ) s presmerovanim -> ticho (oprava 0.3.2)"
     }
   ]
 }
