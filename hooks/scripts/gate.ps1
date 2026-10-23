@@ -2399,26 +2399,68 @@ $script:SshValueLetters = 'BbcDEeFIiJLlmOoPpQRSWw'
 # CR-AM8 (/code-review nad c54a843): `-cert` (PuTTY 0.78+).
 $script:PlinkValueFlags = '^-(P|l|pw|pwfile|i|cert|m|L|R|D|hostkey|proxycmd|sercfg|sessionlog|sshlog|sshrawlog|load|nc|loghost)$'
 
+# CR-AN1 (/code-review nad 824775e): Leaf.Args uz uvozovky nenese - `ssh host '2>/dev/null rm -rf x'` vypadalo jako
+# presmerovani a prikaz pro cizi stroj zmizel. Presmerovani je jen slovo, ktere v Leaf.Raw stoji MIMO uvozovky: znaky
+# `<`, `>`, `&` v uvozovkach a za escape se tu maskuji (`_`), deleni na slova je tymz Split-Arguments.
+function Get-MaskedRedirectWords([string]$Raw) {
+    $esc = Get-ScannerEscape
+    $sb = New-Object System.Text.StringBuilder
+    $inSingle = $false
+    $inDouble = $false
+    for ($i = 0; $i -lt $Raw.Length; $i++) {
+        $c = $Raw[$i]
+        $quoted = ($inSingle -or $inDouble)
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false; $quoted = $false } }
+        elseif ($c -eq $esc -and $i + 1 -lt $Raw.Length) {
+            [void]$sb.Append($c); $i++; $c = $Raw[$i]; $quoted = $true
+        }
+        elseif ($inDouble) { if ($c -eq '"') { $inDouble = $false; $quoted = $false } }
+        elseif ($c -eq "'") { $inSingle = $true }
+        elseif ($c -eq '"') { $inDouble = $true }
+        if ($quoted -and '<>&'.IndexOf($c) -ge 0) { $c = '_' }
+        [void]$sb.Append($c)
+    }
+    # Split-Arguments vraci `,@(...)` - dalsi `@()` by pole zabalil jeste jednou (viz Split-UnquotedCore).
+    $words = Split-Arguments $sb.ToString()
+    return ,$words
+}
+
+# Slovo s presmerovanim: `<x`, `2>/dev/null`, `*>log` (PowerShell, CR-AN5), slepene za slovem `host<cmds.sh` (CR-AN2).
+$script:RedirectWordPattern = '^(.*?)(\d*|\*)(<>|<|>>|>\||>|&>>|&>)(.*)$'
+
 # CR-AM10: JEDEN rozbor argumentu ssh / plink - pozicni argumenty i volby s hodnotou (dve kopie by se rozesly).
-# Vraci @{ Positional = [string[]]; Options = [@{ Name; Value }] } (ssh: Name = pismeno volby; plink: jmeno bez `-`).
-function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh') {
+# Vraci @{ Positional = [string[]]; Options = [@{ Name; Value }]; StdinFile } (ssh: Name = pismeno volby; plink: jmeno bez `-`).
+function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh', [string]$Raw = '') {
     $pos = New-Object System.Collections.ArrayList
     $opts = New-Object System.Collections.ArrayList
     $stdinFile = $false
     $plink = ($Exe -ieq 'plink')
+    # CR-AM7: vstup ze souboru (ne `/dev/null`, `nul`, `$null`) nese prikazy pro vzdaleny shell. CR-AN2: hleda se v celem
+    # Leaf.Raw - i slepeny (`ssh host<cmds.sh`) a pred prikazem (`< cmds.sh ssh host`).
+    $masked = Get-MaskedRedirectWords $Raw
+    $unquoted = New-Object System.Collections.Generic.List[string]
+    for ($w = 0; $w -lt $masked.Count; $w++) {
+        $mw = [string]$masked[$w]
+        $rd = [regex]::Match($mw, $script:RedirectWordPattern)
+        if (-not $rd.Success) { continue }
+        $unquoted.Add($mw)
+        $target = $rd.Groups[4].Value
+        if ($target -eq '' -and $w + 1 -lt $masked.Count) { $target = [string]$masked[$w + 1] }
+        if ($rd.Groups[3].Value.StartsWith('<') -and ($rd.Groups[2].Value -eq '' -or $rd.Groups[2].Value -eq '0') -and
+            $target -notmatch '^(/dev/null|nul|\$null)$' -and -not $target.StartsWith('&')) { $stdinFile = $true }
+    }
     $i = 0
     while ($i -lt $Argv.Count) {
         $t = [string]$Argv[$i]
-        # CR-AM7: presmerovani neni pozicni argument (`ssh host < /dev/null` = host, ne "host + prikaz"). Vstup ze souboru
-        # (ne `/dev/null`, `nul`, `$null`) nese prikazy pro vzdaleny shell.
-        $rd = [regex]::Match($t, '^(\d*)(<>|<|>>|>\||>|&>>|&>)(.*)$')
-        if ($rd.Success) {
-            $target = $rd.Groups[3].Value
-            $step = 1
-            if ($target -eq '') { $target = if ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }; $step = 2 }
-            if ($rd.Groups[2].Value.StartsWith('<') -and ($rd.Groups[1].Value -eq '' -or $rd.Groups[1].Value -eq '0') -and
-                $target -notmatch '^(/dev/null|nul|\$null)$' -and -not $target.StartsWith('&')) { $stdinFile = $true }
-            $i += $step
+        # CR-AM7: presmerovani neni pozicni argument (`ssh host < /dev/null` = host, ne "host + prikaz") - ale jen slovo,
+        # ktere v Raw stoji mimo uvozovky (CR-AN1; multimnozina - tentyz text muze stat jednou v uvozovkach a jednou mimo).
+        $at = if ($t -match '[<>]') { $unquoted.IndexOf($t) } else { -1 }
+        if ($at -ge 0) {
+            $unquoted.RemoveAt($at)
+            $rd = [regex]::Match($t, $script:RedirectWordPattern)
+            $i += $(if ($rd.Groups[4].Value -eq '') { 2 } else { 1 })
+            $before = $rd.Groups[1].Value
+            if ($before -ne '' -and -not $before.StartsWith('-')) { [void]$pos.Add($before) }
             continue
         }
         if ($plink) {
@@ -2453,11 +2495,15 @@ function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh') {
 # stroji), CR-AM2: `ssh -o ProxyCommand|LocalCommand|KnownHostsCommand=...` a `plink -proxycmd` ho spusti na TOMTO
 # stroji mimo vsechna pravidla brany. Do teto opravy ticho bez auditu (dira 0.3.0). Hodnota `none` prikaz nenese.
 # `-F <konfigurace>` a `~/.ssh/config` ho nest mohou taky, ale soubor hook necte - README mez 28.
+# CR-AN10 (/code-review nad 824775e): `-o PKCS11Provider|SecurityKeyProvider=<knihovna>` a `-I <knihovna>` nactou do ssh
+# cizi kod na TOMTO stroji - tataz trida jako ProxyCommand.
 function Test-RemoteShellOptionCommand($Parsed, [string]$Exe = 'ssh') {
     foreach ($o in @($Parsed.Options)) {
         if ($Exe -ieq 'plink') {
             if ([string]$o.Name -ceq 'm' -or [string]$o.Name -ceq 'proxycmd') { return $true }
-        } elseif ([string]$o.Name -ceq 'o' -and [string]$o.Value -match '(?i)^\s*(RemoteCommand|ProxyCommand|LocalCommand|KnownHostsCommand)\s*(=\s*|\s+)(?!none\s*$)\S') {
+        } elseif ([string]$o.Name -ceq 'I') {
+            return $true
+        } elseif ([string]$o.Name -ceq 'o' -and [string]$o.Value -match '(?i)^\s*(RemoteCommand|ProxyCommand|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider)\s*(=\s*|\s+)(?!(none|internal)\s*$)\S') {
             return $true
         }
     }
@@ -2709,7 +2755,7 @@ function Test-Leaf($Leaf, $Config) {
     if ($Leaf.Kind -eq 'leaf') {
         $remote = @(Get-Field $gate 'remoteShells' @('ssh', 'plink'))
         if ($remote -ccontains ([string]$Leaf.Exe).ToLowerInvariant()) {
-            $parsed = Get-RemoteShellArgs (@(Get-LeafField $Leaf 'Args' @())) ([string]$Leaf.Exe)
+            $parsed = Get-RemoteShellArgs (@(Get-LeafField $Leaf 'Args' @())) ([string]$Leaf.Exe) ([string]$Leaf.Raw)
             if (@($parsed.Positional).Count -ge 2 -or (Test-RemoteShellOptionCommand $parsed ([string]$Leaf.Exe)) -or
                 [bool]$parsed.StdinFile) {
                 $text = [string]$Leaf.Raw

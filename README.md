@@ -813,19 +813,25 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
 28. **Příkaz na cizím stroji a mazání větve — co pravidla 0.4.0 vidí a co ne** (GSD TASK-179, `A179-O17`, `A179-O18`,
     `A179-O20`). `ssh` / `plink` s příkazem (pozičním, `-o RemoteCommand=…`, `plink -m soubor`, heredoc, here-string,
-    vstup ze souboru `< cmds.sh`) i s místním příkazem ve volbě (`-o ProxyCommand|LocalCommand|KnownHostsCommand=…`,
-    `plink -proxycmd`) = `deny`; `ssh host`, `ssh -T`, volby s hodnotou (`-p`, `-O exit`, shluk `-vp 2222`, `-J`,
-    `-o ProxyJump=`) a přesměrování výstupu mlčí. **Meze:** `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
+    vstup ze souboru `< cmds.sh` i slepený `host<cmds.sh` nebo před příkazem) i s místním příkazem nebo knihovnou ve volbě
+    (`-o ProxyCommand|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider=…`, `-I`, `plink -proxycmd`)
+    = `deny`; `ssh host`, `ssh -T`, volby s hodnotou (`-p`, `-O exit`, shluk `-vp 2222`, `-J`, `-o ProxyJump=`)
+    a přesměrování výstupu (i PowerShell `*>`) mlčí. Přesměrování je jen slovo mimo uvozovky — `ssh host '2>/dev/null rm
+    -rf x'` je příkaz. **Meze:** `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
     `RemoteCommand` nebo `ProxyCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s příkazem
     v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci); **roura do ssh bez příkazu** (`cat cmds.sh | ssh
     host`) mlčí — list ssh o rouře nic neví, oprava s tokenizérem 0.4.1 (GSD TASK-190). Mazání větve (`git branch -d|-D`,
     `--delete` i zkratky `--d…`) = `deny`. **Cena** vzoru z 0.3.0: pomlčkové slovo s `d` kdekoli za `git branch`, i jako
     hodnota volby (`git branch --sort -committerdate`), je `deny` — náhrada `--sort=-committerdate`.
     Zástupná skupina v cestě příkazu (`[…]`, v Bashi `{a,b}`) se u hooku `secrets` rozvine na kandidáty (nástroje nad
-    souborem — Read, Edit, Write — nesou doslovnou cestu a nerozvíjí se). Co rozvinout nejde (negace `[!x]`, třída znaků,
-    řada s krokem, víc než 64 kandidátů), se posoudí jako nadmnožina (skupina = `*`): míří-li na chráněnou cestu nebo sedne
-    na chráněné jméno, `deny`; jinak ticho. **Mez:** třída `[[:alpha:]]` se k pravidlu cesty nedostane (příčina v rozboru
-    tokenu nezjištěna) a mlčí. Převod skupin na regex globu = 0.4.1 (GSD TASK-190).
+    souborem — Read, Edit, Write — nesou doslovnou cestu a nerozvíjí se). Negace `[!x]` a třídy `[[:digit:]]` se rozvinou
+    nad abecedou jmen souborů (`a–z`, `0–9`, `.`, `_`, `-`; znak mimo ni negace nerozvine). Co rozvinout nejde (řada
+    s krokem, nulami doplněná řada, víc než 64 kandidátů), se posoudí jako nadmnožina (skupina = `*`): míří-li na chráněnou
+    cestu nebo sedne na chráněné jméno, `deny`; jinak ticho. **Cena:** nadmnožina sedící na chráněné jméno je `deny`, i když
+    stejný vzor s `*` dává jen audit `wildcardName` (`cat docs/[a-z][a-z]*.toml` ~ `secrets.toml`). **Meze:** nadmnožina
+    nevidí příponu klíče uvnitř jména — `cat key.p[a-z][a-z]` (676 kandidátů) mlčí stejně jako `cat key.p??` (mez 9);
+    třída `[[:alpha:]]` se k pravidlu cesty nedostane (příčina v rozboru tokenu nezjištěna) a mlčí. Převod skupin na regex
+    globu = 0.4.1 (GSD TASK-190).
 
 ---
 

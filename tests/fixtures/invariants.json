@@ -11455,6 +11455,155 @@
       "expect": "allow",
       "since": "CR-AM1 kontrola: kandidat x.env neni chraneny (jako doslovne x.env) -> ticho",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host '2>/dev/null rm -rf /srv/data'",
+      "expect": "deny",
+      "since": "CR-AN1 prikaz v uvozovkach zacinajici 2> neni presmerovani -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host '> /srv/db/data.sql'",
+      "expect": "deny",
+      "since": "CR-AN1 prikaz v uvozovkach zacinajici > -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "ssh build-host '2>/dev/null rm -rf /srv/data'",
+      "expect": "deny",
+      "since": "CR-AN1 PowerShell: prikaz v uvozovkach zacinajici 2> -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host 2>/dev/null",
+      "expect": "allow",
+      "since": "CR-AN1 kontrola: skutecne presmerovani 2>/dev/null neni prikaz -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host<cleanup.sh",
+      "expect": "deny",
+      "since": "CR-AN2 vstup ze souboru slepeny k hostu -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "< cleanup.sh ssh build-host",
+      "expect": "deny",
+      "since": "CR-AN2 vstup ze souboru pred prikazem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host</dev/null",
+      "expect": "allow",
+      "since": "CR-AN2 kontrola: slepeny vstup z /dev/null -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "ssh build-host *> session.log",
+      "expect": "allow",
+      "since": "CR-AN5 kontrola: PowerShell *> do souboru neni prikaz -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "ssh build-host *>$null",
+      "expect": "allow",
+      "since": "CR-AN5 kontrola: PowerShell *>$null neni prikaz -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -o PKCS11Provider=/tmp/x.so build-host",
+      "expect": "deny",
+      "since": "CR-AN10 ssh -o PKCS11Provider (cizi knihovna na tomto stroji) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -I /tmp/x.so build-host",
+      "expect": "deny",
+      "since": "CR-AN10 ssh -I knihovna -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -o SecurityKeyProvider=internal build-host",
+      "expect": "allow",
+      "since": "CR-AN10 kontrola: SecurityKeyProvider=internal -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat deploy.pe[!x]",
+      "expect": "deny",
+      "since": "CR-AN3 negace v pripone: kandidat deploy.pem -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat app.secrets.jso[!x]",
+      "expect": "deny",
+      "since": "CR-AN3 negace na konci .secrets.json -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat deploy.pe[!m]",
+      "expect": "allow",
+      "since": "CR-AN3 kontrola: negace, ktera chraneny znak vylouci -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat key.p[a-z][a-z]",
+      "expect": "allow",
+      "since": "CR-AN3 mez: vic nez 64 kandidatu = nadmnozina = meze * (README 9, 28) -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat deploy/[!_][!_]*config",
+      "expect": "allow",
+      "since": "CR-AN4 kontrola: skupina vedle * se neslije do ** -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env.{a..z}{0..1}",
+      "expect": "allow",
+      "since": "CR-AN6 rada .env.x: jeden audit sede zony",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env.{example,sample}",
+      "expect": "allow",
+      "since": "CR-AN7 kontrola: alternativy jen povolenych .env.example/.sample bez auditu",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat {..}",
+      "expect": "allow",
+      "since": "CR-AN8 kontrola: {..} Bash necha doslova -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat {a..}",
+      "expect": "allow",
+      "since": "CR-AN8 kontrola: {a..} neni rada -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .github/workflows/[!_]*.yml",
+      "expect": "allow",
+      "since": "CR-AN9 kontrola: negace + * na .yml = jako *.yml (ticho + audit wildcardName)",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat docs/[a-z][a-z]*.toml",
+      "expect": "deny",
+      "since": "CR-AN9 cena: vic nez 64 kandidatu a nadmnozina sedne na chranene jmeno -> deny (fail-closed)",
+      "hook": "secrets"
     }
   ]
 }

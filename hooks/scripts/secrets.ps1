@@ -167,9 +167,18 @@ $script:CwdUncertain = $false
 # A179-O20 / CR-AL1 (Amber 2026-10-23): shell rozvine i `[...]` a v Bashi `{a,b}`, nejen `*` a `?` - `cat .en[v]`,
 # `cat ~/.aws/credential[s]`, `cat {.env,x}` do teto opravy prosly tichem (dira 0.3.0). Skupina se ROZVINE na doslovne
 # kandidaty (mnozina znaku, rozsah `a-z`, alternativy, ciselna a znakova rada `{1..3}`) a kazdy kandidat jde pravidlem cesty;
-# trefi-li nektery chraneny soubor, je cela cesta glob mirici na tajemstvi (`wildcardPath`, deny). Co rozvinout nejde
-# (negace `[!x]` / `[^x]`, trida `[[:alpha:]]`, `/` ve skupine) nebo by dalo vic nez $Limit kandidatu, = $null a volajici
-# rozhodne fail-closed (`wildcardPath`). Prevod skupin na regex globu (bez vyctu) = verze 0.4.1 (GSD TASK-190).
+# trefi-li nektery chraneny soubor, je cela cesta glob mirici na tajemstvi (`wildcardPath`, deny). Negace a tridy se
+# rozviji nad abecedou jmen souboru (CR-AN3). Co rozvinout nejde (`/` ve skupine, neznama trida, rada s krokem, nulami
+# doplnena rada) nebo by dalo vic nez $Limit kandidatu, = $null a volajici posoudi nadmnozinu (CR-AM5). Prevod skupin
+# na regex globu (bez vyctu) = verze 0.4.1 (GSD TASK-190).
+# Abeceda je mez: znak mimo ni (velke pismeno po normalizaci cesty neni, mezera, diakritika) negace nerozvine.
+$script:GlobAlphabet = 'abcdefghijklmnopqrstuvwxyz0123456789._-'
+$script:GlobClassChars = @{
+    alpha = 'abcdefghijklmnopqrstuvwxyz'; lower = 'abcdefghijklmnopqrstuvwxyz'; upper = 'abcdefghijklmnopqrstuvwxyz'
+    digit = '0123456789'; alnum = 'abcdefghijklmnopqrstuvwxyz0123456789'; xdigit = '0123456789abcdef'
+    punct = '._-'; print = 'abcdefghijklmnopqrstuvwxyz0123456789._-'; graph = 'abcdefghijklmnopqrstuvwxyz0123456789._-'
+    space = ''; blank = ''; cntrl = ''
+}
 function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
     $acc = New-Object System.Collections.Generic.List[string]
     $acc.Add('')
@@ -179,23 +188,43 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
         $alts = $null
         $next = $i + 1
         if ($ch -eq '[') {
+            # CR-AN3 (/code-review nad 824775e): negace `[!x]` / `[^x]` a trida `[[:alpha:]]` se rozviji nad abecedou jmen
+            # souboru ($script:GlobAlphabet) - `cat deploy.pe[!x]` da kandidata `deploy.pem` (do teto opravy nadmnozina
+            # `deploy.pe*` = ticho). Prazdna mnozina = Bash necha token doslova (zadny kandidat).
             $j = $i + 1
-            if ($j -lt $Path.Length -and ($Path[$j] -eq '!' -or $Path[$j] -eq '^')) { return $null }
-            if ($j -lt $Path.Length -and $Path[$j] -eq ']') { $j++ }
-            $close = $Path.IndexOf(']', $j)
-            if ($close -gt $i + 1) {
-                $body = $Path.Substring($i + 1, $close - $i - 1)
-                if ($body.Contains('[:') -or $body.Contains('/')) { return $null }
-                $set = New-Object System.Collections.Generic.List[string]
-                for ($k = 0; $k -lt $body.Length; $k++) {
-                    if ($k + 2 -lt $body.Length -and $body[$k + 1] -eq '-') {
-                        $a = [int]$body[$k]; $b = [int]$body[$k + 2]
-                        if ($b -lt $a -or ($b - $a) -gt $Limit) { return $null }
-                        for ($c = $a; $c -le $b; $c++) { $s = [string][char]$c; if (-not $set.Contains($s)) { $set.Add($s) } }
-                        $k += 2
-                    } else {
-                        $s = [string]$body[$k]; if (-not $set.Contains($s)) { $set.Add($s) }
-                    }
+            $neg = $false
+            if ($j -lt $Path.Length -and ($Path[$j] -eq '!' -or $Path[$j] -eq '^')) { $neg = $true; $j++ }
+            $set = New-Object System.Collections.Generic.List[string]
+            $close = -1
+            $k = $j
+            while ($k -lt $Path.Length) {
+                $c0 = $Path[$k]
+                if ($c0 -eq ']' -and $k -gt $j) { $close = $k; break }
+                if ($c0 -eq '/') { return $null }
+                if ($c0 -eq '[' -and $k + 1 -lt $Path.Length -and $Path[$k + 1] -eq ':') {
+                    $ce = $Path.IndexOf(':]', $k + 2)
+                    if ($ce -lt 0) { return $null }
+                    $cls = $script:GlobClassChars[$Path.Substring($k + 2, $ce - $k - 2)]
+                    if ($null -eq $cls) { return $null }
+                    foreach ($x in $cls.ToCharArray()) { $s = [string]$x; if (-not $set.Contains($s)) { $set.Add($s) } }
+                    $k = $ce + 2
+                    continue
+                }
+                if ($k + 2 -lt $Path.Length -and $Path[$k + 1] -eq '-' -and $Path[$k + 2] -ne ']') {
+                    $a = [int]$c0; $b = [int]$Path[$k + 2]
+                    if ($b -lt $a -or ($b - $a) -gt $Limit) { return $null }
+                    for ($c = $a; $c -le $b; $c++) { $s = ([string][char]$c).ToLowerInvariant(); if (-not $set.Contains($s)) { $set.Add($s) } }
+                    $k += 3
+                    continue
+                }
+                $s = ([string]$c0).ToLowerInvariant(); if (-not $set.Contains($s)) { $set.Add($s) }
+                $k++
+            }
+            if ($close -gt 0) {
+                if ($neg) {
+                    $comp = New-Object System.Collections.Generic.List[string]
+                    foreach ($x in $script:GlobAlphabet.ToCharArray()) { if (-not $set.Contains([string]$x)) { $comp.Add([string]$x) } }
+                    $set = $comp
                 }
                 $alts = @($set)
                 $next = $close + 1
@@ -232,8 +261,9 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
                     $a = [int][char]$Matches[1]; $b = [int][char]$Matches[2]
                     $step = if ($b -ge $a) { 1 } else { -1 }
                     for ($c = $a; $c -ne $b + $step; $c += $step) { $list.Add([string][char]$c) }
-                } elseif ($body.Contains('..')) {
-                    # CR-AM3: rada s krokem (`{a..z..2}`) nebo jinym tvarem - Bash ji rozvine, my ne = nadmnozina (fail-closed).
+                } elseif ($body -match '^(-?\d+\.\.-?\d+|[a-z]\.\.[a-z])\.\.-?\d+$') {
+                    # CR-AM3: rada s krokem (`{a..z..2}`) - Bash ji rozvine, my ne = nadmnozina (fail-closed).
+                    # CR-AN8: jiny text s `..` (`{..}`, `{a..}`, `{1..x}`) rada neni - Bash ho necha doslova.
                     return $null
                 }
                 if ($list.Count -gt 0) { $alts = @($list); $next = $close + 1 }
@@ -254,7 +284,8 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
 }
 
 # CR-AM5: nadmnozina skupin - kazda `[...]` (a v Bashi `{...}`, i vnorena) = jeden `*` v ramci segmentu. `**` zadane
-# uzivatelem zustava (znacka [char]2 zabrani slit nove `*` s jeho `**`).
+# uzivatelem zustava. CR-AN4 (/code-review nad 824775e): skupina vedle `*` uzivatele se s nim slije do JEDNE `*`
+# (`deploy/[!_]*config` -> `deploy/*config`, ne `**`, ktera prekroci `/`).
 function ConvertTo-GroupSupersetGlob([string]$Path, [bool]$Braces) {
     $mark = [string][char]2
     $s = [regex]::Replace($Path, '\[[!^]?(\[:[a-z]+:\]|[^\]/])*\]', $mark)
@@ -262,8 +293,7 @@ function ConvertTo-GroupSupersetGlob([string]$Path, [bool]$Braces) {
         $prev = ''
         while ($prev -ne $s) { $prev = $s; $s = [regex]::Replace($s, '\{[^{}]*\}', $mark) }
     }
-    $s = [regex]::Replace($s, ([regex]::Escape($mark) + '+'), $mark)
-    return $s.Replace($mark, '*')
+    return [regex]::Replace($s, ('\*?' + [regex]::Escape($mark) + '+\*?'), '*')
 }
 
 function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true, [bool]$ExpandGroups = $true) {
@@ -294,7 +324,12 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
             }
         } else {
             $grey = $null
+            $envDeny = @(Get-Field (Get-Field $sec 'envFile') 'denyNames' @())
             foreach ($cand in $cands) {
+                # CR-AN6: po prvnim kandidatovi sede zony dalsi `.env.<x>` bez `denyNames` nic noveho nerekne - bez
+                # `git ls-files` na kazdeho (`.env.{a..z}{0..1}` = 52 procesu git).
+                $cb = Get-BaseName $cand
+                if ($null -ne $grey -and $cb -match '^\.env($|\.)' -and -not (Test-AnyPattern $cb $envDeny)) { continue }
                 $v = Test-SecretPath $cand $IsWrite $Config $true $false
                 if ($null -eq $v) { continue }
                 if ($v.Decision -eq 'deny') {
@@ -305,6 +340,9 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
             }
             if ($null -ne $grey) { return $grey }
         }
+        # CR-AN7: `{...}` Bash rozvine vzdy (i bez souboru) - doslovny text bez `[` neexistuje a posuzovat se nema
+        # (`cat .env.{example,sample}` = falesny audit `envFileUntracked`). Nesedici `[...]` Bash necha doslova (CR-AM1).
+        if (-not $norm.Contains('[')) { return $null }
     }
 
     # Nalez Metis 21: `Get-Content .en?` shell rozvine na `.env`, ale kontrola vidi
