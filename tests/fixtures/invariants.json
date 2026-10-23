@@ -11802,6 +11802,42 @@
       "cmd": "plink -load build-sess",
       "expect": "allow",
       "since": "A179-O23 N1 kontrola: plink -load relace bez prikazu -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "< cmds.sh ssh build-host; echo '<'",
+      "expect": "deny",
+      "since": "CR-AQ1 vstup ze souboru pred prikazem, tentyz text v uvozovkach jinde (5c43cf2 deny) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host<cmds.sh; echo 'build-host<cmds.sh'",
+      "expect": "deny",
+      "since": "CR-AQ1 vstup ze souboru slepeny s hostem, tentyz text v uvozovkach jinde -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo hi >/a; bash -c \"ssh build-host '>/a'\"",
+      "expect": "deny",
+      "since": "CR-AQ2 presmerovani jineho prikazu nezameni argument ssh ve vnorenem shellu (0.3.0 ask) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh a 2>/dev/null; bash -c \"echo 2>/dev/null\"",
+      "expect": "deny",
+      "since": "CR-AQ2 cena: presmerovani je casti textu v uvozovkach = nejasne -> deny i pro ssh bez prikazu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"< cmds.sh ssh build-host\"",
+      "expect": "allow",
+      "since": "CR-AQ3 mez README 28: vstup ze souboru pred ssh ve vnorenem shellu se nevidi (0.3.0 tez) -> ticho (oprava 0.4.1)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "SSH_SK_PROVIDER=internal; ssh build-host",
+      "expect": "deny",
+      "since": "CR-AQ6 mez README 28: SSH_SK_PROVIDER=internal se strednikem -> deny (falesny, oprava 0.4.1)"
     }
   ]
 }

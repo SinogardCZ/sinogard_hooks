@@ -2458,10 +2458,23 @@ function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh', [string]$Raw = '') {
     # CR-AP1 (/code-review nad 5c43cf2): cely prikaz nese slova VSECH prikazu - `echo x >/a; ssh host '>/a'` dalo slovo
     # `>/a` mimo uvozovky a quoted argument ssh se s nim zamenil (ticho). Text, ktery v prikazu stoji i v uvozovkach,
     # je nejasny -> presmerovanim neni (fail-closed; cena: `ssh a 2>/dev/null; ssh b '2>/dev/null'` = deny i pro `a`).
-    foreach ($q in (Get-UnquotedRedirectWords $source -InQuotes)) { while ($unquoted.Remove($q)) { } }
+    # CR-AQ2 (/code-review nad 5c43cf2..01de4a3): vnoreny shell (`echo x >/a; bash -c "ssh host '>/a'"`) da v uvozovkach
+    # jedno slovo s celym vnitrnim prikazem - nejasne je proto slovo, ktere je CASTI textu v uvozovkach (0.3.0 ask, ticho;
+    # cena: `ssh a 2>/dev/null; bash -c "x 2>/dev/null"` = deny i pro `a`).
+    # CR-AQ1: vstup ze souboru se hleda ve slovech PRED odebranim nejasnych - odebrane slovo pred prikazem nebo slepene
+    # s hostem (`< cmds.sh ssh host; echo '<'`) pozicnim argumentem nebylo a vstup ze souboru by zmizel (ticho).
+    $stdinWords = New-Object System.Collections.Generic.List[string] (,$unquoted)
+    $inQuotes = Get-UnquotedRedirectWords $source -InQuotes
+    $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($u in $unquoted) {
+        $amb = $false
+        foreach ($q in $inQuotes) { if ($q.Contains($u)) { $amb = $true; break } }
+        if (-not $amb) { $kept.Add($u) }
+    }
+    $unquoted = $kept
     # CR-AM7: vstup ze souboru (ne `/dev/null`, `nul`, `$null`) nese prikazy pro vzdaleny shell. CR-AN2: hleda se v celem
     # Raw listu - i slepeny (`ssh host<cmds.sh`) a pred prikazem (`< cmds.sh ssh host`).
-    $pool = New-Object System.Collections.Generic.List[string] (,$unquoted)
+    $pool = New-Object System.Collections.Generic.List[string] (,$stdinWords)
     $rawWords = Split-Arguments $Raw
     for ($w = 0; $w -lt $rawWords.Count; $w++) {
         $rw = [string]$rawWords[$w]
@@ -2475,7 +2488,8 @@ function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh', [string]$Raw = '') {
             $target -notmatch '^(/dev/null|nul|\$null)$' -and -not $target.StartsWith('&')) { $stdinFile = $true }
     }
     # CR-AM7: presmerovani neni pozicni argument (`ssh host < /dev/null` = host, ne "host + prikaz") - ale jen slovo
-    # mimo uvozovky (CR-AN1; multimnozina - tentyz text muze stat jednou v uvozovkach a jednou mimo). CR-AO1: slovo pred
+    # mimo uvozovky (CR-AN1), a jen slovo, ktere neni ani casti textu v uvozovkach (CR-AP1, CR-AQ2 vyse - do CR-AQ tu
+    # stalo "multimnozina - tentyz text muze stat jednou v uvozovkach a jednou mimo"). CR-AO1: slovo pred
     # slepenym presmerovanim (`-oProxyCommand=x>/dev/null`, `host<cmds.sh`) jde dal rozborem voleb.
     $pool = New-Object System.Collections.Generic.List[string] (,$unquoted)
     $clean = New-Object System.Collections.Generic.List[string]

@@ -820,10 +820,16 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     = `deny`. Přesměrování je jen slovo, které v původním textu příkazu stojí mimo uvozovky — `ssh host '2>/dev/null rm
     -rf x'` je příkaz; **cena:** u ssh uvnitř vnořeného shellu (`bash -c "ssh host 2>/dev/null"`) je přesměrování
     v uvozovkách, takže `deny`; tentýž text v uvozovkách i mimo ně kdekoli v příkazu je nejasný a přesměrováním není
-    (`ssh a 2>/dev/null; ssh b '2>/dev/null'` = `deny` i pro `a`); přesměrování slepené s `&` / `&&`
+    (`ssh a 2>/dev/null; ssh b '2>/dev/null'` = `deny` i pro `a`), stejně tak text, který je jen částí textu v uvozovkách
+    (`ssh a 2>/dev/null; bash -c "echo 2>/dev/null"` = `deny` pro `a`); přesměrování slepené s `&` / `&&`
     (`ssh host 2>/dev/null&`) je příkaz (`deny`, 0.3.0 `ask`). **Mez:** proměnná nastavená dřív (`export SSH_ASKPASS=…`,
     `$env:SSH_ASKPASS = …`) ani přiřazení ve vnořeném shellu (`bash -c "env SSH_ASKPASS=… ssh host"`) se nevidí;
-    **cena:** slovo `SSH_ASKPASS=…` kdekoli v příkazu, i u jiného příkazu nebo jako text, dá `deny` každému ssh. **Meze:** `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
+    **cena:** slovo `SSH_ASKPASS=…` kdekoli v příkazu, i u jiného příkazu nebo jako text, dá `deny` každému ssh;
+    `SSH_SK_PROVIDER=internal` se znakem za hodnotou (`SSH_SK_PROVIDER=internal; ssh host`) vestavěnou hodnotou není
+    (`deny`). `plink -load <relace>` s dalším argumentem = `deny` (relace může nést host, argument je pak příkaz; **cena:**
+    `plink -load relace host` s relací bez hosta). **Meze:** uložená relace PuTTY může nést i vzdálený příkaz — `plink -load
+    relace` bez dalšího argumentu mlčí (registr hook nečte); vstup ze souboru před ssh uvnitř vnořeného shellu
+    (`bash -c "< cmds.sh ssh host"`) se nevidí (0.3.0 také). `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
     `RemoteCommand` nebo `ProxyCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s příkazem
     v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci); **roura do ssh bez příkazu** (`cat cmds.sh | ssh
     host`) mlčí — list ssh o rouře nic neví, oprava s tokenizérem 0.4.1 (GSD TASK-190). Mazání větve (`git branch -d|-D`,
