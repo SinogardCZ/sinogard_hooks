@@ -77,6 +77,19 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
     na tomto stroji → `deny` (`SecurityKeyProvider=internal` mlčí) (CR-AN10);
   - vědomě: nad 64 kandidátů zůstává nadmnožina — `cat key.p[a-z][a-z]` mlčí jako `cat key.p??` (README mez 9, 28)
     a nadmnožina na chráněné jméno je `deny` (cena, `cat docs/[a-z][a-z]*.toml`).
+- **Kolo `/code-review` nad `54dc970` (CR-AO, skupina `CR-AO`):**
+  - moje regrese CR-AN1/AN2/AN5: volba slepená s přesměrováním (`ssh -oProxyCommand=x>/dev/null host`) se zahodila
+    (CR-AO1); číslice na konci hostu (`ssh web1<cmds.sh`, IPv4) se brala jako deskriptor (CR-AO3); v Bashi je `*>x` glob
+    `*` a přesměrování, ne „všechny proudy" (CR-AO4); obal (`nohup`, `timeout`) skládá text vnitřního příkazu znovu
+    a uvozovky slova bez mezery ztratí, takže `nohup ssh host '>/srv/x'` mlčelo — uvozovky se teď posuzují v původním
+    textu příkazu (CR-AO5). **Cena:** přesměrování u ssh uvnitř vnořeného shellu (`bash -c "ssh host 2>/dev/null"`)
+    je v původním textu v uvozovkách, posoudí se jako příkaz = `deny` (fail-closed);
+  - moje regrese CR-AN3: zástupné znaky PowerShellu negaci nemají, `Get-Content .en[!v]` čte `.env` — negace jen
+    v Bashi (CR-AO2); Bash `[[=v=]]` / `[[.v.]]` = nadmnožina (CR-AO6); dvě skupiny kolem `*` se už neslijí do `**`
+    (CR-AO8); přeskok `git ls-files` jen po verdiktu `envFileUntracked` (CR-AO7, preventivně — falešný verdikt se
+    neprokázal);
+  - CR-AN10: výjimka `internal` jen u `SecurityKeyProvider` (CR-AO9); `SSH_ASKPASS=<program>` a `SSH_SK_PROVIDER=<knihovna>`
+    před příkazem (i přes `env`) → `deny`; proměnná nastavená dřív (`export`, `$env:`) = README mez 28 (CR-AO10).
 - **Falešné `deny` u interaktivní relace (CR-AL2)** opraveno: tabulka voleb ssh s hodnotou je úplná podle ssh(1)
   (`-O exit`, `-B rozhraní`, `-P tag` …) a čte shluk krátkých voleb (`-vp 2222`, `-p2222`); plink má vlastní tabulku
   (`-P`, `-l`, `-pw`, `-i`, `-hostkey` …). Do opravy vypadala hodnota volby jako host a host jako příkaz (od O18 `deny`,
@@ -533,11 +546,11 @@ Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace).
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (663 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
-kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL`, `CR-AM`, `CR-AN` a rozlišující řádky mutantů),
-`tests/fixtures/task179-secrets.json` (79); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
+`tests/fixtures/task179-gate.json` (677 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
+kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL`–`CR-AO` a rozlišující řádky mutantů),
+`tests/fixtures/task179-secrets.json` (86); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
 (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou fází nad předchozí verzí opravy. Invariant 1152 →
-1812 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
+1832 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
 `A179-O17`, `A179-O18`, `A179-O20`/`A179-O21`; výčet v `_zmeneno`). Do review Amber A4 tu stálo *„207 řádků … (8) … 1152 → 1347 řádků (jen přidání)"*. `Invoke-Task117Rows` bere předponu fixtury
 a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
 řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady; běh

@@ -191,9 +191,10 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
             # CR-AN3 (/code-review nad 824775e): negace `[!x]` / `[^x]` a trida `[[:alpha:]]` se rozviji nad abecedou jmen
             # souboru ($script:GlobAlphabet) - `cat deploy.pe[!x]` da kandidata `deploy.pem` (do teto opravy nadmnozina
             # `deploy.pe*` = ticho). Prazdna mnozina = Bash necha token doslova (zadny kandidat).
+            # CR-AO2 (/code-review nad 54dc970): zastupne znaky PowerShellu negaci nemaji - `[!v]` je mnozina {!, v}.
             $j = $i + 1
             $neg = $false
-            if ($j -lt $Path.Length -and ($Path[$j] -eq '!' -or $Path[$j] -eq '^')) { $neg = $true; $j++ }
+            if ($Braces -and $j -lt $Path.Length -and ($Path[$j] -eq '!' -or $Path[$j] -eq '^')) { $neg = $true; $j++ }
             $set = New-Object System.Collections.Generic.List[string]
             $close = -1
             $k = $j
@@ -201,7 +202,9 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
                 $c0 = $Path[$k]
                 if ($c0 -eq ']' -and $k -gt $j) { $close = $k; break }
                 if ($c0 -eq '/') { return $null }
-                if ($c0 -eq '[' -and $k + 1 -lt $Path.Length -and $Path[$k + 1] -eq ':') {
+                # CR-AO6: tridu ekvivalence `[[=v=]]` a symbol razeni `[[.v.]]` Bash zna, my ne = nadmnozina.
+                if ($Braces -and $c0 -eq '[' -and $k + 1 -lt $Path.Length -and ($Path[$k + 1] -eq '=' -or $Path[$k + 1] -eq '.')) { return $null }
+                if ($Braces -and $c0 -eq '[' -and $k + 1 -lt $Path.Length -and $Path[$k + 1] -eq ':') {
                     $ce = $Path.IndexOf(':]', $k + 2)
                     if ($ce -lt 0) { return $null }
                     $cls = $script:GlobClassChars[$Path.Substring($k + 2, $ce - $k - 2)]
@@ -285,15 +288,19 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
 
 # CR-AM5: nadmnozina skupin - kazda `[...]` (a v Bashi `{...}`, i vnorena) = jeden `*` v ramci segmentu. `**` zadane
 # uzivatelem zustava. CR-AN4 (/code-review nad 824775e): skupina vedle `*` uzivatele se s nim slije do JEDNE `*`
-# (`deploy/[!_]*config` -> `deploy/*config`, ne `**`, ktera prekroci `/`).
+# (`deploy/[!_]*config` -> `deploy/*config`, ne `**`, ktera prekroci `/`). CR-AO8 (/code-review nad 54dc970): i dve
+# skupiny kolem `*` (`deploy/[a-z]*[a-z]` -> `deploy/*`) - `**` uzivatele se odlozi znackou [char]3, beh `*` se slije.
+# CR-AO6: trida ekvivalence `[[=v=]]` a symbol `[[.v.]]` jsou cast skupiny.
 function ConvertTo-GroupSupersetGlob([string]$Path, [bool]$Braces) {
-    $mark = [string][char]2
-    $s = [regex]::Replace($Path, '\[[!^]?(\[:[a-z]+:\]|[^\]/])*\]', $mark)
+    $dbl = [string][char]3
+    $s = $Path.Replace('**', $dbl)
+    $s = [regex]::Replace($s, '\[[!^]?(\[[:=.][^\]]*[:=.]\]|[^\]/])*\]', '*')
     if ($Braces) {
         $prev = ''
-        while ($prev -ne $s) { $prev = $s; $s = [regex]::Replace($s, '\{[^{}]*\}', $mark) }
+        while ($prev -ne $s) { $prev = $s; $s = [regex]::Replace($s, '\{[^{}]*\}', '*') }
     }
-    return [regex]::Replace($s, ('\*?' + [regex]::Escape($mark) + '+\*?'), '*')
+    $s = [regex]::Replace($s, '\*+', '*')
+    return $s.Replace($dbl, '**')
 }
 
 function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true, [bool]$ExpandGroups = $true) {
@@ -324,18 +331,21 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
             }
         } else {
             $grey = $null
+            $envGrey = $false
             $envDeny = @(Get-Field (Get-Field $sec 'envFile') 'denyNames' @())
             foreach ($cand in $cands) {
-                # CR-AN6: po prvnim kandidatovi sede zony dalsi `.env.<x>` bez `denyNames` nic noveho nerekne - bez
-                # `git ls-files` na kazdeho (`.env.{a..z}{0..1}` = 52 procesu git).
+                # CR-AN6: po prvnim netrackovanem `.env.<x>` (verdikt `envFileUntracked`) dalsi `.env.<x>` bez `denyNames`
+                # nic noveho nerekne - bez `git ls-files` na kazdeho (`.env.{a..z}{0..1}` = 52 procesu git). CR-AO7: jen po
+                # verdiktu `envFileUntracked`, ne po jine sede zone (`settingsLocal`) - prepis muze `envFileUntracked` zprisnit.
                 $cb = Get-BaseName $cand
-                if ($null -ne $grey -and $cb -match '^\.env($|\.)' -and -not (Test-AnyPattern $cb $envDeny)) { continue }
+                if ($envGrey -and $cb -match '^\.env($|\.)' -and -not (Test-AnyPattern $cb $envDeny)) { continue }
                 $v = Test-SecretPath $cand $IsWrite $Config $true $false
                 if ($null -eq $v) { continue }
                 if ($v.Decision -eq 'deny') {
                     if ($IsWrite) { return $v }
                     return $wp
                 }
+                if ($v.Id -eq 'envFileUntracked') { $envGrey = $true }
                 if ($null -eq $grey) { $grey = $v }
             }
             if ($null -ne $grey) { return $grey }

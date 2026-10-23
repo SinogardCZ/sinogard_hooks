@@ -11604,6 +11604,132 @@
       "expect": "deny",
       "since": "CR-AN9 cena: vic nez 64 kandidatu a nadmnozina sedne na chranene jmeno -> deny (fail-closed)",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -oProxyCommand=/tmp/evil>/dev/null build-host",
+      "expect": "deny",
+      "since": "CR-AO1 volba ProxyCommand slepena s presmerovanim -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -I/tmp/x.so>/dev/null build-host",
+      "expect": "deny",
+      "since": "CR-AO1 volba -I slepena s presmerovanim -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh web1<cleanup.sh",
+      "expect": "deny",
+      "since": "CR-AO3 host konci cislici, slepeny vstup ze souboru -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh 10.0.0.5<cmds.sh",
+      "expect": "deny",
+      "since": "CR-AO3 adresa IPv4, slepeny vstup ze souboru -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host *>/dev/null",
+      "expect": "deny",
+      "since": "CR-AO4 Bash: *> je glob * a presmerovani (prikaz = jmena souboru) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "nohup ssh build-host '>/srv/db/data.sql'",
+      "expect": "deny",
+      "since": "CR-AO5 obal nohup: prikaz v uvozovkach zacinajici > -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout 10 ssh build-host '2>/x'",
+      "expect": "deny",
+      "since": "CR-AO5 obal timeout: prikaz v uvozovkach zacinajici 2> -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "timeout 10 ssh build-host 2>\"/tmp/my log\"",
+      "expect": "allow",
+      "since": "CR-AO5 kontrola: obal a presmerovani s cilem v uvozovkach -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"ssh build-host 2>/dev/null\"",
+      "expect": "deny",
+      "since": "CR-AO5 cena: presmerovani u ssh ve vnorenem shellu je v uvozovkach -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host >| session.log",
+      "expect": "allow",
+      "since": "CR-AO5 kontrola: >| neni prikaz -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -o RemoteCommand=internal build-host",
+      "expect": "deny",
+      "since": "CR-AO9 RemoteCommand=internal je prikaz -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "SSH_ASKPASS=/tmp/evil SSH_ASKPASS_REQUIRE=force ssh build-host",
+      "expect": "deny",
+      "since": "CR-AO10 SSH_ASKPASS pred prikazem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "SSH_SK_PROVIDER=/tmp/x.so ssh build-host",
+      "expect": "deny",
+      "since": "CR-AO10 SSH_SK_PROVIDER pred prikazem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env SSH_ASKPASS=/tmp/evil ssh build-host",
+      "expect": "deny",
+      "since": "CR-AO10 env SSH_ASKPASS -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content .en[!v]",
+      "expect": "deny",
+      "since": "CR-AO2 PowerShell [!v] = mnozina {!, v} (bez negace) -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content .en[^v]",
+      "expect": "deny",
+      "since": "CR-AO2 PowerShell [^v] -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .en[[=v=]]",
+      "expect": "deny",
+      "since": "CR-AO6 Bash trida ekvivalence [[=v=]] -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat deploy/[a-z]*[a-z]config.json",
+      "expect": "allow",
+      "since": "CR-AO8 kontrola: dve skupiny kolem * se neslijou do ** -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env.{example,sample}; env",
+      "expect": "allow",
+      "since": "CR-AN7 kontrola: alternativy jen povolenych .env.example/.sample bez auditu sede zony (env za nimi = audit envDump, aby audit nebyl prazdny)",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env.dev; env",
+      "expect": "allow",
+      "since": "CR-Q6 kontrola: .env.dev pred env bez prepisu -> ticho + audit sede zony",
+      "hook": "secrets"
     }
   ]
 }

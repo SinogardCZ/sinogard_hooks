@@ -2400,33 +2400,48 @@ $script:SshValueLetters = 'BbcDEeFIiJLlmOoPpQRSWw'
 $script:PlinkValueFlags = '^-(P|l|pw|pwfile|i|cert|m|L|R|D|hostkey|proxycmd|sercfg|sessionlog|sshlog|sshrawlog|load|nc|loghost)$'
 
 # CR-AN1 (/code-review nad 824775e): Leaf.Args uz uvozovky nenese - `ssh host '2>/dev/null rm -rf x'` vypadalo jako
-# presmerovani a prikaz pro cizi stroj zmizel. Presmerovani je jen slovo, ktere v Leaf.Raw stoji MIMO uvozovky: znaky
-# `<`, `>`, `&` v uvozovkach a za escape se tu maskuji (`_`), deleni na slova je tymz Split-Arguments.
-function Get-MaskedRedirectWords([string]$Raw) {
+# presmerovani a prikaz pro cizi stroj zmizel. Presmerovani je jen slovo, ktere stoji MIMO uvozovky: znaky `<`, `>`, `&`
+# v uvozovkach a za escape se maskuji (`_`), deleni na slova je tymz Split-Arguments.
+# CR-AO5 (/code-review nad 54dc970): posuzuje se PUVODNI text prikazu ($script:FullCommand), ne Raw listu - obal
+# (`nohup`, `timeout`, `sudo`) Raw vnitrniho listu sklada znovu a uvozovky slova bez mezery ztrati. Zavorky substituce,
+# `;`, `|` (a v Bashi zpetny apostrof) jsou tu oddelovac slov, aby `x=$(ssh host 2>/dev/null)` dalo slovo `2>/dev/null`.
+function Get-UnquotedRedirectWords([string]$Text) {
     $esc = Get-ScannerEscape
     $sb = New-Object System.Text.StringBuilder
     $inSingle = $false
     $inDouble = $false
-    for ($i = 0; $i -lt $Raw.Length; $i++) {
-        $c = $Raw[$i]
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $c = $Text[$i]
         $quoted = ($inSingle -or $inDouble)
         if ($inSingle) { if ($c -eq "'") { $inSingle = $false; $quoted = $false } }
-        elseif ($c -eq $esc -and $i + 1 -lt $Raw.Length) {
-            [void]$sb.Append($c); $i++; $c = $Raw[$i]; $quoted = $true
+        elseif ($c -eq $esc -and $i + 1 -lt $Text.Length) {
+            [void]$sb.Append($c); $i++; $c = $Text[$i]; $quoted = $true
         }
         elseif ($inDouble) { if ($c -eq '"') { $inDouble = $false; $quoted = $false } }
         elseif ($c -eq "'") { $inSingle = $true }
         elseif ($c -eq '"') { $inDouble = $true }
+        elseif ('();|'.IndexOf($c) -ge 0 -or ($c -eq '`' -and $esc -ne '`')) { $c = ' ' }
         if ($quoted -and '<>&'.IndexOf($c) -ge 0) { $c = '_' }
         [void]$sb.Append($c)
     }
-    # Split-Arguments vraci `,@(...)` - dalsi `@()` by pole zabalil jeste jednou (viz Split-UnquotedCore).
-    $words = Split-Arguments $sb.ToString()
-    return ,$words
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($w in (Split-Arguments $sb.ToString())) { if ([string]$w -match '[<>]') { $out.Add([string]$w) } }
+    return ,$out
 }
 
 # Slovo s presmerovanim: `<x`, `2>/dev/null`, `*>log` (PowerShell, CR-AN5), slepene za slovem `host<cmds.sh` (CR-AN2).
-$script:RedirectWordPattern = '^(.*?)(\d*|\*)(<>|<|>>|>\||>|&>>|&>)(.*)$'
+$script:RedirectWordPattern = '^(.*?)(<>|<|>>|>\||>|&>>|&>)(.*)$'
+# Vraci $null nebo @{ Before; Fd; Op; Target }. CR-AO3: cislo deskriptoru jen tehdy, kdyz pred operatorem nic jineho
+# neni (`web1<x` = slovo `web1` + vstup, ne deskriptor 1); CR-AO4: `*` (vsechny proudy) jen v PowerShellu - v Bashi je
+# `*>x` glob `*` a presmerovani.
+function Get-RedirectWord([string]$Word) {
+    $m = [regex]::Match($Word, $script:RedirectWordPattern)
+    if (-not $m.Success) { return $null }
+    $before = $m.Groups[1].Value
+    $fd = ''
+    if ($before -match '^\d+$' -or ($before -eq '*' -and (Get-ScannerEscape) -eq '`')) { $fd = $before; $before = '' }
+    return @{ Before = $before; Fd = $fd; Op = $m.Groups[2].Value; Target = $m.Groups[3].Value }
+}
 
 # CR-AM10: JEDEN rozbor argumentu ssh / plink - pozicni argumenty i volby s hodnotou (dve kopie by se rozesly).
 # Vraci @{ Positional = [string[]]; Options = [@{ Name; Value }]; StdinFile } (ssh: Name = pismeno volby; plink: jmeno bez `-`).
@@ -2435,34 +2450,41 @@ function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh', [string]$Raw = '') {
     $opts = New-Object System.Collections.ArrayList
     $stdinFile = $false
     $plink = ($Exe -ieq 'plink')
+    $source = if ([string]$script:FullCommand -ne '') { [string]$script:FullCommand } else { $Raw }
+    $unquoted = Get-UnquotedRedirectWords $source
     # CR-AM7: vstup ze souboru (ne `/dev/null`, `nul`, `$null`) nese prikazy pro vzdaleny shell. CR-AN2: hleda se v celem
-    # Leaf.Raw - i slepeny (`ssh host<cmds.sh`) a pred prikazem (`< cmds.sh ssh host`).
-    $masked = Get-MaskedRedirectWords $Raw
-    $unquoted = New-Object System.Collections.Generic.List[string]
-    for ($w = 0; $w -lt $masked.Count; $w++) {
-        $mw = [string]$masked[$w]
-        $rd = [regex]::Match($mw, $script:RedirectWordPattern)
-        if (-not $rd.Success) { continue }
-        $unquoted.Add($mw)
-        $target = $rd.Groups[4].Value
-        if ($target -eq '' -and $w + 1 -lt $masked.Count) { $target = [string]$masked[$w + 1] }
-        if ($rd.Groups[3].Value.StartsWith('<') -and ($rd.Groups[2].Value -eq '' -or $rd.Groups[2].Value -eq '0') -and
+    # Raw listu - i slepeny (`ssh host<cmds.sh`) a pred prikazem (`< cmds.sh ssh host`).
+    $pool = New-Object System.Collections.Generic.List[string] (,$unquoted)
+    $rawWords = Split-Arguments $Raw
+    for ($w = 0; $w -lt $rawWords.Count; $w++) {
+        $rw = [string]$rawWords[$w]
+        $at = if ($rw -match '[<>]') { $pool.IndexOf($rw) } else { -1 }
+        if ($at -lt 0) { continue }
+        $pool.RemoveAt($at)
+        $rd = Get-RedirectWord $rw
+        $target = $rd.Target
+        if ($target -eq '' -and $w + 1 -lt $rawWords.Count) { $target = [string]$rawWords[$w + 1] }
+        if ($rd.Op.StartsWith('<') -and ($rd.Fd -eq '' -or $rd.Fd -eq '0') -and
             $target -notmatch '^(/dev/null|nul|\$null)$' -and -not $target.StartsWith('&')) { $stdinFile = $true }
     }
+    # CR-AM7: presmerovani neni pozicni argument (`ssh host < /dev/null` = host, ne "host + prikaz") - ale jen slovo
+    # mimo uvozovky (CR-AN1; multimnozina - tentyz text muze stat jednou v uvozovkach a jednou mimo). CR-AO1: slovo pred
+    # slepenym presmerovanim (`-oProxyCommand=x>/dev/null`, `host<cmds.sh`) jde dal rozborem voleb.
+    $pool = New-Object System.Collections.Generic.List[string] (,$unquoted)
+    $clean = New-Object System.Collections.Generic.List[string]
+    for ($k = 0; $k -lt $Argv.Count; $k++) {
+        $t = [string]$Argv[$k]
+        $at = if ($t -match '[<>]') { $pool.IndexOf($t) } else { -1 }
+        if ($at -lt 0) { $clean.Add($t); continue }
+        $pool.RemoveAt($at)
+        $rd = Get-RedirectWord $t
+        if ($rd.Before -ne '') { $clean.Add($rd.Before) }
+        if ($rd.Target -eq '') { $k++ }
+    }
+    $Argv = @($clean)
     $i = 0
     while ($i -lt $Argv.Count) {
         $t = [string]$Argv[$i]
-        # CR-AM7: presmerovani neni pozicni argument (`ssh host < /dev/null` = host, ne "host + prikaz") - ale jen slovo,
-        # ktere v Raw stoji mimo uvozovky (CR-AN1; multimnozina - tentyz text muze stat jednou v uvozovkach a jednou mimo).
-        $at = if ($t -match '[<>]') { $unquoted.IndexOf($t) } else { -1 }
-        if ($at -ge 0) {
-            $unquoted.RemoveAt($at)
-            $rd = [regex]::Match($t, $script:RedirectWordPattern)
-            $i += $(if ($rd.Groups[4].Value -eq '') { 2 } else { 1 })
-            $before = $rd.Groups[1].Value
-            if ($before -ne '' -and -not $before.StartsWith('-')) { [void]$pos.Add($before) }
-            continue
-        }
         if ($plink) {
             if ($t -cmatch $script:PlinkValueFlags) {
                 $val = if ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }
@@ -2503,9 +2525,25 @@ function Test-RemoteShellOptionCommand($Parsed, [string]$Exe = 'ssh') {
             if ([string]$o.Name -ceq 'm' -or [string]$o.Name -ceq 'proxycmd') { return $true }
         } elseif ([string]$o.Name -ceq 'I') {
             return $true
-        } elseif ([string]$o.Name -ceq 'o' -and [string]$o.Value -match '(?i)^\s*(RemoteCommand|ProxyCommand|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider)\s*(=\s*|\s+)(?!(none|internal)\s*$)\S') {
+        } elseif ([string]$o.Name -ceq 'o' -and [string]$o.Value -match '(?i)^\s*(RemoteCommand|ProxyCommand|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider)\s*(=\s*|\s+)(?!none\s*$)(\S.*)$') {
+            # CR-AO9: `internal` je vestavena hodnota jen u SecurityKeyProvider - jinde je to jmeno programu.
+            if ($Matches[1] -ieq 'SecurityKeyProvider' -and $Matches[3] -match '^(?i)internal\s*$') { continue }
             return $true
         }
+    }
+    return $false
+}
+
+# CR-AO10 (/code-review nad 54dc970): tataz trida promennou prostredi pred prikazem - `SSH_ASKPASS=<program>` (spusti ho
+# ssh na TOMTO stroji) a `SSH_SK_PROVIDER=<knihovna>` (jako `-o SecurityKeyProvider`). Promenna nastavena drive
+# (`export`, `$env:`) se nevidi - README mez 28. Hleda se v Raw i v celem prikazu: obal `env` prirazeni z Raw
+# vnitrniho listu odstrani.
+function Test-RemoteShellEnvCommand([string]$Raw) {
+    # Split-Arguments vraci `,@(...)` - bez dalsiho `@()` (viz Split-UnquotedCore).
+    $a = Split-Arguments $Raw
+    $b = Split-Arguments ([string]$script:FullCommand)
+    foreach ($w in ($a + $b)) {
+        if ([string]$w -match '^(SSH_ASKPASS|SSH_SK_PROVIDER)=(?!internal$)\S') { return $true }
     }
     return $false
 }
@@ -2757,7 +2795,7 @@ function Test-Leaf($Leaf, $Config) {
         if ($remote -ccontains ([string]$Leaf.Exe).ToLowerInvariant()) {
             $parsed = Get-RemoteShellArgs (@(Get-LeafField $Leaf 'Args' @())) ([string]$Leaf.Exe) ([string]$Leaf.Raw)
             if (@($parsed.Positional).Count -ge 2 -or (Test-RemoteShellOptionCommand $parsed ([string]$Leaf.Exe)) -or
-                [bool]$parsed.StdinFile) {
+                [bool]$parsed.StdinFile -or (Test-RemoteShellEnvCommand ([string]$Leaf.Raw))) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
                 # ZOPT-Q102 / A179-O3, 0.3.1: politika `gate.decisions.remoteShell` (vychozi deny od A179-O18; do 0.3.0 ask).
