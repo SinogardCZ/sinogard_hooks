@@ -53,8 +53,9 @@ $denyCases = @(
     (Case 'restore .'                  'git restore .' 'deny')
     # (3) mazani vetvi
     (Case 'branch -D'                  'git branch -D feature/x' 'deny')
-    # A179-O3 (Q11), 0.3.1: `-d` smaze jen sloucenou vetev (nesloucenou git odmitne) -> bez brany
-    (Case 'branch -d'                  'git branch -d feature/x' 'allow')
+    # A179-O17 (Amber 2026-10-23): `-d` je deny jako v 0.3.0 (ZOPT-Q40, SCHVALUJU pro smazani jakekoli vetve);
+    # vyvojova 0.3.1 (A179-O3 Q11) ho uvolnila.
+    (Case 'branch -d'                  'git branch -d feature/x' 'deny')
     (Case 'branch -d -f'               'git branch -d -f feature/x' 'deny')
     (Case 'branch --delete --force'    'git branch --delete --force feature/x' 'deny')
     (Case 'push --delete'              'git push --delete origin feature/x' 'deny')
@@ -613,7 +614,8 @@ $amber4Cases = @(
 
     # G8 - telo heredocu, ktere se SPUSTI, ale rozebrat ho neumime (Z3 -> ask).
     (Case 'G8 python heredoc'           "python <<EOF`nimport shutil`nshutil.rmtree('src')`nEOF" 'audit')
-    (Case 'G8 ssh heredoc'              "ssh prod <<EOF`nrm -rf /srv`nEOF" 'audit')
+    #    A179-O18: prikaz na cizim stroji = deny (gate.decisions.remoteShell; vyvojova 0.3.1 audit).
+    (Case 'G8 ssh heredoc'              "ssh prod <<EOF`nrm -rf /srv`nEOF" 'deny')
     (Case 'G8 kontrola data'            "cat > NOTES.md <<EOF`nrm -rf je nebezpecny`nEOF" 'allow')
 )
 
@@ -818,9 +820,9 @@ $ada6Cases = @(
     (Case 'N22 kontrola s where'         'psql -h prod -c "UPDATE t SET a=1 WHERE id=1"' 'allow')
     (Case 'N22 kontrola delete drzi'     'psql -h prod -c "DELETE FROM t"' 'deny')
 
-    # N21 - prikaz jako argument vzdaleneho shellu
-    (Case 'N21 ssh s prikazem'           'ssh host "rm -rf /"' 'audit')
-    (Case 'N21 ssh s SQL prikazem'       'ssh host "psql -c ''DROP TABLE x''"' 'audit')
+    # N21 - prikaz jako argument vzdaleneho shellu (A179-O18: deny)
+    (Case 'N21 ssh s prikazem'           'ssh host "rm -rf /"' 'deny')
+    (Case 'N21 ssh s SQL prikazem'       'ssh host "psql -c ''DROP TABLE x''"' 'deny')
     # 🔴 kontrolni skupina: ssh BEZ prikazu je bezna prace
     (Case 'N21 kontrola ssh bez prikazu' 'ssh host' 'allow')
     (Case 'N21 kontrola ssh -T'          'ssh -T git@github.com' 'allow')
@@ -842,9 +844,9 @@ $ada6bCases = @(
     (Case 'N24 ssh -p s portem'          'ssh -p 2222 host' 'allow')
     (Case 'N24 ssh -o s volbou'          'ssh -o BatchMode=yes host' 'allow')
     (Case 'N24 ssh -l s uzivatelem'      'ssh -l tomas host' 'allow')
-    # 🔴 kontrolni skupina: s PRIKAZEM to ask zustava, i kdyz jsou prepinace pritomne
-    (Case 'N24 kontrola s prikazem'      'ssh -i key.pem host "rm -rf /"' 'audit')
-    (Case 'N24 kontrola bez prepinacu'   'ssh host "rm -rf /"' 'audit')
+    # 🔴 kontrolni skupina: s PRIKAZEM to brana zustava (A179-O18: deny), i kdyz jsou prepinace pritomne
+    (Case 'N24 kontrola s prikazem'      'ssh -i key.pem host "rm -rf /"' 'deny')
+    (Case 'N24 kontrola bez prepinacu'   'ssh host "rm -rf /"' 'deny')
     (Case 'N24 kontrola holy ssh'        'ssh host' 'allow')
 
     # N25 - UPDATE ONLY / UPDATE ... AS
@@ -891,7 +893,7 @@ $t10Cases = @(
     #    obsah promenne se v nem SPUSTI. Nazev pripadu zustava, ukazuje na nej radek
     #    regresniho invariantu.
     (Case 'T10 zustava obal s promennou' 'bash -c "$CMD"' 'audit')
-    (Case 'T10 zustava ssh s prikazem'   'ssh host "rm -rf /"' 'audit')
+    (Case 'T10 zustava ssh s prikazem'   'ssh host "rm -rf /"' 'deny')
     (Case 'T10 zustava kratka cesta'     'rm -rf /srv' 'deny')
     (Case 'T10 zustava spusteni promenne' '& $cmd' 'audit' 'PowerShell')
 )
@@ -948,9 +950,9 @@ $t36Cases = @(
     (Case 'T36 spusteni promenne'       '& $cmd' 'audit' 'PowerShell')
     (Case 'T36 spusteni promenne arg'   '& $cmd -Force' 'audit' 'PowerShell')
     (Case 'T36 -enc'                    'pwsh -enc UmVtb3ZlLUl0ZW0=' 'audit' 'PowerShell')
-    (Case 'T36 ssh s prikazem'          'ssh prod "rm -rf /"' 'audit')
+    (Case 'T36 ssh s prikazem'          'ssh prod "rm -rf /"' 'deny')
     (Case 'T36 git alias'               "git -c alias.bd='branch -D' bd x" 'deny')
-    (Case 'T36 ssh heredoc'             ("ssh prod <<EOF" + $lf + 'rm -rf /srv' + $lf + 'EOF') 'audit')
+    (Case 'T36 ssh heredoc'             ("ssh prod <<EOF" + $lf + 'rm -rf /srv' + $lf + 'EOF') 'deny')
 
     # --- pricina `variable` -> audit (jadro zmeny 0.1.10)
     # 🔴 0.1.11 / N34 (i): tri z techto ctyr jsou OBALY, ktere obsah promenne SPUSTI -
@@ -1474,7 +1476,7 @@ Test-PartialGateOverride 'prazdne denyPatterns odmitnuto (H-c)' 'Bash' 'git rese
 $ovDenyPlus = '{"gate":{"denyPatterns":[' +
     '{"id":"git-reset-hard","pattern":"^git\\s+reset\\b.*\\s--hard(\\s|$)","shape":"git reset --hard"},' +
     '{"_pozn_checkout_restore":"x"},' +
-    '{"id":"git-branch-delete-force","pattern":"^git\\s+branch\\b(?=.*\\s(?-i:-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$))(?=.*\\s(?-i:-[A-Za-z]*[Df][A-Za-z]*|--force)(\\s|$))","shape":"git branch -D"},' +
+    '{"id":"git-branch-delete","pattern":"^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)","shape":"git branch -d/-D"},' +
     '{"id":"git-update-ref-del","pattern":"^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)","shape":"git update-ref -d"},' +
     '{"id":"git-push-delete","pattern":"^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)","shape":"git push --delete"},' +
     '{"id":"git-stash-destroy","pattern":"^git\\s+stash\\s+(drop|clear)(\\s|$)","shape":"git stash drop/clear"},' +

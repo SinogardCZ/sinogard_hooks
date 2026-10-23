@@ -347,13 +347,14 @@ $n26SecretCases = @(
     #    prosel `-Prijmout` s touto citaci.
     # 🔴 C1 (delta review Amber 2026-09-13): `*.env` MIRI na secret vzorem (jmeno globu sedne na
     #    `envFile.denyNames`) - zustava ask jako `*.pem`. Prvni tvar 0.2.0 ho poslal do auditu = regrese.
-    #    ZOPT-Q102 (0.3.1): glob mirici na secret = seda zona `audit` (radek secrets:wildcardPath), do 0.3.1 ask.
-    (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'audit')
+    #    A179-O18 (Amber 2026-10-23): glob mirici na secret = deny (`secrets.decisions.wildcardPath`); do 0.3.0 ask,
+    #    vyvojova 0.3.1 audit.
+    (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'deny')
     #    `.en?` (zastupny znak UVNITR jmena) deterministicky rozlisit nejde - pojmenovana mez (README 9), audit.
     (CmdCase 'N26 kontrola Get-Content' 'Get-Content .en?' 'allow' 'PowerShell')
-    # `*.pem` sedne DOSLOVA na vzor `denyPathPatterns` (pripona) -> trida chranena VZOREM cesty (od 0.3.1 audit)
-    (CmdCase 'N26 kontrola cp glob'     'cp *.pem /tmp/x' 'audit')
-    (CmdCase 'N26 kontrola glob na chranenou CESTU' 'cat ~/.aws/*' 'audit')
+    # `*.pem` sedne DOSLOVA na vzor `denyPathPatterns` (pripona) -> trida chranena VZOREM cesty (A179-O18: deny)
+    (CmdCase 'N26 kontrola cp glob'     'cp *.pem /tmp/x' 'deny')
+    (CmdCase 'N26 kontrola glob na chranenou CESTU' 'cat ~/.aws/*' 'deny')
     # 🔴 a presne jmeno se pta dal bez ohledu na uvozovky
     (CmdCase 'N26 kontrola presne jmeno' 'cat .env' 'deny')
     (CmdCase 'N26 kontrola literal'      '[IO.File]::ReadAllText(''.env'')' 'deny' 'PowerShell')
@@ -436,28 +437,28 @@ $bod11Cases = @(
     (CmdCase 'B11 kontrola ①: *.txt v tomtez adresari' 'cat .github/workflows/*.txt' 'allow')
     (CmdCase 'B11 Get-Content glob yml'               'Get-Content config/*.yml' 'allow' 'PowerShell')
     (CmdCase 'B11 glob bez adresare (jmenna trida)'   'cat *' 'allow')
-    # 🔴 kontrolni skupina ②: glob MIRICI na cestu z `denyPathPatterns` = seda zona (od 0.3.1 audit secrets:wildcardPath,
-    #    do 0.3.1 ask) - rozdil proti jmenne tride (wildcardName) drzi tvar auditu (Test-GreyZoneAudit)
-    (CmdCase 'B11 kontrola ② ~/.aws/*'                'cat ~/.aws/*' 'audit')
-    (CmdCase 'B11 kontrola ② .docker/*.json'          'cat .docker/*.json' 'audit')
+    # 🔴 kontrolni skupina ②: glob MIRICI na cestu z `denyPathPatterns` = deny (A179-O18, `secrets:wildcardPath`; do 0.3.0
+    #    ask, vyvojova 0.3.1 audit) - jmenna trida (wildcardName) mlci dal
+    (CmdCase 'B11 kontrola ② ~/.aws/*'                'cat ~/.aws/*' 'deny')
+    (CmdCase 'B11 kontrola ② .docker/*.json'          'cat .docker/*.json' 'deny')
     # TASK-117 (Z117-Q2/Q3/Q5 = A): `ls ~/.ssh/*` jen VYPISUJE jmena - jmenujici tvar, od 0.3.0 ticho
     # (zadani par. 4: flip invariantu vyctem, README 80). Kontrolni skupina tehoz globu je ctouci tvar.
     (CmdCase 'B11 kontrola ② ~/.ssh/* vypis (Z117-Q5)' 'ls ~/.ssh/*' 'allow')
-    (CmdCase 'B11 kontrola ② ~/.ssh/* cteni'          'cat ~/.ssh/*' 'audit')
-    (CmdCase 'B11 kontrola ② ~/.kube/*'               'Get-Content ~/.kube/*' 'audit' 'PowerShell')
-    (CmdCase 'B11 kontrola ② .claude/*'               'cat .claude/*' 'audit')
-    (CmdCase 'B11 kontrola ② **/credentials'          'cat **/credentials' 'audit')
-    (CmdCase 'B11 kontrola ② UserSecrets/*/secrets.json' 'cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json' 'audit')
+    (CmdCase 'B11 kontrola ② ~/.ssh/* cteni'          'cat ~/.ssh/*' 'deny')
+    (CmdCase 'B11 kontrola ② ~/.kube/*'               'Get-Content ~/.kube/*' 'deny' 'PowerShell')
+    (CmdCase 'B11 kontrola ② .claude/*'               'cat .claude/*' 'deny')
+    (CmdCase 'B11 kontrola ② **/credentials'          'cat **/credentials' 'deny')
+    (CmdCase 'B11 kontrola ② UserSecrets/*/secrets.json' 'cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json' 'deny')
     # 🔴 presne jmeno v tomtez adresari je deny dal - mez je jen u globu
     (CmdCase 'B11 kontrola presne jmeno v adresari'   'cat .github/workflows/secrets.yml' 'deny')
-    # 🔴 C1 (delta review Amber 2026-09-13): glob, ktery na secret MIRI VZOREM, je ask - jmeno globu
+    # 🔴 C1 (delta review Amber 2026-09-13): glob, ktery na secret MIRI VZOREM, je brana (A179-O18: deny) - jmeno globu
     #    sedne na `envFile.denyNames` nebo glob bez zastupnych znaku vypisuje chranene jmeno. Mutant:
     #    vratit Test-GlobAimsAtProtectedPath bez (c)+(d) -> `cat *.env` allow -> cervena.
-    (CmdCase 'C1 cat *.env'                           'cat *.env' 'audit')
-    (CmdCase 'C1 cat .env*'                           'cat .env*' 'audit')
-    (CmdCase 'C1 cat *.env.local'                     'cat *.env.local' 'audit')
-    (CmdCase 'C1 cat *secrets.json'                   'cat *secrets.json' 'audit')
-    (CmdCase 'C1 Get-Content src/*.env'               'Get-Content src/*.env' 'audit' 'PowerShell')
+    (CmdCase 'C1 cat *.env'                           'cat *.env' 'deny')
+    (CmdCase 'C1 cat .env*'                           'cat .env*' 'deny')
+    (CmdCase 'C1 cat *.env.local'                     'cat *.env.local' 'deny')
+    (CmdCase 'C1 cat *secrets.json'                   'cat *secrets.json' 'deny')
+    (CmdCase 'C1 Get-Content src/*.env'               'Get-Content src/*.env' 'deny' 'PowerShell')
     #    kontrolni skupina C1: glob, ktery na jmeno narazi NAHODOU, mlci dal (pripad vyroku 7)
     (CmdCase 'C1 kontrola *.yml v adresari'           'head .github/workflows/*.yml' 'allow')
     (CmdCase 'C1 kontrola *.json'                     'ls docs/technical/*.json' 'allow')
@@ -500,15 +501,15 @@ Start-Case 'vyrok 7 (N26): jmenna trida u globu zapise audit a mlci; ostatni rad
 Test-SecretsAudit 'jmenna trida yml'   'head -25 .github/workflows/*.yml' 'allow' $true
 Test-SecretsAudit 'jmenna trida *'     'cat *' 'allow' $true
 Test-SecretsAudit 'kontrola txt'       'cat .github/workflows/*.txt' 'allow' $false
-# ZOPT-Q102 (0.3.1): glob na chranenou CESTU a glob mirici vzorem jsou seda zona - radek je secrets:wildcardPath (ne
-# wildcardName) s rozhodnutim allow; do 0.3.1 ask bez radku wildcardName.
+# A179-O18 (Amber 2026-10-23): glob na chranenou CESTU a glob mirici vzorem jsou deny - radek je secrets:wildcardPath
+# (ne wildcardName) s rozhodnutim deny; do 0.3.0 ask, vyvojova 0.3.1 audit (allow).
 foreach ($wp in @(@('kontrola cesta', 'cat ~/.aws/*'), @('kontrola C1 *.env', 'cat *.env'))) {
     $dirWp = Join-Path $script:TempDir ('audit-sec-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
     $rWp = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = $wp[1] }) -Environment @{ 'CLAUDE_PLUGIN_DATA' = $dirWp }
-    Assert-Equal 'allow' (Get-Decision $rWp) ("[audit/{0}] {1}" -f $wp[0], $wp[1])
+    Assert-Equal 'deny' (Get-Decision $rWp) ("[audit/{0}] {1}" -f $wp[0], $wp[1])
     $lineWp = if ([System.IO.File]::Exists((Join-Path $dirWp 'gate-audit.jsonl'))) { [System.IO.File]::ReadAllText((Join-Path $dirWp 'gate-audit.jsonl')) } else { '' }
     Assert-True ($lineWp -notmatch 'secrets:wildcardName') ("[audit/{0}] zadny radek wildcardName" -f $wp[0])
-    Assert-True ($lineWp -match '"shape":"secrets:wildcardPath","decision":"allow"') ("[audit/{0}] radek secrets:wildcardPath allow: {1}" -f $wp[0], $lineWp)
+    Assert-True ($lineWp -match '"shape":"secrets:wildcardPath","decision":"deny"') ("[audit/{0}] radek secrets:wildcardPath deny: {1}" -f $wp[0], $lineWp)
 }
 Test-SecretsAudit 'kontrola bezny glob' 'ls *.md' 'allow' $false
 

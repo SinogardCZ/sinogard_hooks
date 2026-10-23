@@ -197,6 +197,8 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # tvar gitignore/pathspec, tedy tyz, jaky uz maji `denyPathPatterns`. Mez a spoustec
     # prehodnoceni (fixture adresar u invariantu) nese README.
     if ($AllowGlob -and $norm -match '[\*\?]') {
+        # A179-O18 (Amber 2026-10-23): trida chranena CESTOU = politika `secrets.decisions.wildcardPath`, vychozi deny
+        # (do 0.3.0 ask; vyvojova 0.3.1 audit) - obsah tajemstvi by vstoupil do kontextu modelu.
         if (Test-GlobAimsAtProtectedPath $norm $sec) {
             return (New-PolicyVerdict $sec 'wildcardPath' (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)))
         }

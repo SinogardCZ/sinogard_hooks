@@ -844,7 +844,7 @@ function Get-BashCommandStart([string]$Text, [switch]$NoArm) {
         # A179-O14 (Amber 2026-10-22): heuristiky fragmentu ROZDELENEHO subshellu (Split-CommandLine deli i uvnitr `( ... )`;
         # kola 15-17: odlamovani `)` CR-AE4/AF6/AG4, preskok `(` CR-AF1/AG1, ocas za slovem s `)` CR-AF3/AG2) jsou vraceny -
         # kola 16-18 v nich nachazela regrese. Prvni a posledni prikaz rozdeleneho subshellu je dira 0.3.0 (README mez 27),
-        # oprava = hloubka `( )` ve skeneru (CR-AF5) ve verzi 0.3.2.
+        # oprava = hloubka `( )` ve skeneru (CR-AF5) ve verzi 0.4.1 (puvodne 0.3.2, A179-O19).
         $m = $r.Keyword.Match($Text, $pos)
         if (-not $m.Success) { $m = $r.FuncDef.Match($Text, $pos) }
         if ($m.Success) { $pos += $m.Length; $first = $false; continue }
@@ -1103,7 +1103,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # procesni substituce nebo komentare (`( ... ) > >(tee log)`) - z deny bylo allow. Vracena: uzavre-li Find-CloseParen subshell
     # pred koncem textu, rozhoduje jeho konec a ocas, ktery neni jen presmerovani, je deny (CR-AE2); neuzavre-li ho, jde tvar
     # starou cestou 0.3.0 (CR-AK1/AK2: ANSI-C `$'...'`, `((...) )` - README mez 27). Cena: vnoreny subshell s presmerovanim na konci rozdeleneho subshellu
-    # a uvozovky vnorene v `$( ... )` uvnitr uvozovek (Find-CloseParen je nevnoruje, CR-AJ5 -> 0.3.2) = falesny deny.
+    # a uvozovky vnorene v `$( ... )` uvnitr uvozovek (Find-CloseParen je nevnoruje, CR-AJ5 -> 0.4.1) = falesny deny.
     if ((Get-ScannerEscape) -eq '\') {
         $lead = [regex]::Match($stripped, '^\s*\(')
         if ($lead.Success -and -not $script:BashZoneRx.Arith.IsMatch($stripped, $lead.Index + $lead.Length - 1)) {
@@ -1632,7 +1632,8 @@ function Test-AbbreviatedDbOption($Leaf, [string]$HostExe) {
 
 # ZOPT-Q102 + A179-O3 (Q10), 0.3.1: jmena databazi, kterych se destruktivni operace nad MISTNIM hostitelem tyka. Do 0.3.0
 # konila `ask` (H-f povoloval jen uzkou sadu tvaru). Od 0.3.1: VSECHNA jmena precitelna a ve vzorech
-# `gate.dbDestroyLocal.databases` (testovaci a vyvojove DB GSD i HRMS) -> hook mlci + audit; jinak deny. Cte se doslova
+# `gate.dbDestroyLocal.databases` (`*_test_*`, `*_test`, `*_dev` - napr. GSD; lokalni DB HRMS `Hrms...Test` na vzory
+# nesedi, A179-O6) -> hook mlci + audit; jinak deny. Cte se doslova
 # z textu prikazu - konfigurace projektu ani prostredi procesu ne (soubor muze nest tajemstvi a mezi kontrolou a behem se
 # muze zmenit; H-f). Vraci $null = jmeno nejde precist.
 #   pripojena DB: `-d x` / `-dx` (psql, pgcli, sqlcmd; velikost pismen rozhoduje), `--dbname[=| ]x`, `dbname=x`,
@@ -2651,7 +2652,7 @@ function Test-Leaf($Leaf, $Config) {
             if ($positional.Count -ge 2) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-                # ZOPT-Q102 / A179-O3, 0.3.1: politika `gate.decisions.remoteShell` (vychozi audit; do 0.3.0 ask).
+                # ZOPT-Q102 / A179-O3, 0.3.1: politika `gate.decisions.remoteShell` (vychozi deny od A179-O18; do 0.3.0 ask).
                 return (New-PolicyVerdict $gate 'remoteShell' (([string](Get-Field $shapes 'remoteShell' 'prikaz na cizim stroji ({text})')).Replace('{text}', [string]($text))))
             }
         }

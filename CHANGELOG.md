@@ -3,12 +3,45 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
-## [0.3.1] — 2026-10-18
+## [0.4.0] — 2026-10-23
 
 **TASK-179 (GSD): destruktivní DB příkaz uvnitř kontejnerového obalu — oprava DB části README omezení 11.** Zadání
 Amber v1.1 (`2026-10-18-zadani-task-179.md`, revize Grace `T179-N1`–`N12`), rozhodnutí `ZOPT-Q82`, `ZOPT-Q89` (Tom)
-a `AOPT-O22`–`O28` (Amber). Bezpečnostní oprava brány §6 → patch verze. Doklady: `docs/logs/mutants/task-179/` v repu GSD
-(krok 0 s tabulkami voleb CLI, červená fáze, mutanti).
+a `AOPT-O22`–`O28` (Amber). Doklady: `docs/logs/mutants/task-179/` v repu GSD (krok 0 s tabulkami voleb CLI, červená
+fáze, mutanti).
+
+**Číslo verze (`A179-O19`, Amber 2026-10-23):** vydání se vyvíjelo jako **0.3.1** (zadání, rozhodnutí `A179-O2`); mění
+rozhodnutí brány (přes 440 očekávání invariantu, přejmenované klíče přepisu), takže podle konvence `A117-O3` („mění se
+rozhodnutí brány → minor verze") vychází jako **0.4.0**. „0.3.1" v textu níž a v rozhodnutích = toto vydání; plánovaná
+„0.3.2" = **0.4.1**. Do review Amber B2 tu stálo *„Bezpečnostní oprava brány §6 → patch verze"*.
+
+### Bezpečnost — mazání větve a čtení tajemství přes zástupný znak zpět na `deny` (`A179-O17`, `A179-O18`)
+
+Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové verze dala ticho tam, kde bezpečnost chce zákaz:
+
+- **`git branch -d` = `deny` jako v 0.3.0** (`A179-O17`). Vývojová verze (`A179-O3` Q11) pustila `-d` (smaže jen
+  sloučenou větev) tichem a vzor přejmenovala na `git-branch-delete-force`. `git branch -d` ale v 0.3.0 byl `deny`, ne
+  `ask`, takže ho `ZOPT-Q102` neměnil, a Tomovo `ZOPT-Q40` chce SCHVALUJU pro smazání **jakékoli** větve. Vzor je zpět
+  i s id `git-branch-delete`, takže projektový přepis `gate.denyPatterns` z 0.3.0 platí dál (pravidlo `superset`).
+  Skupina `O17`.
+- **Zástupný znak mířící na tajemství = `deny`** (`A179-O18`): `secrets.decisions.wildcardPath` výchozí `deny`, ne
+  audit — `cat ~/.ssh/*`, `cat *.env`, `cp *.pem …`, `Get-Content ~/.kube/*`. S auditem by obsah tajemství vstoupil do
+  kontextu modelu a hook by jen zapsal řádek. Glob, který na chráněné jméno jen **narazí** (`cat *`, `ls *.md`), mlčí dál
+  s auditem `secrets:wildcardName`; výpis jmen (`ls ~/.ssh/*`, Z117-Q5) mlčí dál. Cena: 4 dotazy `wildcardPath` za 30
+  dní (měření 2026-10-20) → teď 4 zákazy. Skupina `O18` v `task179-secrets.json`.
+- **Příkaz na cizím stroji = `deny`** (`A179-O18`): `gate.decisions.remoteShell` výchozí `deny` — `ssh host "…"`,
+  `ssh host <<EOF`, `plink … host příkaz`. Pravidla nad cestami tam neplatí a audit na našem stroji o cizím stroji
+  netvrdí nic. `ssh host` bez příkazu, `ssh -T git@github.com` a `git push` přes ssh mlčí dál. Skupina `O18`
+  v `task179-gate.json`.
+
+### Dopad na HRMS (`A179-O6`)
+
+Lokální databáze HRMS (`Hrms`, `Hrms…Test`, `Hrms…Migration`; na `(localdb)\MSSQLLocalDB` změřeno 2026-10-21, 31 z 31)
+na výchozí vzory `*_test_*`, `*_test`, `*_dev` **nesedí**. Agentem psané `DROP DATABASE`, `dotnet ef database drop`
+a `sqllocaldb delete` je proto v HRMS vždy `deny` (do 0.3.0 `ask` nebo `deny` podle tvaru). Projektový přepis to povolit
+nemůže: `gate.dbDestroyLocal.databases` smí vzory jen zúžit, takže dřívější přepis `Hrms*` (žádost HRMS, `Z117-Q13`/`Q19`)
+se odmítne; na stroji žádný není. Testy (`dotnet test`) a skripty (`generate_demo_data.ps1`) hook nevidí — beze změny.
+Cesty: přejmenovat testovací DB na `*_test`, nebo rozhodne Tom (změna výchozích vzorů = změna politiky).
 
 **A v témže vydání (A179-O2, jedno vydání místo dvou): plugin už nikdy nevrací `ask` (`ZOPT-Q102`, Tom 2026-10-20).**
 Hook ve všech projektech nečeká na člověka: každé místo, které do 0.3.0 vracelo `ask`, je od 0.3.1 buď **ticho + řádek
@@ -86,7 +119,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 
   Skupina `CR-AE`.
 - **Kolo 16 `/code-review` (CR-AF) — od něj platí `A179-O13`:** v 0.3.1 se opravují jen regrese 0.3.1 a nálezy
-  v pravidle. Díry 0.3.0 mimo něj jdou do README meze 27 a do verze 0.3.2.
+  v pravidle. Díry 0.3.0 mimo něj jdou do README meze 27 a do verze 0.4.1.
   - Opraveno:
     - ~~přeskok `(` prvního příkazu rozděleného subshellu (AF1) a slovo s `)` + přesměrování jako hlava (AF3)~~
       **vráceno `A179-O14`** (kolo 18);
@@ -94,7 +127,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
     - ~~escapovaná `\)` se neodlamuje (AF6)~~ — s AE4 vráceno;
     - `source` jen malými písmeny (AF7), jeden vzor proměnné (AF8), jedna větev tečky a `source` (AF9).
   - **Odloženo (`A179-O13`):** `)` slepená s přesměrováním bez mezery (AF2, díra 0.3.0) a hloubka `( )` ve skeneru (AF5)
-    → 0.3.2, README mez 27.
+    → 0.4.1, README mez 27.
 
   Skupina `CR-AF`.
 - **Kolo 17 `/code-review` (CR-AG) nad opravami kola 16:**
@@ -109,7 +142,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 - **Kolo 18 `/code-review` (CR-AH) → návrat (`A179-O14`, Amber 2026-10-22):** všech 8 nálezů kola 18 byly regrese
   heuristik pro **rozdělený subshell**, tedy pro úlomky, které vzniknou, když skener dělí příkaz i uvnitř `( … )`
   (CR-AF5). Ty heuristiky jsou vrácené na stav kola 14: AE4/AF6/AG4, AF1/AG1, AF3/AG2.
-  - **Tiché projití shodné s 0.3.0** (README mez 27, oprava ve verzi 0.3.2 s vysokou prioritou): první a poslední příkaz
+  - **Tiché projití shodné s 0.3.0** (README mez 27, oprava ve verzi 0.4.1 s vysokou prioritou): první a poslední příkaz
     rozděleného subshellu, např. **`(cd x && git reset --hard)`** a **`(rm -rf src; ls)`**.
   - Zůstávají opravy, které na úlomcích nestojí: celý subshell s přesměrováním za ním (AD1, AE2), funkce (AD4, AE7),
     poziční parametr v hlavě (AE1, AE3), `source` (AE6, AF4) a lineární čtení ocasu (AG3).
@@ -129,10 +162,10 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   textu, rozhoduje jeho konec a ocas, který není jen přesměrování, je `deny`. Když ho neuzavře (vrátí konec textu), jde tvar
   dál starou cestou z 0.3.0 (líný regex do poslední `)`). Tou cestou projdou i tvary, které `Find-CloseParen` nepřečte:
   ANSI-C `$'…'` (AK1) a vnořený subshell `((…) )`, který vypadá jako aritmetika (AK2). Obojí byla díra už v 0.3.0 →
-  README mez 27, 0.3.2 (`A179-O13`; kolo 21).
+  README mez 27, 0.4.1 (`A179-O13`; kolo 21).
   - **Cena (fail-closed):** falešné `deny` u vnořeného subshellu s přesměrováním na konci rozděleného subshellu
     (`(cd x; (git status) 2>/dev/null)`) a u uvozovek vnořených v `$( … )` uvnitř uvozovek. `Find-CloseParen` kontext
-    uvozovek nevnořuje (AJ5) → oprava ve verzi 0.3.2.
+    uvozovek nevnořuje (AJ5) → oprava ve verzi 0.4.1.
   - Větev `case` se závorkou, globem a tělem jen z přesměrování (`(*) > /dev/null ;;`) je `deny`. Příčinou je CR-AI1
     z kola 19, ne tento návrat. Od celého subshellu s globem v hlavě ji nejde rozeznat (AJ4, vědomě fail-closed).
 
@@ -140,7 +173,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 - **Finále (mutanti a plné sady nad `dc0b1de`):**
   - fixtura CR-AI1 slibovala u `(psql) < drop.sql` řádek auditu `sqlFromFile`. Přesměrování celého subshellu se ale
     do vnitřního příkazu nepřenáší, stejně jako v 0.3.0. Rozhodnutí je stejné (ticho), chybí jen řádek auditu → README
-    mez 27, 0.3.2. Fixtura už řádek auditu nečeká. Kontrolní běh bez mutace (M0) ji ukázal červeně;
+    mez 27, 0.4.1. Fixtura už řádek auditu nečeká. Kontrolní běh bez mutace (M0) ji ukázal červeně;
   - test B15 `bash -c "$(cat cmd.txt)"` čekal audit. Od `A179-O11` je to `deny` (cena výše), test i invariant jsou
     přijaté s citací `A179-O11`;
   - test kanárku H-c (`resume-cost`) bral jako zpřísňující přepis `depth: audit`. Od `A179-O1` má `depth` výchozí
@@ -151,7 +184,9 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
     substituce, `HEAD`, `@`, i `+` v refspecu), mapování Q102 zařadilo jako `forcePushOther` — ticho, i když cíl může
     být chráněná větev. Teď je to `forcePushUnknown` (`deny`) jako force push bez cíle. **Cena:** `deny` i u force push
     na vlastní feature větev přes proměnnou nebo `HEAD` (`git push --force-with-lease origin HEAD`) — náhrada je
-    doslovné jméno větve. Skupina `O15`.
+    doslovné jméno větve. Totéž v Bashi u refspecu se zdrojem z proměnné a doslovným cílem
+    (`git push --force origin $SRC:feature/x`): rozbor nepozná, kde proměnná končí (`$env:X` v PowerShellu nese
+    dvojtečku), takže celý refspec je nečitelný → `deny` (review Amber A7). Skupina `O15`.
 - **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
   totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
   může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).
@@ -159,7 +194,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   mezery za ní dřív zkoušela každé rozdělení a hook přetekl timeout, tedy prošel **bez verdiktu**. Červená fáze ukázala
   20 s u Bashe (regrese kola 11) i u PowerShellu, teď je to pod 2 s (řádky `maxMs` ve skupinách `CR-AB` a `O9`).
 - **Co pravidlo nezavře:** README omezení 27 (uvozovky a substituce v **argumentech**, ANSI-C `$'…'`, druhá gramatika
-  slova v `Split-Arguments`). Oprava je jeden tokenizér Bashe ve verzi 0.3.2.
+  slova v `Split-Arguments`). Oprava je jeden tokenizér Bashe ve verzi 0.4.1 (GSD TASK-190).
 
 ### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
 
@@ -169,8 +204,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 | force push bez cíle (`forcePushUnknown`) | `ask` | `deny` | Q1 (může mířit na `main`) |
 | force push s cílem, který není doslovné jméno větve — proměnná, substituce, `HEAD`, `@` (`forcePushUnknown`; i `+` v refspecu bez přepínače) | `ask` (`+` bez přepínače: ticho) | `deny` | `A179-O15` (může mířit na `main`; do O15 omylem `forcePushOther` = ticho) |
 | `git -c alias.…` (`gitAlias`) | `ask` | `deny` | Q3 (alias spustí cokoli) |
-| `git branch -d` (git sám odmítne nesloučenou větev) | `deny` | **ticho** | Q11, mění `ZOPT-Q40` |
-| `git branch -D`, `-d -f`, `--delete --force` | `deny` | `deny` (vzor `git-branch-delete-force`) | Q11 |
+| `git branch -d`, `-D`, `-dr`, `--delete`, `-d -f`, `--delete --force` (vzor `git-branch-delete`) | `deny` | `deny` (beze změny) | `A179-O17` (`ZOPT-Q40`; vývojová verze podle Q11 pustila `-d` tichem a vzor přejmenovala — vráceno) |
 | mazání s cílem v proměnné, s `..`, `.NET` mazání s proměnnou, krátká absolutní cesta (`recursiveDeleteVariable`, `recursiveDeleteDotDot`, `netDeleteVariable`, `shortAbsolutePath`) | `ask` | `deny` | Q4 (cíl nejde doložit) |
 | hvězdička uvnitř povolené složky (`recursiveDeleteWildcard`), mazání z roury (`deleteFromPipeline`) | `ask` | ticho + audit | Q4, mapa |
 | kód interpretu s destruktivním voláním (`interpreterDestructive`) | `ask` | ticho + audit | Q6 |
@@ -179,13 +213,14 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 | totéž u **spuštění** nerozbalené hlavy (příčina `invoked`, např. hlava po vícenásobném přiřazení) — kontrola literálu nově i tady; nový literál `reset --hard` (bez `git`) | `ask` (sama příčina) | `deny` | Q5 — bez toho by `invoked` = ticho pustilo destruktivní příkaz |
 | nerozebratelné: spuštění proměnné, `-EncodedCommand`, neukončený heredoc (`opaque:invoked/encoded/heredocUnterminated`) | `ask` | ticho + audit | mapa |
 | zanoření nad 5 (`opaque:depth`), neznámá příčina (`opaque:unknown`) | `ask` | `deny` | `A179-O1` (N31), Q8, Q9 |
-| `ssh host "příkaz"`, `ssh prod <<EOF` (`remoteShell`) | `ask` | ticho + audit | mapa |
+| `ssh host "příkaz"`, `ssh prod <<EOF`, `plink … host příkaz` (`remoteShell`) | `ask` | `deny` | `A179-O18` (vývojová verze podle mapy: ticho + audit) |
 | `dotnet ef migrations remove`, `Invoke-Expression` (`auditPatterns`, do 0.3.0 `askPatterns`) | `ask` | ticho + audit | Q7 |
 | `Invoke-Expression` / `iex` **bez argumentu** (text z roury) — vzor `askPatterns` na něj v 0.3.0 nikdy nedosáhl | ticho **bez auditu** | ticho + audit `gate:invoke-expression` | `A179-O4` (mezera v auditu, žádný deny) |
 | destruktivní DB operace na **místním** hostiteli, jméno DB čitelné a ve vzoru `*_test_*`, `*_test`, `*_dev` | `ask` | ticho + audit `gate:dbDestroyLocal` | Q10 |
 | totéž mimo vzory, se jménem, které nejde přečíst, `sqllocaldb delete` | `ask` | `deny` | Q10 |
 | destruktivní DB operace uvnitř kontejneru (i nerozebratelná, i po stropu práce substitucí) | `ask` | `deny` | Q10 + `AOPT-O26` (v kontejneru nikdy povoleno) |
-| glob mířící na chráněnou cestu (`secrets:wildcardPath`), netrackovaný `.env.*` (`envFileUntracked`), čtení `.claude/settings.local.json` (`settingsLocal`), výpis prostředí (`envDump`), citlivá proměnná (`envVarRead`), nedekódovatelný `-EncodedCommand` (`wrapperEncoded`) | `ask` | ticho + audit | mapa |
+| glob mířící na chráněnou cestu nebo vzor (`secrets:wildcardPath`: `cat ~/.ssh/*`, `cat *.env`, `cp *.pem …`) | `ask` | `deny` | `A179-O18` (vývojová verze podle mapy: ticho + audit) |
+| netrackovaný `.env.*` (`envFileUntracked`), čtení `.claude/settings.local.json` (`settingsLocal`), výpis prostředí (`envDump`), citlivá proměnná (`envVarRead`), nedekódovatelný `-EncodedCommand` (`wrapperEncoded`) | `ask` | ticho + audit | mapa |
 | **zápis** do `.claude/settings*.json`, `.claude/sinogard-hooks.json`, `hooks.json` a `hooks/config/*` nainstalované kopie (`secrets:selfProtect`) | `ask` | **`deny`** s textem „změnu nastavení provede Tom — zapiš ji do dávky" | Q16 (agent nesmí umět vypnout vlastní pojistku) |
 | `ask` v režimu `bypassPermissions` (vydával se jako `deny`, audit `ask-bypass`) | `deny` | podle mapy výše | — (`ask` neexistuje) |
 
@@ -193,8 +228,10 @@ Jména DB se čtou doslova z příkazu (`-d`, `--dbname`, `dbname=`, URI, `Datab
 poziční argument `psql`, cíl `dropdb`, jméno v `DROP DATABASE`); u `DROP DATABASE`/`dropdb`/`ef database drop` rozhoduje
 rušená databáze. `USE`, meta-příkaz psql, dynamické SQL a trojdílné jméno = nečitelné → `deny`. Přepis
 `gate.dbDestroyLocal.databases` smí vzory jen zúžit; `decision` má hodnoty `allow` (výchozí) | `deny`; `hosts` se nečte.
-⚠️ Ticho u `secrets:wildcardPath` platí i pro glob, který míří na adresář s klíči — čtení přesného jména (`~/.ssh/id_rsa`)
-je `deny` dál (mapa `ZOPT-Q102`, „wildcard cesty = povolit").
+ℹ️ Do review Amber (A1) tu stálo *„Ticho u `secrets:wildcardPath` platí i pro glob, který míří na adresář s klíči …
+(mapa `ZOPT-Q102`, „wildcard cesty = povolit")"*. Od `A179-O18` je takový glob `deny`; glob, který na chráněné jméno jen
+narazí (`secrets:wildcardName`), mlčí dál. Mapa `ZOPT-Q102` z chatu (2026-10-20 21:1x) je přepsaná z kódu do souboru
+`predavka-task-179/2026-10-23-85-mapa-ask-rozhodnuti.md` v GSD (review A11).
 
 **Konfigurace (0.3.1):** nové objekty politik `gate.decisions` a `secrets.decisions` (hodnoty `audit` | `deny`, chybějící =
 `deny`); `gate.opaque` má hodnoty `audit` | `deny`. H-c pravidlo `policy`: přepis smí jen zpřísnit (`audit` → `deny`).
@@ -367,8 +404,8 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   žádná pravidla: `if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`
   a `X=$(case x in a) echo;; esac) <příkaz>` prošly. Brána slova strhne a rozebere příkaz za nimi. Konec subshellu
   (`(cd x; ls) > out`) zůstává beze změny. Secrets čte tokeny bez ohledu na pozici a díru neměl.
-- **Známá mez (AA7) → 0.3.2.** Gramatika slova shellu je na dvou místech: prefix před příkazem (v Bashi od `A179-O9`
-  `Get-BashCommandStart`) a `Split-Arguments`. Jeden tokenizér Bashe je kostra verze 0.3.2 (README omezení 27).
+- **Známá mez (AA7) → 0.4.1.** Gramatika slova shellu je na dvou místech: prefix před příkazem (v Bashi od `A179-O9`
+  `Get-BashCommandStart`) a `Split-Arguments`. Jeden tokenizér Bashe je kostra verze 0.4.1 (GSD TASK-190, README omezení 27).
 
 **Dvanácté a třinácté kolo `/code-review` (CR-AB, CR-AC) → návrat a jedno pravidlo (`A179-O9`):**
 - Kolo 12 přepsalo slovo shellu na lineární průchod (`Split-CommandPrefix`, `Get-ShellWordEnd`, `Find-CloseBrace`).
@@ -413,9 +450,14 @@ Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AO
 
 - Mazání cest a destruktivní git **uvnitř** kontejneru: verdikt 0.3.0 (ticho), README omezení 11 — cestová část a její
   spouštěč přehodnocení zůstávají. Obal za prefixem (`sudo docker exec …`) dál posuzuje vnitřní příkaz všemi pravidly jako v 0.3.0.
-- Hook **`secrets`: žádná změna verdiktu.** `_common.ps1` dostal nový rozbor kontejneru, ale `Get-WrapperTail` a jeho volání
-  v `secrets.ps1` se nemění; dekódování `-EncodedCommand` se jen přesunulo do sdílené funkce (verdikt `secrets` beze změny; gate ji používá pro
-  `-EncodedCommand` v kontejneru, viz řádek tabulky výše); sada `secrets` + kontrolní řádky `tests/fixtures/task179-secrets.json` (8) zelené.
+- Hook **`secrets` nad kontejnerovými tvary: verdikt 0.3.0.** Nový rozbor kontejneru v `_common.ps1` slouží DB pravidlu
+  gate; kontrolní skupina `ctl-secrets` v `tests/fixtures/task179-secrets.json` (8 řádků) je zelená. Dekódování
+  `-EncodedCommand` se přesunulo do sdílené funkce (gate ji používá pro `-EncodedCommand` v kontejneru).
+  ⚠️ **Jinde se verdikty `secrets` v tomto vydání mění** (review Amber A4; do opravy tu stálo *„`secrets`: žádná změna
+  verdiktu … `Get-WrapperTail` a jeho volání v `secrets.ps1` se nemění"*): žádné `ask` (tabulka výše), komentář s
+  apostrofem (CR-S8, oddíl Bezpečnost), druhé čtení bez komentáře (CR-U až CR-Z), změny sdílených funkcí `Get-WrapperTail`
+  (`Get-AssignmentName`, CR-X9, CR-Z8) a `Split-Arguments` (substituce ve slově, CR-AA1), glob mířící na tajemství
+  (`A179-O18`). Řádky: skupiny `Q102-sec`, `CR-Q` … `CR-Y`, `O18`.
 - Tentýž SQL bez kontejneru, tělo heredocu a roura do `docker exec -i … psql -h …` (už v 0.3.0 `deny`), `scripts/…ps1`
   spuštěný souborem (README omezení 1): beze změny.
 - Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru. Obal,
@@ -435,18 +477,21 @@ Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace).
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (207 řádků: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0, kontrolní skupiny,
-nálezy `/code-review` kol 1–9 a rozlišující řádky mutantů), `tests/fixtures/task179-secrets.json` (8); červená fáze nad 0.3.0:
-59 z prvních 105 řádků gate červených ze správného důvodu (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou
-fází nad předchozí verzí opravy. Invariant 1152 → 1347 řádků (jen přidání). `Invoke-Task117Rows` bere předponu fixtury
+`tests/fixtures/task179-gate.json` (619 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
+kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18` a rozlišující řádky mutantů),
+`tests/fixtures/task179-secrets.json` (41); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
+(čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou fází nad předchozí verzí opravy. Invariant 1152 →
+1731 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
+`A179-O17`, `A179-O18`; výčet v `_zmeneno`). Do review Amber A4 tu stálo *„207 řádků … (8) … 1152 → 1347 řádků (jen přidání)"*. `Invoke-Task117Rows` bere předponu fixtury
 a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
 řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady; běh
 nad `maxMs` se jednou opakuje a druhý běh píše audit do nové složky) a `{REP}` / `{REP2}` + `repText` / `repCount` / `repText2` / `repCount2` (dlouhý příkaz bez tisíců znaků ve
 fixtuře; takový řádek nejde do invariantu).
 
-### Meze TASK-161 přecházejí na 0.3.2
+### Meze TASK-161 přecházejí na 0.4.1
 
-Meze vydání 0.3.0 (`Z117-Q29`, README omezení 1 a 25) se opravují ve verzi **0.3.2** (GSD TASK-161), ne 0.3.1.
+Meze vydání 0.3.0 (`Z117-Q29`, README omezení 1 a 25) se opravují ve verzi **0.4.1** (GSD TASK-161; do `A179-O19` značeno
+0.3.2), ne v tomto vydání. Tokenizér Bashe (README omezení 27) = GSD TASK-190, téže verze.
 
 ## [0.3.0] — 2026-10-08
 
