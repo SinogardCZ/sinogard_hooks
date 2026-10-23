@@ -2405,7 +2405,8 @@ $script:PlinkValueFlags = '^-(P|l|pw|pwfile|i|cert|m|L|R|D|hostkey|proxycmd|serc
 # CR-AO5 (/code-review nad 54dc970): posuzuje se PUVODNI text prikazu ($script:FullCommand), ne Raw listu - obal
 # (`nohup`, `timeout`, `sudo`) Raw vnitrniho listu sklada znovu a uvozovky slova bez mezery ztrati. Zavorky substituce,
 # `;`, `|` (a v Bashi zpetny apostrof) jsou tu oddelovac slov, aby `x=$(ssh host 2>/dev/null)` dalo slovo `2>/dev/null`.
-function Get-UnquotedRedirectWords([string]$Text) {
+# CR-AP1: -InQuotes vraci naopak slova s `<>` V UVOZOVKACH (maskuje se to, co je mimo ne).
+function Get-UnquotedRedirectWords([string]$Text, [switch]$InQuotes) {
     $esc = Get-ScannerEscape
     $sb = New-Object System.Text.StringBuilder
     $inSingle = $false
@@ -2421,7 +2422,7 @@ function Get-UnquotedRedirectWords([string]$Text) {
         elseif ($c -eq "'") { $inSingle = $true }
         elseif ($c -eq '"') { $inDouble = $true }
         elseif ('();|'.IndexOf($c) -ge 0 -or ($c -eq '`' -and $esc -ne '`')) { $c = ' ' }
-        if ($quoted -and '<>&'.IndexOf($c) -ge 0) { $c = '_' }
+        if (($quoted -xor [bool]$InQuotes) -and '<>&'.IndexOf($c) -ge 0) { $c = '_' }
         [void]$sb.Append($c)
     }
     $out = New-Object System.Collections.Generic.List[string]
@@ -2452,6 +2453,10 @@ function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh', [string]$Raw = '') {
     $plink = ($Exe -ieq 'plink')
     $source = if ([string]$script:FullCommand -ne '') { [string]$script:FullCommand } else { $Raw }
     $unquoted = Get-UnquotedRedirectWords $source
+    # CR-AP1 (/code-review nad 5c43cf2): cely prikaz nese slova VSECH prikazu - `echo x >/a; ssh host '>/a'` dalo slovo
+    # `>/a` mimo uvozovky a quoted argument ssh se s nim zamenil (ticho). Text, ktery v prikazu stoji i v uvozovkach,
+    # je nejasny -> presmerovanim neni (fail-closed; cena: `ssh a 2>/dev/null; ssh b '2>/dev/null'` = deny i pro `a`).
+    foreach ($q in (Get-UnquotedRedirectWords $source -InQuotes)) { while ($unquoted.Remove($q)) { } }
     # CR-AM7: vstup ze souboru (ne `/dev/null`, `nul`, `$null`) nese prikazy pro vzdaleny shell. CR-AN2: hleda se v celem
     # Raw listu - i slepeny (`ssh host<cmds.sh`) a pred prikazem (`< cmds.sh ssh host`).
     $pool = New-Object System.Collections.Generic.List[string] (,$unquoted)
@@ -2543,7 +2548,8 @@ function Test-RemoteShellEnvCommand([string]$Raw) {
     $a = Split-Arguments $Raw
     $b = Split-Arguments ([string]$script:FullCommand)
     foreach ($w in ($a + $b)) {
-        if ([string]$w -match '^(SSH_ASKPASS|SSH_SK_PROVIDER)=(?!internal$)\S') { return $true }
+        # CR-AP3: `internal` je vestavena hodnota jen u SSH_SK_PROVIDER - u SSH_ASKPASS je to jmeno programu (jako CR-AO9).
+        if ([string]$w -match '^(SSH_ASKPASS=\S|SSH_SK_PROVIDER=(?!internal$)\S)') { return $true }
     }
     return $false
 }

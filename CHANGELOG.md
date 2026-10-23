@@ -90,6 +90,20 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
     neprokázal);
   - CR-AN10: výjimka `internal` jen u `SecurityKeyProvider` (CR-AO9); `SSH_ASKPASS=<program>` a `SSH_SK_PROVIDER=<knihovna>`
     před příkazem (i přes `env`) → `deny`; proměnná nastavená dřív (`export`, `$env:`) = README mez 28 (CR-AO10).
+  - fixtury: kontrola CR-Q6 čekala audit `envVarRead`, první verdikt je od 0.3.1 `envDump` (vada řádku z review A179-O18);
+    kontrola CR-AN7 neměla jediný řádek auditu (`auditAbsentShape` ho vyžaduje). Obojí odhalila sekce secrets pod
+    Windows PowerShell 5.1 (pod pwsh 7 se tvrzení auditu v dílčím nástroji nekontrolovala).
+- **Poslední kolo `/code-review` nad `5c43cf2` (CR-AP, skupina `CR-AP`; rozsah podle `A179-O22`):**
+  - moje regrese CR-AO5 do ticha: slova přesměrování se sbírají z celého příkazu, takže `echo x >/a; ssh host '>/a'`
+    zaměnilo argument ssh v uvozovkách se slovem jiného příkazu (0.3.0 `ask`, `5c43cf2` ticho). Text, který v příkazu
+    stojí i v uvozovkách, je nejasný a přesměrováním není (CR-AP1). **Cena:** `ssh a 2>/dev/null; ssh b '2>/dev/null'`
+    = `deny` i pro `a`;
+  - vada CR-AO10 do ticha: `SSH_ASKPASS=internal` je jméno programu, výjimka `internal` platí jen u `SSH_SK_PROVIDER` (CR-AP3);
+  - podle `A179-O22` neopraveno, README mez 28 a kostra GSD TASK-190: přiřazení `SSH_ASKPASS` ve vnořeném shellu
+    (CR-AP2, ticho; v 0.3.0 se nehlídalo vůbec), přesměrování slepené s `&` / `&&` = příkaz (CR-AP4, `deny`; 0.3.0 `ask`),
+    slovo `SSH_ASKPASS=…` kdekoli v příkazu = `deny` každému ssh (CR-AP5); escape znak vnořeného shellu nad původním
+    textem, nedosažitelná větev `>|`, opakovaný rozbor celého příkazu pro každý list ssh a dvojí význam `$Braces`
+    (CR-AP6–AP10, bez doloženého selhání) — řešení je příznak „v uvozovkách" u argumentu listu z tokenizéru 0.4.1.
 - **Falešné `deny` u interaktivní relace (CR-AL2)** opraveno: tabulka voleb ssh s hodnotou je úplná podle ssh(1)
   (`-O exit`, `-B rozhraní`, `-P tag` …) a čte shluk krátkých voleb (`-vp 2222`, `-p2222`); plink má vlastní tabulku
   (`-P`, `-l`, `-pw`, `-i`, `-hostkey` …). Do opravy vypadala hodnota volby jako host a host jako příkaz (od O18 `deny`,
@@ -546,11 +560,11 @@ Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace).
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (677 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
-kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL`–`CR-AO` a rozlišující řádky mutantů),
+`tests/fixtures/task179-gate.json` (685 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
+kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL`–`CR-AP` a rozlišující řádky mutantů),
 `tests/fixtures/task179-secrets.json` (86); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
 (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou fází nad předchozí verzí opravy. Invariant 1152 →
-1832 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
+1840 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
 `A179-O17`, `A179-O18`, `A179-O20`/`A179-O21`; výčet v `_zmeneno`). Do review Amber A4 tu stálo *„207 řádků … (8) … 1152 → 1347 řádků (jen přidání)"*. `Invoke-Task117Rows` bere předponu fixtury
 a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
 řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady; běh

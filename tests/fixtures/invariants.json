@@ -11730,6 +11730,54 @@
       "expect": "allow",
       "since": "CR-Q6 kontrola: .env.dev pred env bez prepisu -> ticho + audit sede zony",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo hi >/srv/db/data.sql; ssh build-host '>/srv/db/data.sql'",
+      "expect": "deny",
+      "since": "CR-AP1 presmerovani jineho prikazu nezameni prikaz ssh v uvozovkach (0.3.0 ask) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh a 2>/dev/null; ssh b '2>/dev/null'",
+      "expect": "deny",
+      "since": "CR-AP1 cena: tentyz text v uvozovkach i mimo ne = nejasny -> deny i pro ssh bez prikazu"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host 2>/dev/null; echo '2>x'",
+      "expect": "allow",
+      "since": "CR-AP1 kontrola: jiny text v uvozovkach presmerovani nezmeni -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "SSH_ASKPASS=internal SSH_ASKPASS_REQUIRE=force ssh build-host",
+      "expect": "deny",
+      "since": "CR-AP3 SSH_ASKPASS=internal je program -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "SSH_SK_PROVIDER=internal ssh build-host",
+      "expect": "allow",
+      "since": "CR-AP3 kontrola: SSH_SK_PROVIDER=internal (vestavena hodnota) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"env SSH_ASKPASS=/tmp/evil ssh build-host\"",
+      "expect": "allow",
+      "since": "CR-AP2 mez README 28: env SSH_ASKPASS ve vnorenem shellu se nevidi -> ticho (oprava 0.4.1)"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh build-host 2>/dev/null&",
+      "expect": "deny",
+      "since": "CR-AP4 mez README 28: presmerovani slepene s & / && je prikaz (0.3.0 ask) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo SSH_ASKPASS=x; ssh build-host",
+      "expect": "deny",
+      "since": "CR-AP5 mez README 28: SSH_ASKPASS kdekoli v prikazu (i jako text) -> deny"
     }
   ]
 }

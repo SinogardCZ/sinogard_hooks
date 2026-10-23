@@ -819,7 +819,11 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     a přesměrování výstupu (i PowerShell `*>`) mlčí. `SSH_ASKPASS=<program>` / `SSH_SK_PROVIDER=<knihovna>` před příkazem
     = `deny`. Přesměrování je jen slovo, které v původním textu příkazu stojí mimo uvozovky — `ssh host '2>/dev/null rm
     -rf x'` je příkaz; **cena:** u ssh uvnitř vnořeného shellu (`bash -c "ssh host 2>/dev/null"`) je přesměrování
-    v uvozovkách, takže `deny`. **Mez:** proměnná nastavená dřív (`export SSH_ASKPASS=…`, `$env:SSH_ASKPASS = …`) se nevidí. **Meze:** `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
+    v uvozovkách, takže `deny`; tentýž text v uvozovkách i mimo ně kdekoli v příkazu je nejasný a přesměrováním není
+    (`ssh a 2>/dev/null; ssh b '2>/dev/null'` = `deny` i pro `a`); přesměrování slepené s `&` / `&&`
+    (`ssh host 2>/dev/null&`) je příkaz (`deny`, 0.3.0 `ask`). **Mez:** proměnná nastavená dřív (`export SSH_ASKPASS=…`,
+    `$env:SSH_ASKPASS = …`) ani přiřazení ve vnořeném shellu (`bash -c "env SSH_ASKPASS=… ssh host"`) se nevidí;
+    **cena:** slovo `SSH_ASKPASS=…` kdekoli v příkazu, i u jiného příkazu nebo jako text, dá `deny` každému ssh. **Meze:** `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
     `RemoteCommand` nebo `ProxyCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s příkazem
     v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci); **roura do ssh bez příkazu** (`cat cmds.sh | ssh
     host`) mlčí — list ssh o rouře nic neví, oprava s tokenizérem 0.4.1 (GSD TASK-190). Mazání větve (`git branch -d|-D`,
