@@ -1,10 +1,12 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  PreToolUse secrets guard: cteni, zapis i vypis souboru se secrets konci deny nebo ask.
+  PreToolUse secrets guard: cteni, zapis i vypis souboru se secrets konci deny; seda zona audit (hook mlci).
 
 .DESCRIPTION
   ASCII-ONLY zdroj (viz _common.ps1); lidske texty jsou v hooks/config/defaults.json.
+  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.1.
+  Do 0.4.0 (ZOPT-Q102) tu v SYNOPSIS stalo "konci deny nebo ask".
   Fail-closed stejne jako gate.ps1: vyjimka, vadny vstup i neznamy nastroj = exit 2.
 
   Nelogujeme obsah nastroju ani promptu - do rozhodnuti jde jen cesta nebo prikaz,
@@ -372,7 +374,8 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # `head .github/workflows/*.yml` a `ls docs/technical/*.json` koncily dotazem (2 ze 3
     # dotazu `wildcardPath` ve vzorku faze 1; treti byl `echo **2` z doby pred N26).
     #   - trida chranena CESTOU (`denyPathPatterns` doslova nad textem globu, nebo glob, ktery
-    #     MIRI na kanonickou chranenou cestu z `protectedPaths`) -> `ask` jako dosud;
+    #     MIRI na kanonickou chranenou cestu z `protectedPaths`) -> politika `wildcardPath` (od A179-O18 deny, viz
+    #     nize; do review Amber B3 tu stalo "-> `ask` jako dosud" = stav do 0.3.0);
     #   - trida chranena JMENEM (`protectedBaseNames` sedne na posledni segment) -> AUDIT:
     #     hook mlci a zapise radek `secrets:wildcardName` (ne ticho bez stopy - bez zaznamu
     #     by se nikdy nezjistilo, jak casto k tomu doslo; ctenar auditu je od 0.2.0 kanarek

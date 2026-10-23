@@ -7,6 +7,8 @@
   ASCII-ONLY zdroj (viz _common.ps1). Vsechny lidske texty jsou v
   hooks/config/defaults.json.
 
+  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.1.
+
   Fail-closed: jakakoli vyjimka, nevalidni nebo prazdny vstup, chybejici prikaz
   i neznamy nastroj konci exit 2. Ukazkovy validator Anthropicu tohle nedela
   (exit 1 = fail-open); lisime se vedome.
@@ -2524,10 +2526,15 @@ function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh', [string]$Raw = '') {
 # `-F <konfigurace>` a `~/.ssh/config` ho nest mohou taky, ale soubor hook necte - README mez 28.
 # CR-AN10 (/code-review nad 824775e): `-o PKCS11Provider|SecurityKeyProvider=<knihovna>` a `-I <knihovna>` nactou do ssh
 # cizi kod na TOMTO stroji - tataz trida jako ProxyCommand.
+# A179-O23 / N1 (delta review Amber nad fc426ee): `plink -load <relace>` - host muze nest ulozena relace, pak je
+# PRVNI pozicni argument uz prikaz (manual PuTTY, kap. 7). Od CR-AL2 tabulka voleb jmeno relace spotrebuje a zbyl
+# jeden pozicni -> ticho (0.3.0 ask). Fail-closed: s `-load` jeden pozicni = prikaz (cena: `plink -load relace host`
+# s relaci bez hosta = deny).
 function Test-RemoteShellOptionCommand($Parsed, [string]$Exe = 'ssh') {
     foreach ($o in @($Parsed.Options)) {
         if ($Exe -ieq 'plink') {
             if ([string]$o.Name -ceq 'm' -or [string]$o.Name -ceq 'proxycmd') { return $true }
+            if ([string]$o.Name -ceq 'load' -and @($Parsed.Positional).Count -ge 1) { return $true }
         } elseif ([string]$o.Name -ceq 'I') {
             return $true
         } elseif ([string]$o.Name -ceq 'o' -and [string]$o.Value -match '(?i)^\s*(RemoteCommand|ProxyCommand|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider)\s*(=\s*|\s+)(?!none\s*$)(\S.*)$') {

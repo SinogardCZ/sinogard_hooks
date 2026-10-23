@@ -22,8 +22,10 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
 - **`git branch -d` = `deny` jako v 0.3.0** (`A179-O17`). Vývojová verze (`A179-O3` Q11) pustila `-d` (smaže jen
   sloučenou větev) tichem a vzor přejmenovala na `git-branch-delete-force`. `git branch -d` ale v 0.3.0 byl `deny`, ne
   `ask`, takže ho `ZOPT-Q102` neměnil, a Tomovo `ZOPT-Q40` chce SCHVALUJU pro smazání **jakékoli** větve. Vzor je zpět
-  i s id `git-branch-delete`, takže projektový přepis `gate.denyPatterns` z 0.3.0 platí dál (pravidlo `superset`).
-  Skupina `O17`.
+  i s id `git-branch-delete`; nese ale od `A179-O20` zkratky `--delete`, takže projektový přepis `gate.denyPatterns`
+  z 0.3.0 už nadmnožinou není a odmítne se (platí výchozí, přísnější) — viz Migrace přepisu níž. Skupina `O17`.
+  Do review Amber N2 (`A179-O23`) tu stálo *„takže projektový přepis `gate.denyPatterns` z 0.3.0 platí dál (pravidlo
+  `superset`)"* — platilo v `1eee799`, změnou vzoru v `c54a843` přestalo.
 - **Zástupný znak mířící na tajemství = `deny`** (`A179-O18`): `secrets.decisions.wildcardPath` výchozí `deny`, ne
   audit — `cat ~/.ssh/*`, `cat *.env`, `cp *.pem …`, `Get-Content ~/.kube/*`. S auditem by obsah tajemství vstoupil do
   kontextu modelu a hook by jen zapsal řádek. Glob, který na chráněné jméno jen **narazí** (`cat *`, `ls *.md`), mlčí dál
@@ -106,6 +108,15 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
     slovo `SSH_ASKPASS=…` kdekoli v příkazu = `deny` každému ssh (CR-AP5); escape znak vnořeného shellu nad původním
     textem, nedosažitelná větev `>|`, opakovaný rozbor celého příkazu pro každý list ssh a dvojí význam `$Braces`
     (CR-AP6–AP10, bez doloženého selhání) — řešení je příznak „v uvozovkách" u argumentu listu z tokenizéru 0.4.1.
+- **Delta review Amber nad `fc426ee` (`A179-O23`, skupina `O23`):** moje regrese CR-AL2 do ticha — tabulka voleb plink
+  zná `-load <relace>`, jméno relace se spotřebovalo a `plink -load relace příkaz` měl jediný poziční argument (0.3.0
+  `ask`, od `c54a843` ticho bez auditu). Uložená relace může nést host, pak je první poziční argument už příkaz (manuál
+  PuTTY, kap. 7) → s `-load` jeden poziční = příkaz = `deny` (N1). **Cena:** `plink -load relace host` s relací bez
+  hosta = `deny`; `plink -load relace` bez dalšího argumentu mlčí.
+  Text a testy z téže review: věta o migraci `gate.denyPatterns` výš (N2), oprava CR-V2 pod nadpisem bezpečnosti (A10),
+  cesty předávek (A14), popisek řádku invariantu `cat [a-z][a-z].txt` (N5), věta o číslech verzí v hlavičkách zdrojů (N6),
+  řádek `K3-2` s přijatým přepisem `@narrow` místo odmítnutého `@allow` (N7, jako B1), zastaralé `ask` v komentářích
+  `wildcardPath` (B3).
 - **Falešné `deny` u interaktivní relace (CR-AL2)** opraveno: tabulka voleb ssh s hodnotou je úplná podle ssh(1)
   (`-O exit`, `-B rozhraní`, `-P tag` …) a čte shluk krátkých voleb (`-vp 2222`, `-p2222`); plink má vlastní tabulku
   (`-P`, `-l`, `-pw`, `-i`, `-hostkey` …). Do opravy vypadala hodnota volby jako host a host jako příkaz (od O18 `deny`,
@@ -131,7 +142,7 @@ Cesty: přejmenovat testovací DB na `*_test`, nebo rozhodne Tom (změna výchoz
 **A v témže vydání (A179-O2, jedno vydání místo dvou): plugin už nikdy nevrací `ask` (`ZOPT-Q102`, Tom 2026-10-20).**
 Hook ve všech projektech nečeká na člověka: každé místo, které do 0.3.0 vracelo `ask`, je od 0.3.1 buď **ticho + řádek
 auditu**, nebo **`deny`** — podle mapy Toma (`ZOPT-Q102`) a rozhodnutí Amber `A179-O1` a `A179-O3` (Q1–Q16). Výčet míst
-s řádky kódu a měření dnešních zaseknutí: `predavka-task-179/2026-10-20-37…40` v GSD.
+s řádky kódu a měření dnešních zaseknutí: `W:\dev\gsd\predavka-task-179\2026-10-20-37…40` (mimo repo GSD).
 
 ### Bezpečnost — oprava chyby 0.3.0: komentář s apostrofem vypínal bránu (CR-S8, `A179-O5`)
 
@@ -154,6 +165,15 @@ změřila v nasazené 0.3.0 i ve verzích 0.2.0 a 0.1.9 (cache pluginu, Bash, 20
 na pozici a chybu neměl. Od 0.3.1 gate tato slova a vzory strhne a rozebere příkaz za nimi. Co před příkazem stojí, musí
 být **prosté slovo** (`A179-O9`–`O11`, oddíl níž): hodnota přiřazení, cíl přesměrování, slovo a vzor `case`, i hlava
 příkazu. Jinak `deny`. Případy hlídají skupiny `CR-AA`, `CR-AB`, `O9` a `O11` v `tests/fixtures/task179-gate.json`.
+
+### Bezpečnost — oprava chyby 0.3.0: příkaz uvnitř výrazu PowerShellu (CR-V2, `A179-O23`)
+
+Statement PowerShellu, který začíná výrazem (`[IO.Path]::GetTempPath() + (git reset --hard)`, `[Environment]::X(...) +
+(psql …)`), gate nerozebíral a příkaz v závorce prošel tichem. Chyba se změřila v 0.3.0 (archiv tagu `v0.3.0`, pwsh,
+2026-10-23: ticho bez auditu). Od 0.3.1 rozhoduje i parser PowerShellu: každý příkaz (`CommandAst`) z výrazu se rozebere
+jako list s příznakem `FromAst` a `allow` z `gate.dbDestroyLocal` nemá (detail šesté a sedmé kolo níž, CR-V2, W1, W6).
+Případy hlídají skupiny `CR-V` a `CR-W` v `tests/fixtures/task179-gate.json`. Do review Amber A10 (`A179-O23`) byla
+oprava jen v odstavci šestého kola, bez nadpisu bezpečnosti.
 
 ### Bezpečnost — slovo před příkazem v Bashi: jedno fail-closed pravidlo místo gramatiky (`A179-O9`)
 
@@ -316,7 +336,7 @@ rušená databáze. `USE`, meta-příkaz psql, dynamické SQL a trojdílné jmé
 ℹ️ Do review Amber (A1) tu stálo *„Ticho u `secrets:wildcardPath` platí i pro glob, který míří na adresář s klíči …
 (mapa `ZOPT-Q102`, „wildcard cesty = povolit")"*. Od `A179-O18` je takový glob `deny`; glob, který na chráněné jméno jen
 narazí (`secrets:wildcardName`), mlčí dál. Mapa `ZOPT-Q102` z chatu (2026-10-20 21:1x) je přepsaná z kódu do souboru
-`predavka-task-179/2026-10-23-85-mapa-ask-rozhodnuti.md` v GSD (review A11).
+`W:\dev\gsd\predavka-task-179\2026-10-23-85-mapa-ask-rozhodnuti.md` (mimo repo GSD; review A11).
 
 **Konfigurace (0.3.1):** nové objekty politik `gate.decisions` a `secrets.decisions` (hodnoty `audit` | `deny`, chybějící =
 `deny`); `gate.opaque` má hodnoty `audit` | `deny`. H-c pravidlo `policy`: přepis smí jen zpřísnit (`audit` → `deny`).
@@ -562,11 +582,11 @@ Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace).
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (685 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
-kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL`–`CR-AP` a rozlišující řádky mutantů),
+`tests/fixtures/task179-gate.json` (690 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
+kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL`–`CR-AP`, `O23` a rozlišující řádky mutantů),
 `tests/fixtures/task179-secrets.json` (86); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
 (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou fází nad předchozí verzí opravy. Invariant 1152 →
-1840 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
+1844 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
 `A179-O17`, `A179-O18`, `A179-O20`/`A179-O21`; výčet v `_zmeneno`). Do review Amber A4 tu stálo *„207 řádků … (8) … 1152 → 1347 řádků (jen přidání)"*. `Invoke-Task117Rows` bere předponu fixtury
 a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
 řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady; běh

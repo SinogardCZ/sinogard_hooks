@@ -11266,7 +11266,7 @@
       "tool": "Bash",
       "cmd": "cat [a-z][a-z].txt",
       "expect": "allow",
-      "since": "A179-O20 CR-AL1 cena fail-closed: vic nez 64 kandidatu -> deny",
+      "since": "A179-O21 (CR-AM5): nadmnozina bez chraneneho jmena -> ticho; do A179-O21 deny (A179-O20 CR-AL1, vic nez 64 kandidatu), popisek opraven A179-O23 N5",
       "hook": "secrets"
     },
     {
@@ -11778,6 +11778,30 @@
       "cmd": "echo SSH_ASKPASS=x; ssh build-host",
       "expect": "deny",
       "since": "CR-AP5 mez README 28: SSH_ASKPASS kdekoli v prikazu (i jako text) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "plink -load build-sess uptime",
+      "expect": "deny",
+      "since": "A179-O23 N1 plink -load relace + prikaz (0.3.0 ask, od CR-AL2 ticho) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "plink -batch -load build-sess \"rm -rf /srv/x\"",
+      "expect": "deny",
+      "since": "A179-O23 N1 plink -batch -load relace + prikaz (Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "plink -load build-sess build-host",
+      "expect": "deny",
+      "since": "A179-O23 N1 cena: plink -load relace host (relace bez hosta) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "plink -load build-sess",
+      "expect": "allow",
+      "since": "A179-O23 N1 kontrola: plink -load relace bez prikazu -> ticho"
     }
   ]
 }
