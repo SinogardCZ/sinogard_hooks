@@ -86,8 +86,10 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
     je v původním textu v uvozovkách, posoudí se jako příkaz = `deny` (fail-closed);
   - moje regrese CR-AN3: zástupné znaky PowerShellu negaci nemají, `Get-Content .en[!v]` čte `.env` — negace jen
     v Bashi (CR-AO2); Bash `[[=v=]]` / `[[.v.]]` = nadmnožina (CR-AO6); dvě skupiny kolem `*` se už neslijí do `**`
-    (CR-AO8); přeskok `git ls-files` jen po verdiktu `envFileUntracked` (CR-AO7, preventivně — falešný verdikt se
-    neprokázal);
+    (CR-AO8); přeskok `git ls-files` jen po verdiktu `envFileUntracked` (CR-AO7: se zpřísněným `envFileUntracked` mlčelo
+    `cat {.claude/settings.local.json,.env.dev}`; do `9cd3195` tu stálo *„preventivně — falešný verdikt se neprokázal"* —
+    řádek fixtury měl přepis jen s jedním klíčem `decisions`, přepis se slučuje o jednu úroveň, takže chyběl
+    `settingsLocal` a řádek byl `deny` ze špatného důvodu; totéž u nového řádku CR-Q6, opraveno);
   - CR-AN10: výjimka `internal` jen u `SecurityKeyProvider` (CR-AO9); `SSH_ASKPASS=<program>` a `SSH_SK_PROVIDER=<knihovna>`
     před příkazem (i přes `env`) → `deny`; proměnná nastavená dřív (`export`, `$env:`) = README mez 28 (CR-AO10).
   - fixtury: kontrola CR-Q6 čekala audit `envVarRead`, první verdikt je od 0.3.1 `envDump` (vada řádku z review A179-O18);
