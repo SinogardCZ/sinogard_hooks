@@ -2392,19 +2392,64 @@ function Test-ConfiguredPattern($Leaf, $Patterns) {
 # `ssh -i key.pem host` vypadalo jako "host + prikaz" -> ask, a v bypassu deny.
 # Falesny blok na uplne bezne praci; tabulka je proto stejna jako u obalu
 # (Get-WrapperTail) - jediny zpusob, jak se to nerozejde.
-$script:SshValueFlags = '^(-p|-i|-o|-l|-F|-J|-L|-R|-D|-b|-c|-e|-m|-w|-E|-I|-Q|-S|-W)$'
+# CR-AL2 (TASK-179, /code-review nad 1eee799): od A179-O18 je `remoteShell` deny, takze neuplna tabulka = falesny zakaz
+# interaktivni relace (`ssh -O exit host`, `ssh -vp 2222 host`, `plink -P 2222 host`). ssh: volby s hodnotou podle
+# ssh(1) (OpenSSH 9/10), kratke volby, a shluk (`-vp 2222`, `-p2222`); plink: viceznakove volby s hodnotou podle `plink -help` (PuTTY 0.8x).
+$script:SshValueLetters = 'BbcDEeFIiJLlmOoPpQRSWw'
+$script:PlinkValueFlags = '^-(P|l|pw|pwfile|i|m|L|R|D|hostkey|proxycmd|sercfg|sessionlog|sshlog|sshrawlog|load|nc|loghost)$'
 
-function Get-RemoteShellPositional($Argv) {
+function Get-RemoteShellPositional($Argv, [string]$Exe = 'ssh') {
     $out = New-Object System.Collections.ArrayList
+    $plink = ($Exe -ieq 'plink')
     $i = 0
     while ($i -lt $Argv.Count) {
         $t = [string]$Argv[$i]
-        if ($t -cmatch $script:SshValueFlags) { $i += 2; continue }
-        if ($t.StartsWith('-')) { $i++; continue }
+        if ($plink) {
+            if ($t -cmatch $script:PlinkValueFlags) { $i += 2; continue }
+            if ($t.StartsWith('-')) { $i++; continue }
+        } elseif ($t.Length -gt 1 -and $t.StartsWith('-') -and -not $t.StartsWith('--')) {
+            # Shluk kratkych voleb: prvni volba s hodnotou ukonci shluk - zbytek tokenu je jeji hodnota, jinak dalsi token.
+            $skip = 1
+            for ($k = 1; $k -lt $t.Length; $k++) {
+                if ($script:SshValueLetters.IndexOf($t[$k]) -ge 0) {
+                    if ($k -eq $t.Length - 1) { $skip = 2 }
+                    break
+                }
+            }
+            $i += $skip
+            continue
+        } elseif ($t.StartsWith('-')) { $i++; continue }
         [void]$out.Add($t)
         $i++
     }
     return $out
+}
+
+# A179-O20 / CR-AL3 (Amber 2026-10-23): prikaz na cizim stroji nemusi byt pozicni argument - `ssh -o RemoteCommand=...`
+# (i `-oRemoteCommand=`, ve shluku `-To ...`; klic ssh nerozlisuje velikost pismen) a `plink -m <soubor>` ho nesou volbou.
+# Do teto opravy ticho bez auditu (dira 0.3.0). `RemoteCommand none` prikaz nenese. `-F <konfigurace>` muze RemoteCommand
+# nest taky, ale soubor hook necte - README mez (deny kazdeho `-F` by zakazal beznou praci).
+function Test-RemoteShellOptionCommand($Argv, [string]$Exe = 'ssh') {
+    if ($Exe -ieq 'plink') {
+        foreach ($t in @($Argv)) { if ([string]$t -ceq '-m') { return $true } }
+        return $false
+    }
+    $i = 0
+    while ($i -lt $Argv.Count) {
+        $t = [string]$Argv[$i]
+        if ($t.Length -gt 1 -and $t.StartsWith('-') -and -not $t.StartsWith('--')) {
+            for ($k = 1; $k -lt $t.Length; $k++) {
+                if ($script:SshValueLetters.IndexOf($t[$k]) -ge 0) {
+                    $val = if ($k -lt $t.Length - 1) { $t.Substring($k + 1) } elseif ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }
+                    if ($t[$k] -ceq 'o' -and $val -match '(?i)^\s*RemoteCommand\s*(=\s*|\s+)(?!none\s*$)\S') { return $true }
+                    if ($k -eq $t.Length - 1) { $i++ }
+                    break
+                }
+            }
+        }
+        $i++
+    }
+    return $false
 }
 
 # Write-GateAudit zije od 0.2.0 v _common.ps1 - secrets.ps1 audituje taky (TASK-106 bod 11,
@@ -2648,8 +2693,9 @@ function Test-Leaf($Leaf, $Config) {
     if ($Leaf.Kind -eq 'leaf') {
         $remote = @(Get-Field $gate 'remoteShells' @('ssh', 'plink'))
         if ($remote -ccontains ([string]$Leaf.Exe).ToLowerInvariant()) {
-            $positional = @(Get-RemoteShellPositional (@(Get-LeafField $Leaf 'Args' @())))
-            if ($positional.Count -ge 2) {
+            $remoteArgs = @(Get-LeafField $Leaf 'Args' @())
+            $positional = @(Get-RemoteShellPositional $remoteArgs ([string]$Leaf.Exe))
+            if ($positional.Count -ge 2 -or (Test-RemoteShellOptionCommand $remoteArgs ([string]$Leaf.Exe))) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
                 # ZOPT-Q102 / A179-O3, 0.3.1: politika `gate.decisions.remoteShell` (vychozi deny od A179-O18; do 0.3.0 ask).
@@ -2699,9 +2745,9 @@ function Test-Leaf($Leaf, $Config) {
         #
         # 0.1.10 ty dva pripady ROZDELUJE, prestoze do 0.1.9 sdilely jednu podminku:
         #   kod interpretu = tataz vec jako `python -c`, tedy pricina `interpreter`,
-        #   cizi stroj      = tataz vec jako `ssh host "cmd"` (nalez Ada N21), tedy ask
-        #                     BEZE ZMENY - pravidla nad cestami tam neplati a audit
-        #                     na nasem stroji o cizim stroji netvrdi nic.
+        #   cizi stroj      = tataz vec jako `ssh host "cmd"` (nalez Ada N21), tedy politika
+        #                     `gate.decisions.remoteShell` (do 0.3.0 ask, od A179-O18 deny) - pravidla nad
+        #                     cestami tam neplati a audit na nasem stroji o cizim stroji netvrdi nic.
         if (@($script:CodeInterpreters) -ccontains $oe) {
             # K5-1 (TASK-179, kolo 5): interpret v kontejneru rozbaleny starsim pruchodem (`docker exec -i app python3 <<EOF`)
             # ma verdikt 0.3.0 a navic zavoru K4-3 - viditelny destruktivni DB literal v tele -> deny (0.3.1; do 0.3.0 ask).

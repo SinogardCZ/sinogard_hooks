@@ -11078,6 +11078,224 @@
       "expect": "allow",
       "since": "CR-Q6 kontrola: bez prepisu -> ticho + audit",
       "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -O exit build-host",
+      "expect": "allow",
+      "since": "CR-AL2 kontrola: ssh -O exit (ridici prikaz, volba s hodnotou) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -B eth0 build-host",
+      "expect": "allow",
+      "since": "CR-AL2 kontrola: ssh -B rozhrani -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -vp 2222 build-host",
+      "expect": "allow",
+      "since": "CR-AL2 kontrola: shluk -vp s portem -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -p2222 build-host",
+      "expect": "allow",
+      "since": "CR-AL2 kontrola: -p slepeny s portem -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -vp 2222 build-host uptime",
+      "expect": "deny",
+      "since": "CR-AL2 shluk -vp s portem a prikazem -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "plink -P 2222 build-host",
+      "expect": "allow",
+      "since": "CR-AL2 kontrola: plink -P port (PowerShell) -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "plink -l tomas build-host",
+      "expect": "allow",
+      "since": "CR-AL2 kontrola: plink -l uzivatel -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "plink -P 2222 build-host uptime",
+      "expect": "deny",
+      "since": "CR-AL2 plink -P port s prikazem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -o RemoteCommand=uptime build-host",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL3 ssh -o RemoteCommand -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -oremotecommand=uptime build-host",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL3 ssh -oRemoteCommand slepene, jiny zapis klice -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -To \"RemoteCommand uptime\" build-host",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL3 ssh shluk -To s RemoteCommand v uvozovkach -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "plink -m cmds.txt build-host",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL3 plink -m soubor s prikazy (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -o RemoteCommand=none build-host",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL3 kontrola: RemoteCommand none -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -o BatchMode=yes build-host",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL3 kontrola: jina volba -o -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "ssh -F ./cfg build-host",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL3 mez README: -F konfigurace (soubor hook necte) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --del feature/x",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL5 git branch --del (zkratka --delete) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --delet feature/x",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL5 git branch --delet -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch --d feature/x",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL5 git branch --d (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --sort=-committerdate",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL5 kontrola: --sort=-committerdate -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --sort -committerdate",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL6 cena vzoru 0.3.0: --sort s mezerou a -committerdate -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat ~/.aws/credential[s]",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 [..] na kanonicke chranene ceste -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .en[v]",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 [..] ve jmenu souboru prostredi -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat secret[s].json",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 [..] ve jmenu secrets.json -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat key.pe[m]",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 [..] v pripone klice -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat ~/.ssh/id_[a-z]sa",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 rozsah [a-z] v ceste ke klici -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat {.env,x}",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 Bash {a,b} -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .env{,.local}",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 Bash prazdna alternativa .env{,.local} -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "Get-Content .en[v]",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 PowerShell [..] -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat .en[!x]",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 fail-closed: negace [!x] nejde rozvinout -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat [a-z][a-z].txt",
+      "expect": "deny",
+      "since": "A179-O20 CR-AL1 cena fail-closed: vic nez 64 kandidatu -> deny",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat src/app/[id]/page.tsx",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL1 kontrola: [..] mimo tajemstvi (route Next.js) -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat log{1..3}.txt",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL1 kontrola: rada {1..3} mimo tajemstvi -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "head docs/{a,b}.md",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL1 kontrola: alternativy mimo tajemstvi -> ticho",
+      "hook": "secrets"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cat \".en[v]\"",
+      "expect": "allow",
+      "since": "A179-O20 CR-AL1 kontrola: v uvozovkach se skupina nerozviji -> ticho",
+      "hook": "secrets"
     }
   ]
 }

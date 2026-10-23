@@ -164,12 +164,111 @@ function Test-CwdChange([string]$Command) {
 }
 $script:CwdUncertain = $false
 
-function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true) {
+# A179-O20 / CR-AL1 (Amber 2026-10-23): shell rozvine i `[...]` a v Bashi `{a,b}`, nejen `*` a `?` - `cat .en[v]`,
+# `cat ~/.aws/credential[s]`, `cat {.env,x}` do teto opravy prosly tichem (dira 0.3.0). Skupina se ROZVINE na doslovne
+# kandidaty (mnozina znaku, rozsah `a-z`, alternativy, ciselna a znakova rada `{1..3}`) a kazdy kandidat jde pravidlem cesty;
+# trefi-li nektery chraneny soubor, je cela cesta glob mirici na tajemstvi (`wildcardPath`, deny). Co rozvinout nejde
+# (negace `[!x]` / `[^x]`, trida `[[:alpha:]]`, `/` ve skupine) nebo by dalo vic nez $Limit kandidatu, = $null a volajici
+# rozhodne fail-closed (`wildcardPath`). Prevod skupin na regex globu (bez vyctu) = verze 0.4.1 (GSD TASK-190).
+function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
+    $acc = New-Object System.Collections.Generic.List[string]
+    $acc.Add('')
+    $i = 0
+    while ($i -lt $Path.Length) {
+        $ch = $Path[$i]
+        $alts = $null
+        $next = $i + 1
+        if ($ch -eq '[') {
+            $j = $i + 1
+            if ($j -lt $Path.Length -and ($Path[$j] -eq '!' -or $Path[$j] -eq '^')) { return $null }
+            if ($j -lt $Path.Length -and $Path[$j] -eq ']') { $j++ }
+            $close = $Path.IndexOf(']', $j)
+            if ($close -gt $i + 1) {
+                $body = $Path.Substring($i + 1, $close - $i - 1)
+                if ($body.Contains('[:') -or $body.Contains('/')) { return $null }
+                $set = New-Object System.Collections.Generic.List[string]
+                for ($k = 0; $k -lt $body.Length; $k++) {
+                    if ($k + 2 -lt $body.Length -and $body[$k + 1] -eq '-') {
+                        $a = [int]$body[$k]; $b = [int]$body[$k + 2]
+                        if ($b -lt $a -or ($b - $a) -gt $Limit) { return $null }
+                        for ($c = $a; $c -le $b; $c++) { $s = [string][char]$c; if (-not $set.Contains($s)) { $set.Add($s) } }
+                        $k += 2
+                    } else {
+                        $s = [string]$body[$k]; if (-not $set.Contains($s)) { $set.Add($s) }
+                    }
+                }
+                $alts = @($set)
+                $next = $close + 1
+            }
+        } elseif ($Braces -and $ch -eq '{') {
+            $depth = 0; $close = -1
+            $commas = New-Object System.Collections.Generic.List[int]
+            for ($k = $i; $k -lt $Path.Length; $k++) {
+                if ($Path[$k] -eq '{') { $depth++ }
+                elseif ($Path[$k] -eq '}') { $depth--; if ($depth -eq 0) { $close = $k; break } }
+                elseif ($Path[$k] -eq ',' -and $depth -eq 1) { $commas.Add($k) }
+            }
+            if ($close -gt $i) {
+                $body = $Path.Substring($i + 1, $close - $i - 1)
+                $list = New-Object System.Collections.Generic.List[string]
+                if ($commas.Count -gt 0) {
+                    $start = $i + 1
+                    $parts = New-Object System.Collections.Generic.List[string]
+                    foreach ($cp in $commas) { $parts.Add($Path.Substring($start, $cp - $start)); $start = $cp + 1 }
+                    $parts.Add($Path.Substring($start, $close - $start))
+                    foreach ($p in $parts) {
+                        $sub = Expand-PathGlobGroups $p $Braces $Limit
+                        if ($null -eq $sub) { return $null }
+                        foreach ($s in $sub) { $list.Add($s) }
+                    }
+                } elseif ($body -match '^(-?\d+)\.\.(-?\d+)$') {
+                    $a = [int]$Matches[1]; $b = [int]$Matches[2]
+                    if ([Math]::Abs($b - $a) -gt $Limit) { return $null }
+                    $step = if ($b -ge $a) { 1 } else { -1 }
+                    for ($c = $a; $c -ne $b + $step; $c += $step) { $list.Add([string]$c) }
+                } elseif ($body -match '^([a-z])\.\.([a-z])$') {
+                    $a = [int][char]$Matches[1]; $b = [int][char]$Matches[2]
+                    $step = if ($b -ge $a) { 1 } else { -1 }
+                    for ($c = $a; $c -ne $b + $step; $c += $step) { $list.Add([string][char]$c) }
+                }
+                if ($list.Count -gt 0) { $alts = @($list); $next = $close + 1 }
+            }
+        }
+        if ($null -eq $alts) { $alts = @([string]$ch) }
+        $grown = New-Object System.Collections.Generic.List[string]
+        foreach ($p in $acc) {
+            foreach ($x in $alts) {
+                $grown.Add($p + $x)
+                if ($grown.Count -gt $Limit) { return $null }
+            }
+        }
+        $acc = $grown
+        $i = $next
+    }
+    return @($acc)
+}
+
+function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true, [bool]$ExpandGroups = $true) {
     $sec = Get-Field $Config 'secrets'
     $shapes = Get-Field $sec 'shapes'
     $norm = ConvertTo-NormalPath $Path
     if ($norm -eq '') { return $null }
     $base = Get-BaseName $norm
+
+    # A179-O20 / CR-AL1: skupina `[...]` (a v Bashi `{...}`) v neuvozenem tokenu = glob; viz Expand-PathGlobGroups.
+    if ($AllowGlob -and $ExpandGroups -and ($norm.Contains('[') -or ($script:ToolName -eq 'Bash' -and $norm.Contains('{')))) {
+        $wp = (New-PolicyVerdict $sec 'wildcardPath' (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)))
+        $cands = Expand-PathGlobGroups $norm ($script:ToolName -eq 'Bash')
+        if ($null -eq $cands) { return $wp }
+        foreach ($cand in $cands) {
+            $v = Test-SecretPath $cand $IsWrite $Config $true $false
+            if ($null -ne $v) {
+                if ($IsWrite) { return $v }
+                return $wp
+            }
+        }
+        return $null
+    }
 
     # Nalez Metis 21: `Get-Content .en?` shell rozvine na `.env`, ale kontrola vidi
     # `.en?`. Zastupny znak je neznamy cil -> Z3: ask. POZOR: ale NE u kazdeho globu:

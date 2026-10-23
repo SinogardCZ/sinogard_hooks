@@ -1476,7 +1476,7 @@ Test-PartialGateOverride 'prazdne denyPatterns odmitnuto (H-c)' 'Bash' 'git rese
 $ovDenyPlus = '{"gate":{"denyPatterns":[' +
     '{"id":"git-reset-hard","pattern":"^git\\s+reset\\b.*\\s--hard(\\s|$)","shape":"git reset --hard"},' +
     '{"_pozn_checkout_restore":"x"},' +
-    '{"id":"git-branch-delete","pattern":"^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)","shape":"git branch -d/-D"},' +
+    '{"id":"git-branch-delete","pattern":"^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--d(e(l(e(te?)?)?)?)?)(\\s|$)","shape":"git branch -d/-D"},' +
     '{"id":"git-update-ref-del","pattern":"^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)","shape":"git update-ref -d"},' +
     '{"id":"git-push-delete","pattern":"^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)","shape":"git push --delete"},' +
     '{"id":"git-stash-destroy","pattern":"^git\\s+stash\\s+(drop|clear)(\\s|$)","shape":"git stash drop/clear"},' +

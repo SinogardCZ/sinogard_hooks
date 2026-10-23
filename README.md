@@ -811,6 +811,15 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.4.1 (GSD TASK-190; do
       `A179-O19` značeno 0.3.2). Kola `/code-review`
       10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
+28. **Příkaz na cizím stroji a mazání větve — co pravidla 0.4.0 vidí a co ne** (GSD TASK-179, `A179-O17`, `A179-O18`,
+    `A179-O20`). `ssh` / `plink` s příkazem (pozičním, `-o RemoteCommand=…`, `plink -m soubor`, heredoc) = `deny`;
+    `ssh host`, `ssh -T`, volby s hodnotou (`-p`, `-O exit`, shluk `-vp 2222`) mlčí. **Mez:** `ssh -F <konfigurace>`
+    a `~/.ssh/config` mohou nést `RemoteCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s
+    RemoteCommand v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci). Mazání větve (`git branch -d|-D`,
+    `--delete` i zkratky `--d…`) = `deny`. **Cena** vzoru z 0.3.0: pomlčkové slovo s `d` kdekoli za `git branch`, i jako
+    hodnota volby (`git branch --sort -committerdate`), je `deny` — náhrada `--sort=-committerdate`.
+    Zástupná skupina v cestě (`[…]`, v Bashi `{a,b}`) se u hooku `secrets` rozvine na kandidáty; co rozvinout nejde
+    (negace, třída znaků, víc než 64 kandidátů), je `deny` — cena `cat [a-z][a-z].txt`. Převod na regex = 0.4.1 (TASK-190).
 
 ---
 

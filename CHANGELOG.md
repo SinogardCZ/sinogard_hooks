@@ -33,6 +33,31 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
   `ssh host <<EOF`, `plink … host příkaz`. Pravidla nad cestami tam neplatí a audit na našem stroji o cizím stroji
   netvrdí nic. `ssh host` bez příkazu, `ssh -T git@github.com` a `git push` přes ssh mlčí dál. Skupina `O18`
   v `task179-gate.json`.
+- **Díry 0.3.0 ve třídách O17 / O18 zavřené v tomto vydání** (`A179-O20`, Amber 2026-10-23; `/code-review` nad
+  `1eee799`, skupina `CR-AL`; `A179-O13` platí jen pro díry mimo pravidlo):
+  - **zástupná skupina `[…]` a v Bashi `{a,b}`** v neuvozeném tokenu na pozici cesty: shell ji rozvine na chráněný
+    soubor (`cat .en[v]`, `cat ~/.aws/credential[s]`, `cat {.env,x}`), hook dosud viděl jen `*` a `?` a mlčel. Skupina se
+    teď rozvine na doslovné kandidáty (množina, rozsah `a-z`, alternativy, řada `{1..3}`) a každý jde pravidlem cesty;
+    trefí-li chráněný soubor → `deny` (`secrets:wildcardPath`). Co rozvinout nejde (negace `[!x]`, třída `[[:alpha:]]`)
+    nebo by dalo víc než 64 kandidátů → `deny` (fail-closed). **Cena:** `cat [a-z][a-z].txt` = `deny`. Převod skupin na
+    regex globu bez výčtu = 0.4.1 (GSD TASK-190);
+  - **příkaz na cizím stroji volbou:** `ssh -o RemoteCommand=…` (i `-oRemoteCommand=`, ve shluku, klíč bez ohledu na
+    velikost písmen; `RemoteCommand none` mlčí) a `plink -m <soubor>` → `deny`. `ssh -F <konfigurace>` může RemoteCommand
+    nést taky, ale soubor hook nečte — README mez 28;
+  - **zkratka dlouhé volby u `git branch`:** git bere jednoznačnou zkratku, `--d`, `--de` … `--delet` = `--delete` →
+    `deny` (vzor `git-branch-delete`).
+- **Falešné `deny` u interaktivní relace (CR-AL2)** opraveno: tabulka voleb ssh s hodnotou je úplná podle ssh(1)
+  (`-O exit`, `-B rozhraní`, `-P tag` …) a čte shluk krátkých voleb (`-vp 2222`, `-p2222`); plink má vlastní tabulku
+  (`-P`, `-l`, `-pw`, `-i`, `-hostkey` …). Do opravy vypadala hodnota volby jako host a host jako příkaz (od O18 `deny`,
+  do 0.3.0 falešné `ask`).
+- ⚠️ **Migrace přepisu (CR-AL4, review A15):** pravidlo `policy` odmítne celý objekt `gate.decisions` /
+  `secrets.decisions`, když jeden jeho klíč uvolňuje (klíč H-c = objekt, jako od 0.3.0). Přepis, který opsal hodnoty
+  vývojové verze (`remoteShell: audit`, `wildcardPath: audit`), tak ztratí i svá zpřísnění — platí výchozí, kanárek
+  a audit `config:overrideRejected:<klíč>` to řeknou. Totéž `gate.denyPatterns` z 0.3.0: vzor `git-branch-delete` nese
+  od `A179-O20` zkratky, takže starý seznam už není nadmnožinou → odmítnut, platí výchozí (přísnější). Na stroji žádný
+  přepis není (`80` F3). Granularita po podklíčích = kandidát 0.4.1.
+- **Cena vzoru 0.3.0 vrácená s O17 (CR-AL6):** pomlčkové slovo s `d` v hodnotě volby `git branch` (`--sort -committerdate`)
+  = `deny`; náhrada `--sort=-committerdate`. Skupina `CR-AL`.
 
 ### Dopad na HRMS (`A179-O6`)
 
@@ -477,11 +502,11 @@ Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace).
 
 ### Testy
 
-`tests/fixtures/task179-gate.json` (619 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
-kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18` a rozlišující řádky mutantů),
-`tests/fixtures/task179-secrets.json` (41); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
+`tests/fixtures/task179-gate.json` (639 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
+kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL` a rozlišující řádky mutantů),
+`tests/fixtures/task179-secrets.json` (56); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
 (čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou fází nad předchozí verzí opravy. Invariant 1152 →
-1731 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
+1765 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
 `A179-O17`, `A179-O18`; výčet v `_zmeneno`). Do review Amber A4 tu stálo *„207 řádků … (8) … 1152 → 1347 řádků (jen přidání)"*. `Invoke-Task117Rows` bere předponu fixtury
 a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
 řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady; běh
