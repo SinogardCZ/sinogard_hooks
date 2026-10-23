@@ -222,6 +222,8 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
                         foreach ($s in $sub) { $list.Add($s) }
                     }
                 } elseif ($body -match '^(-?\d+)\.\.(-?\d+)$') {
+                    # CR-AM3: nulami doplnena rada (`{01..03}`) dava jine kandidaty - nerozvijet (nadmnozina).
+                    if ($Matches[1] -match '^-?0\d' -or $Matches[2] -match '^-?0\d') { return $null }
                     $a = [int]$Matches[1]; $b = [int]$Matches[2]
                     if ([Math]::Abs($b - $a) -gt $Limit) { return $null }
                     $step = if ($b -ge $a) { 1 } else { -1 }
@@ -230,6 +232,9 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
                     $a = [int][char]$Matches[1]; $b = [int][char]$Matches[2]
                     $step = if ($b -ge $a) { 1 } else { -1 }
                     for ($c = $a; $c -ne $b + $step; $c += $step) { $list.Add([string][char]$c) }
+                } elseif ($body.Contains('..')) {
+                    # CR-AM3: rada s krokem (`{a..z..2}`) nebo jinym tvarem - Bash ji rozvine, my ne = nadmnozina (fail-closed).
+                    return $null
                 }
                 if ($list.Count -gt 0) { $alts = @($list); $next = $close + 1 }
             }
@@ -248,6 +253,19 @@ function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
     return @($acc)
 }
 
+# CR-AM5: nadmnozina skupin - kazda `[...]` (a v Bashi `{...}`, i vnorena) = jeden `*` v ramci segmentu. `**` zadane
+# uzivatelem zustava (znacka [char]2 zabrani slit nove `*` s jeho `**`).
+function ConvertTo-GroupSupersetGlob([string]$Path, [bool]$Braces) {
+    $mark = [string][char]2
+    $s = [regex]::Replace($Path, '\[[!^]?(\[:[a-z]+:\]|[^\]/])*\]', $mark)
+    if ($Braces) {
+        $prev = ''
+        while ($prev -ne $s) { $prev = $s; $s = [regex]::Replace($s, '\{[^{}]*\}', $mark) }
+    }
+    $s = [regex]::Replace($s, ([regex]::Escape($mark) + '+'), $mark)
+    return $s.Replace($mark, '*')
+}
+
 function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true, [bool]$ExpandGroups = $true) {
     $sec = Get-Field $Config 'secrets'
     $shapes = Get-Field $sec 'shapes'
@@ -255,19 +273,38 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     if ($norm -eq '') { return $null }
     $base = Get-BaseName $norm
 
-    # A179-O20 / CR-AL1: skupina `[...]` (a v Bashi `{...}`) v neuvozenem tokenu = glob; viz Expand-PathGlobGroups.
-    if ($AllowGlob -and $ExpandGroups -and ($norm.Contains('[') -or ($script:ToolName -eq 'Bash' -and $norm.Contains('{')))) {
+    # A179-O20 / CR-AL1: skupina `[...]` (a v Bashi `{...}`) v neuvozenem tokenu PRIKAZU = glob; viz Expand-PathGlobGroups.
+    # CR-AM1: jen pro prikaz (Bash / PowerShell) - nastroje nad souborem (Read/Edit/Write) nesou doslovnou cestu
+    # (`src/app/[locale]/[slug]/page.tsx`). Kandidat na chraneny soubor (deny) = `wildcardPath`; kandidat sede zony
+    # (netrackovany `.env.dev`, cteni settings.local.json) = jeho vlastni verdikt jako u doslovne cesty (CR-AM4). Kdyz
+    # nic nesedi, posoudi se i doslovny text - Bash nesedici glob necha doslova (CR-AM1).
+    # CR-AM5: co rozvinout nejde, se posoudi jako NADMNOZINA (kazda skupina = `*`): miri-li na chranenou cestu NEBO sedne-li
+    # na chranene jmeno, deny (fail-closed i tam, kde `*` sam dava jen audit `wildcardName`); jinak ticho.
+    if ($AllowGlob -and $ExpandGroups -and ($script:ToolName -eq 'Bash' -or $script:ToolName -eq 'PowerShell') -and
+        ($norm.Contains('[') -or ($script:ToolName -eq 'Bash' -and $norm.Contains('{')))) {
         $wp = (New-PolicyVerdict $sec 'wildcardPath' (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)))
-        $cands = Expand-PathGlobGroups $norm ($script:ToolName -eq 'Bash')
-        if ($null -eq $cands) { return $wp }
-        foreach ($cand in $cands) {
-            $v = Test-SecretPath $cand $IsWrite $Config $true $false
-            if ($null -ne $v) {
-                if ($IsWrite) { return $v }
-                return $wp
+        $braces = ($script:ToolName -eq 'Bash')
+        $cands = Expand-PathGlobGroups $norm $braces
+        if ($null -eq $cands) {
+            $sup = ConvertTo-GroupSupersetGlob $norm $braces
+            if (Test-GlobAimsAtProtectedPath $sup $sec) { return $wp }
+            $supRegex = '^' + (ConvertTo-GlobRegex (Get-BaseName $sup)) + '$'
+            foreach ($known in @(Get-Field $sec 'protectedBaseNames' @())) {
+                if ([regex]::IsMatch([string]$known, $supRegex, 'IgnoreCase')) { return $wp }
             }
+        } else {
+            $grey = $null
+            foreach ($cand in $cands) {
+                $v = Test-SecretPath $cand $IsWrite $Config $true $false
+                if ($null -eq $v) { continue }
+                if ($v.Decision -eq 'deny') {
+                    if ($IsWrite) { return $v }
+                    return $wp
+                }
+                if ($null -eq $grey) { $grey = $v }
+            }
+            if ($null -ne $grey) { return $grey }
         }
-        return $null
     }
 
     # Nalez Metis 21: `Get-Content .en?` shell rozvine na `.env`, ale kontrola vidi

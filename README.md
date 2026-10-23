@@ -812,14 +812,20 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       `A179-O19` značeno 0.3.2). Kola `/code-review`
       10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
 28. **Příkaz na cizím stroji a mazání větve — co pravidla 0.4.0 vidí a co ne** (GSD TASK-179, `A179-O17`, `A179-O18`,
-    `A179-O20`). `ssh` / `plink` s příkazem (pozičním, `-o RemoteCommand=…`, `plink -m soubor`, heredoc) = `deny`;
-    `ssh host`, `ssh -T`, volby s hodnotou (`-p`, `-O exit`, shluk `-vp 2222`) mlčí. **Mez:** `ssh -F <konfigurace>`
-    a `~/.ssh/config` mohou nést `RemoteCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s
-    RemoteCommand v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci). Mazání větve (`git branch -d|-D`,
+    `A179-O20`). `ssh` / `plink` s příkazem (pozičním, `-o RemoteCommand=…`, `plink -m soubor`, heredoc, here-string,
+    vstup ze souboru `< cmds.sh`) i s místním příkazem ve volbě (`-o ProxyCommand|LocalCommand|KnownHostsCommand=…`,
+    `plink -proxycmd`) = `deny`; `ssh host`, `ssh -T`, volby s hodnotou (`-p`, `-O exit`, shluk `-vp 2222`, `-J`,
+    `-o ProxyJump=`) a přesměrování výstupu mlčí. **Meze:** `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
+    `RemoteCommand` nebo `ProxyCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s příkazem
+    v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci); **roura do ssh bez příkazu** (`cat cmds.sh | ssh
+    host`) mlčí — list ssh o rouře nic neví, oprava s tokenizérem 0.4.1 (GSD TASK-190). Mazání větve (`git branch -d|-D`,
     `--delete` i zkratky `--d…`) = `deny`. **Cena** vzoru z 0.3.0: pomlčkové slovo s `d` kdekoli za `git branch`, i jako
     hodnota volby (`git branch --sort -committerdate`), je `deny` — náhrada `--sort=-committerdate`.
-    Zástupná skupina v cestě (`[…]`, v Bashi `{a,b}`) se u hooku `secrets` rozvine na kandidáty; co rozvinout nejde
-    (negace, třída znaků, víc než 64 kandidátů), je `deny` — cena `cat [a-z][a-z].txt`. Převod na regex = 0.4.1 (TASK-190).
+    Zástupná skupina v cestě příkazu (`[…]`, v Bashi `{a,b}`) se u hooku `secrets` rozvine na kandidáty (nástroje nad
+    souborem — Read, Edit, Write — nesou doslovnou cestu a nerozvíjí se). Co rozvinout nejde (negace `[!x]`, třída znaků,
+    řada s krokem, víc než 64 kandidátů), se posoudí jako nadmnožina (skupina = `*`): míří-li na chráněnou cestu nebo sedne
+    na chráněné jméno, `deny`; jinak ticho. **Mez:** třída `[[:alpha:]]` se k pravidlu cesty nedostane (příčina v rozboru
+    tokenu nezjištěna) a mlčí. Převod skupin na regex globu = 0.4.1 (GSD TASK-190).
 
 ---
 

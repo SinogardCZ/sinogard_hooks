@@ -2396,22 +2396,45 @@ function Test-ConfiguredPattern($Leaf, $Patterns) {
 # interaktivni relace (`ssh -O exit host`, `ssh -vp 2222 host`, `plink -P 2222 host`). ssh: volby s hodnotou podle
 # ssh(1) (OpenSSH 9/10), kratke volby, a shluk (`-vp 2222`, `-p2222`); plink: viceznakove volby s hodnotou podle `plink -help` (PuTTY 0.8x).
 $script:SshValueLetters = 'BbcDEeFIiJLlmOoPpQRSWw'
-$script:PlinkValueFlags = '^-(P|l|pw|pwfile|i|m|L|R|D|hostkey|proxycmd|sercfg|sessionlog|sshlog|sshrawlog|load|nc|loghost)$'
+# CR-AM8 (/code-review nad c54a843): `-cert` (PuTTY 0.78+).
+$script:PlinkValueFlags = '^-(P|l|pw|pwfile|i|cert|m|L|R|D|hostkey|proxycmd|sercfg|sessionlog|sshlog|sshrawlog|load|nc|loghost)$'
 
-function Get-RemoteShellPositional($Argv, [string]$Exe = 'ssh') {
-    $out = New-Object System.Collections.ArrayList
+# CR-AM10: JEDEN rozbor argumentu ssh / plink - pozicni argumenty i volby s hodnotou (dve kopie by se rozesly).
+# Vraci @{ Positional = [string[]]; Options = [@{ Name; Value }] } (ssh: Name = pismeno volby; plink: jmeno bez `-`).
+function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh') {
+    $pos = New-Object System.Collections.ArrayList
+    $opts = New-Object System.Collections.ArrayList
+    $stdinFile = $false
     $plink = ($Exe -ieq 'plink')
     $i = 0
     while ($i -lt $Argv.Count) {
         $t = [string]$Argv[$i]
+        # CR-AM7: presmerovani neni pozicni argument (`ssh host < /dev/null` = host, ne "host + prikaz"). Vstup ze souboru
+        # (ne `/dev/null`, `nul`, `$null`) nese prikazy pro vzdaleny shell.
+        $rd = [regex]::Match($t, '^(\d*)(<>|<|>>|>\||>|&>>|&>)(.*)$')
+        if ($rd.Success) {
+            $target = $rd.Groups[3].Value
+            $step = 1
+            if ($target -eq '') { $target = if ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }; $step = 2 }
+            if ($rd.Groups[2].Value.StartsWith('<') -and ($rd.Groups[1].Value -eq '' -or $rd.Groups[1].Value -eq '0') -and
+                $target -notmatch '^(/dev/null|nul|\$null)$' -and -not $target.StartsWith('&')) { $stdinFile = $true }
+            $i += $step
+            continue
+        }
         if ($plink) {
-            if ($t -cmatch $script:PlinkValueFlags) { $i += 2; continue }
+            if ($t -cmatch $script:PlinkValueFlags) {
+                $val = if ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }
+                [void]$opts.Add(@{ Name = $t.Substring(1); Value = $val })
+                $i += 2; continue
+            }
             if ($t.StartsWith('-')) { $i++; continue }
         } elseif ($t.Length -gt 1 -and $t.StartsWith('-') -and -not $t.StartsWith('--')) {
             # Shluk kratkych voleb: prvni volba s hodnotou ukonci shluk - zbytek tokenu je jeji hodnota, jinak dalsi token.
             $skip = 1
             for ($k = 1; $k -lt $t.Length; $k++) {
                 if ($script:SshValueLetters.IndexOf($t[$k]) -ge 0) {
+                    $val = if ($k -lt $t.Length - 1) { $t.Substring($k + 1) } elseif ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }
+                    [void]$opts.Add(@{ Name = [string]$t[$k]; Value = $val })
                     if ($k -eq $t.Length - 1) { $skip = 2 }
                     break
                 }
@@ -2419,38 +2442,31 @@ function Get-RemoteShellPositional($Argv, [string]$Exe = 'ssh') {
             $i += $skip
             continue
         } elseif ($t.StartsWith('-')) { $i++; continue }
-        [void]$out.Add($t)
+        [void]$pos.Add($t)
         $i++
     }
-    return $out
+    return @{ Positional = @($pos); Options = @($opts); StdinFile = $stdinFile }
 }
 
-# A179-O20 / CR-AL3 (Amber 2026-10-23): prikaz na cizim stroji nemusi byt pozicni argument - `ssh -o RemoteCommand=...`
-# (i `-oRemoteCommand=`, ve shluku `-To ...`; klic ssh nerozlisuje velikost pismen) a `plink -m <soubor>` ho nesou volbou.
-# Do teto opravy ticho bez auditu (dira 0.3.0). `RemoteCommand none` prikaz nenese. `-F <konfigurace>` muze RemoteCommand
-# nest taky, ale soubor hook necte - README mez (deny kazdeho `-F` by zakazal beznou praci).
-function Test-RemoteShellOptionCommand($Argv, [string]$Exe = 'ssh') {
-    if ($Exe -ieq 'plink') {
-        foreach ($t in @($Argv)) { if ([string]$t -ceq '-m') { return $true } }
-        return $false
-    }
-    $i = 0
-    while ($i -lt $Argv.Count) {
-        $t = [string]$Argv[$i]
-        if ($t.Length -gt 1 -and $t.StartsWith('-') -and -not $t.StartsWith('--')) {
-            for ($k = 1; $k -lt $t.Length; $k++) {
-                if ($script:SshValueLetters.IndexOf($t[$k]) -ge 0) {
-                    $val = if ($k -lt $t.Length - 1) { $t.Substring($k + 1) } elseif ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }
-                    if ($t[$k] -ceq 'o' -and $val -match '(?i)^\s*RemoteCommand\s*(=\s*|\s+)(?!none\s*$)\S') { return $true }
-                    if ($k -eq $t.Length - 1) { $i++ }
-                    break
-                }
-            }
+# A179-O20 / CR-AL3 (Amber 2026-10-23): prikaz nemusi byt pozicni argument - volbou ho nese `ssh -o RemoteCommand=...`
+# (i `-oRemoteCommand=`, ve shluku `-To ...`; klic ssh nerozlisuje velikost pismen) a `plink -m <soubor>` (na cizim
+# stroji), CR-AM2: `ssh -o ProxyCommand|LocalCommand|KnownHostsCommand=...` a `plink -proxycmd` ho spusti na TOMTO
+# stroji mimo vsechna pravidla brany. Do teto opravy ticho bez auditu (dira 0.3.0). Hodnota `none` prikaz nenese.
+# `-F <konfigurace>` a `~/.ssh/config` ho nest mohou taky, ale soubor hook necte - README mez 28.
+function Test-RemoteShellOptionCommand($Parsed, [string]$Exe = 'ssh') {
+    foreach ($o in @($Parsed.Options)) {
+        if ($Exe -ieq 'plink') {
+            if ([string]$o.Name -ceq 'm' -or [string]$o.Name -ceq 'proxycmd') { return $true }
+        } elseif ([string]$o.Name -ceq 'o' -and [string]$o.Value -match '(?i)^\s*(RemoteCommand|ProxyCommand|LocalCommand|KnownHostsCommand)\s*(=\s*|\s+)(?!none\s*$)\S') {
+            return $true
         }
-        $i++
     }
     return $false
 }
+
+# CR-AM7: prikazy pro cizi stroj na standardnim vstupu (`ssh host < cmds.sh`) - ssh bez prikazu je posle vzdalenemu
+# shellu (`StdinFile` z Get-RemoteShellArgs; heredoc `<<` resi vetev heredocu). Roura do ssh (`cat cmds | ssh host`)
+# list nevidi - README mez 28, oprava s tokenizerem 0.4.1 (GSD TASK-190).
 
 # Write-GateAudit zije od 0.2.0 v _common.ps1 - secrets.ps1 audituje taky (TASK-106 bod 11,
 # vyrok 7: trida chranena jmenem u globu). Volani tady zustavaji beze zmeny.
@@ -2693,9 +2709,9 @@ function Test-Leaf($Leaf, $Config) {
     if ($Leaf.Kind -eq 'leaf') {
         $remote = @(Get-Field $gate 'remoteShells' @('ssh', 'plink'))
         if ($remote -ccontains ([string]$Leaf.Exe).ToLowerInvariant()) {
-            $remoteArgs = @(Get-LeafField $Leaf 'Args' @())
-            $positional = @(Get-RemoteShellPositional $remoteArgs ([string]$Leaf.Exe))
-            if ($positional.Count -ge 2 -or (Test-RemoteShellOptionCommand $remoteArgs ([string]$Leaf.Exe))) {
+            $parsed = Get-RemoteShellArgs (@(Get-LeafField $Leaf 'Args' @())) ([string]$Leaf.Exe)
+            if (@($parsed.Positional).Count -ge 2 -or (Test-RemoteShellOptionCommand $parsed ([string]$Leaf.Exe)) -or
+                [bool]$parsed.StdinFile) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
                 # ZOPT-Q102 / A179-O3, 0.3.1: politika `gate.decisions.remoteShell` (vychozi deny od A179-O18; do 0.3.0 ask).
