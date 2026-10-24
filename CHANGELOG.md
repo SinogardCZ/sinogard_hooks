@@ -20,9 +20,10 @@ rozhodnutí brány → minor verze") vychází jako **0.4.0**. „0.3.1" v textu
 Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové verze dala ticho tam, kde bezpečnost chce zákaz:
 
 - **`git branch -d` = `deny` jako v 0.3.0** (`A179-O17`). Vývojová verze (`A179-O3` Q11) pustila `-d` (smaže jen
-  sloučenou větev) tichem a vzor přejmenovala na `git-branch-delete-force`. `git branch -d` ale v 0.3.0 byl `deny`, ne
-  `ask`, takže ho `ZOPT-Q102` neměnil, a Tomovo `ZOPT-Q40` chce SCHVALUJU pro smazání **jakékoli** větve. Vzor je zpět
-  i s id `git-branch-delete`; nese ale od `A179-O20` zkratky `--delete`, takže projektový přepis `gate.denyPatterns`
+  sloučenou větev) tichem a vzor přejmenovala na `git-branch-delete-force`. `ZOPT-Q102` povolil smazání větve po merge
+  do `main`; hook ale nepozná, kam je větev sloučená (`git branch -d` hlídá upstream nebo `HEAD`), proto 0.4.0 nechává
+  `deny` jako 0.3.0 a povolení čeká na rozhodnutí Toma. Vzor je zpět i s id `git-branch-delete`; nese ale od
+  `A179-O20` zkratky `--delete`, takže projektový přepis `gate.denyPatterns`
   z 0.3.0 už nadmnožinou není a odmítne se (platí výchozí, přísnější) — viz Migrace přepisu níž. Skupina `O17`.
   Do review Amber N2 (`A179-O23`) tu stálo *„takže projektový přepis `gate.denyPatterns` z 0.3.0 platí dál (pravidlo
   `superset`)"* — platilo v `1eee799`, změnou vzoru v `c54a843` přestalo.
