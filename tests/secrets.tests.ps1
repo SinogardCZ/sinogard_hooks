@@ -95,25 +95,26 @@ $allowPaths = @(
     (PathCase 'cesta s ceskym nazvem' 'docs/logs/session/hlášení-01.md' 'allow')
 )
 
-# ------------------------------------------------------------- ask: cesty ---
+# ------------------------------------- seda zona: cesty (do 0.3.1 ask) ---
+# ZOPT-Q102 (Tom 2026-10-20) + A179-O3: hook nevraci ask - seda zona je audit (hook mlci + radek auditu), sebeochrana deny.
 
 $askPaths = @(
-    (PathCase 'settings.local.json' '.claude/settings.local.json' 'ask')
-    (PathCase 'netrackovany env'    '.env.staging' 'ask')
+    (PathCase 'settings.local.json' '.claude/settings.local.json' 'audit')
+    (PathCase 'netrackovany env'    '.env.staging' 'audit')
 )
 
-# ------------------------------------------ ask: sebeochrana (T36-N6 (5)) ---
+# ------------------- sebeochrana (T36-N6 (5)); od 0.3.1 deny (A179-O3 Q16) ---
 
 $selfProtect = @(
-    (PathCase 'zapis settings.json'      '.claude/settings.json' 'ask' 'Write')
-    (PathCase 'edit settings.json'       '.claude/settings.json' 'ask' 'Edit')
-    (PathCase 'zapis sinogard-hooks'     '.claude/sinogard-hooks.json' 'ask' 'Write')
+    (PathCase 'zapis settings.json'      '.claude/settings.json' 'deny' 'Write')
+    (PathCase 'edit settings.json'       '.claude/settings.json' 'deny' 'Edit')
+    (PathCase 'zapis sinogard-hooks'     '.claude/sinogard-hooks.json' 'deny' 'Write')
     # Z117-Q23 = A (Tom 2026-10-08): konfigurace pluginu je chranena jen v NAINSTALOVANE kopii. Relativni cesta se
     # bere vuci cwd sablony (W:/dev/gsd/repo), takze tyhle dva radky od 0.3.0 mlci; do 0.2.0 tu stalo `ask`.
     (PathCase 'edit hooks.json mimo instalaci (Z117-Q23)'     'hooks/hooks.json' 'allow' 'Edit')
     (PathCase 'edit config mimo instalaci (Z117-Q23)'         'hooks/config/defaults.json' 'allow' 'Edit')
-    (PathCase 'edit hooks.json nainstalovane kopie'           'C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/hooks.json' 'ask' 'Edit')
-    (PathCase 'edit config nainstalovane kopie'               'C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/defaults.json' 'ask' 'Edit')
+    (PathCase 'edit hooks.json nainstalovane kopie'           'C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/hooks.json' 'deny' 'Edit')
+    (PathCase 'edit config nainstalovane kopie'               'C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/defaults.json' 'deny' 'Edit')
     # cteni settings.json neni sebeochrana - jen zapis
     (PathCase 'cteni settings.json'      '.claude/settings.json' 'allow' 'Read')
 )
@@ -155,25 +156,26 @@ $denyCommands = @(
     (CmdCase 'Select-String dvojtecka' 'Select-String -Path:.env -Pattern:KEY' 'deny' 'PowerShell')
 )
 
+# ZOPT-Q102 (0.3.1): vypis prostredi a citliva promenna = audit (hook mlci + radek auditu); do 0.3.1 ask.
 $askCommands = @(
-    (CmdCase 'printenv'              'printenv' 'ask')
-    (CmdCase 'hole env'              'env' 'ask')
-    (CmdCase 'hole set'              'set' 'ask' 'PowerShell')
-    (CmdCase 'Get-ChildItem env:'    'Get-ChildItem env:' 'ask' 'PowerShell')
-    (CmdCase 'gci env:'              'gci env:' 'ask' 'PowerShell')
-    (CmdCase 'dir env:'              'dir env:' 'ask' 'PowerShell')
-    (CmdCase 'ls env:'               'ls env:' 'ask' 'PowerShell')
+    (CmdCase 'printenv'              'printenv' 'audit')
+    (CmdCase 'hole env'              'env' 'audit')
+    (CmdCase 'hole set'              'set' 'audit' 'PowerShell')
+    (CmdCase 'Get-ChildItem env:'    'Get-ChildItem env:' 'audit' 'PowerShell')
+    (CmdCase 'gci env:'              'gci env:' 'audit' 'PowerShell')
+    (CmdCase 'dir env:'              'dir env:' 'audit' 'PowerShell')
+    (CmdCase 'ls env:'               'ls env:' 'audit' 'PowerShell')
     # Nalez councilu Metis 2026-09-05: vypis prostredi jde i pres Get-Content.
-    (CmdCase 'Get-Content Env:*'     'Get-Content Env:*' 'ask' 'PowerShell')
-    (CmdCase 'gc env:*'              'gc env:*' 'ask' 'PowerShell')
-    (CmdCase 'cat env:'              'cat env:' 'ask' 'PowerShell')
-    (CmdCase 'echo $env:KEY'         'echo $env:NVIDIA_API_KEY' 'ask' 'PowerShell')
-    (CmdCase 'bash $KEY'             'echo $NVIDIA_API_KEY' 'ask')
-    (CmdCase 'GetEnvironmentVariable' '[Environment]::GetEnvironmentVariable("GITHUB_TOKEN")' 'ask' 'PowerShell')
-    (CmdCase 'Get-Item env:TOKEN'    'Get-Item env:GITHUB_TOKEN' 'ask' 'PowerShell')
-    (CmdCase 'PASSWORD promenna'     'echo $DB_PASSWORD' 'ask')
-    (CmdCase 'CREDENTIAL promenna'   'echo $env:AZURE_CREDENTIAL' 'ask' 'PowerShell')
-    (CmdCase 'cteni settings.local'  'cat .claude/settings.local.json' 'ask')
+    (CmdCase 'Get-Content Env:*'     'Get-Content Env:*' 'audit' 'PowerShell')
+    (CmdCase 'gc env:*'              'gc env:*' 'audit' 'PowerShell')
+    (CmdCase 'cat env:'              'cat env:' 'audit' 'PowerShell')
+    (CmdCase 'echo $env:KEY'         'echo $env:NVIDIA_API_KEY' 'audit' 'PowerShell')
+    (CmdCase 'bash $KEY'             'echo $NVIDIA_API_KEY' 'audit')
+    (CmdCase 'GetEnvironmentVariable' '[Environment]::GetEnvironmentVariable("GITHUB_TOKEN")' 'audit' 'PowerShell')
+    (CmdCase 'Get-Item env:TOKEN'    'Get-Item env:GITHUB_TOKEN' 'audit' 'PowerShell')
+    (CmdCase 'PASSWORD promenna'     'echo $DB_PASSWORD' 'audit')
+    (CmdCase 'CREDENTIAL promenna'   'echo $env:AZURE_CREDENTIAL' 'audit' 'PowerShell')
+    (CmdCase 'cteni settings.local'  'cat .claude/settings.local.json' 'audit')
     # M21 (glob, ktery MUZE padnout na chranene jmeno): do 0.1.11 `ask`. Od 0.2.0 (TASK-106
     # bod 11, vyroky 7 + 8 Amber 2026-09-12 v mandatu Toma) je jmenna trida u globu `audit`
     # (zapise se, mlci) - pripady stoji v $allowCommands; glob na chranenou CESTU se pta dal.
@@ -204,7 +206,9 @@ function Test-Cases([string]$Section, $Cases) {
     foreach ($c in $Cases) {
         # Nalez Amber H2: invariant se od kola 4 tyka i teto sady. Generator bere
         # pripady odsud, ne rucnim vyberem.
-        Add-CollectedCase 'secrets' $c.Kind $c.Tool $c.Value $c.Expect $c.Name
+        # ZOPT-Q102: `audit` = allow + radek auditu sede zony (Test-GreyZoneAudit); invariant drzi rozhodnuti allow.
+        $exp = if ($c.Expect -eq 'audit') { 'allow' } else { $c.Expect }
+        Add-CollectedCase 'secrets' $c.Kind $c.Tool $c.Value $exp $c.Name
         if (Test-CollectOnly) { continue }
 
         if ($c.Kind -eq 'path') {
@@ -218,8 +222,10 @@ function Test-Cases([string]$Section, $Cases) {
             $template = if ($c.Tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
             $json = New-HookInput $template @{ 'tool_input.command' = $c.Value }
         }
-        $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json
-        Assert-Equal $c.Expect (Get-Decision $r) ("[{0}] {1}" -f $c.Name, $c.Value)
+        $envA = if ($c.Expect -eq 'audit') { New-AuditEnvironment } else { $null }
+        $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json -Environment $envA
+        Assert-Equal $exp (Get-Decision $r) ("[{0}] {1}" -f $c.Name, $c.Value)
+        if ($null -ne $envA) { Assert-True (Test-GreyZoneAudit $envA['CLAUDE_PLUGIN_DATA']) ("[{0}] radek auditu sede zony" -f $c.Name) }
         $expectedExit = if ($c.Expect -eq 'deny') { 2 } else { 0 }
         Assert-Equal $expectedExit $r.Exit ("[{0}] exit" -f $c.Name)
         Assert-True ($r.Ms -lt (Get-HookCeilingMs)) ("[{0}] doba {1} ms < {2}" -f $c.Name, $r.Ms, (Get-HookCeilingMs))
@@ -228,10 +234,10 @@ function Test-Cases([string]$Section, $Cases) {
 
 Test-Cases 'deny - cesty se secrets' $denyPaths
 Test-Cases 'allow - bezne soubory a vyjimky' $allowPaths
-Test-Cases 'ask - seda zona cest' $askPaths
-Test-Cases 'ask - sebeochrana brany (T36-N6 (5))' $selfProtect
+Test-Cases 'seda zona cest (audit; do 0.3.1 ask)' $askPaths
+Test-Cases 'sebeochrana brany (T36-N6 (5); od 0.3.1 deny)' $selfProtect
 Test-Cases 'deny - prikazy ctouci secrets (T36-N7)' $denyCommands
-Test-Cases 'ask - prostredi a promenne (T36-N7)' $askCommands
+Test-Cases 'prostredi a promenne (T36-N7; audit, do 0.3.1 ask)' $askCommands
 Test-Cases 'allow - prikazy bez secrets' $allowCommands
 
 # ================================================================================
@@ -247,10 +253,10 @@ $amberSecretCases = @(
     (CmdCase 'B2 keyFile'             'Get-Content $keyFile' 'allow' 'PowerShell')
     (CmdCase 'B2 monkey'              'echo $monkey' 'allow' 'PowerShell')
     # kontrolni skupina: skutecne citlive jmeno se chytit MUSI
-    (CmdCase 'B2 kontrola API_KEY'    'echo $env:API_KEY' 'ask' 'PowerShell')
-    (CmdCase 'B2 kontrola DB_PWD'     'echo $env:DB_PWD' 'ask' 'PowerShell')
-    (CmdCase 'B2 kontrola SECRET'     'echo $env:CLIENT_SECRET' 'ask' 'PowerShell')
-    (CmdCase 'B2 kontrola TOKEN'      'echo $env:GITHUB_TOKEN' 'ask' 'PowerShell')
+    (CmdCase 'B2 kontrola API_KEY'    'echo $env:API_KEY' 'audit' 'PowerShell')
+    (CmdCase 'B2 kontrola DB_PWD'     'echo $env:DB_PWD' 'audit' 'PowerShell')
+    (CmdCase 'B2 kontrola SECRET'     'echo $env:CLIENT_SECRET' 'audit' 'PowerShell')
+    (CmdCase 'B2 kontrola TOKEN'      'echo $env:GITHUB_TOKEN' 'audit' 'PowerShell')
 
     # --- B3: kanonicka jmena `config.json`, `config`, `credentials` odesla. ---
     (CmdCase 'B3 glob config hvezda'  'ls config*' 'allow')
@@ -269,12 +275,12 @@ Test-Cases 'review Amber - osa 2' $amberSecretCases
 
 $amber2SecretCases = @(
     # --- C6: ukotveni B2 zavedlo falesna NEGATIVA (propoustelo citliva jmena) ---
-    (CmdCase 'C6 API_KEYS'            'echo $env:API_KEYS' 'ask' 'PowerShell')
-    (CmdCase 'C6 AZURE_CREDENTIALS'   'echo $env:AZURE_CREDENTIALS' 'ask' 'PowerShell')
-    (CmdCase 'C6 DB_PASSWD'           'echo $env:DB_PASSWD' 'ask' 'PowerShell')
-    (CmdCase 'C6 camelCase apiKey'    'echo $env:apiKey' 'ask' 'PowerShell')
-    (CmdCase 'C6 camelCase secretKey' 'echo $secretKey' 'ask' 'PowerShell')
-    (CmdCase 'C6 TOKENS'              'echo $env:GITHUB_TOKENS' 'ask' 'PowerShell')
+    (CmdCase 'C6 API_KEYS'            'echo $env:API_KEYS' 'audit' 'PowerShell')
+    (CmdCase 'C6 AZURE_CREDENTIALS'   'echo $env:AZURE_CREDENTIALS' 'audit' 'PowerShell')
+    (CmdCase 'C6 DB_PASSWD'           'echo $env:DB_PASSWD' 'audit' 'PowerShell')
+    (CmdCase 'C6 camelCase apiKey'    'echo $env:apiKey' 'audit' 'PowerShell')
+    (CmdCase 'C6 camelCase secretKey' 'echo $secretKey' 'audit' 'PowerShell')
+    (CmdCase 'C6 TOKENS'              'echo $env:GITHUB_TOKENS' 'audit' 'PowerShell')
     # 🔴 kontrolni skupina - tohle musi ZUSTAT allow, jinak jsem si vyrobila zpatky B2
     (CmdCase 'C6 kontrola PWD'        'echo $PWD' 'allow' 'PowerShell')
     (CmdCase 'C6 kontrola keys'       'echo $keys' 'allow' 'PowerShell')
@@ -300,10 +306,10 @@ Test-Cases 'review Amber kolo 2 (C3, C6)' $amber2SecretCases
 # ================================================================================
 
 $amber4SecretCases = @(
-    (CmdCase 'H1 db_password'         'echo $db_password' 'ask' 'PowerShell')
-    (CmdCase 'H1 env:github_token'    'echo $env:github_token' 'ask' 'PowerShell')
-    (CmdCase 'H1 api_key'             'echo $api_key' 'ask' 'PowerShell')
-    (CmdCase 'H1 Mixed_Secret_Key'    'echo $env:Mixed_Secret_Key' 'ask' 'PowerShell')
+    (CmdCase 'H1 db_password'         'echo $db_password' 'audit' 'PowerShell')
+    (CmdCase 'H1 env:github_token'    'echo $env:github_token' 'audit' 'PowerShell')
+    (CmdCase 'H1 api_key'             'echo $api_key' 'audit' 'PowerShell')
+    (CmdCase 'H1 Mixed_Secret_Key'    'echo $env:Mixed_Secret_Key' 'audit' 'PowerShell')
     # 🔴 kontrolni skupina: podtrzitkove jmeno, ktere citlive NENI. Kdyby se vzor
     #    rozsiril na "cokoli s podtrzitkem", zustalo by tohle allow uz jen nahodou.
     (CmdCase 'H1 kontrola db_port'    'echo $db_port' 'allow' 'PowerShell')
@@ -341,12 +347,14 @@ $n26SecretCases = @(
     #    prosel `-Prijmout` s touto citaci.
     # 🔴 C1 (delta review Amber 2026-09-13): `*.env` MIRI na secret vzorem (jmeno globu sedne na
     #    `envFile.denyNames`) - zustava ask jako `*.pem`. Prvni tvar 0.2.0 ho poslal do auditu = regrese.
-    (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'ask')
+    #    A179-O18 (Amber 2026-10-23): glob mirici na secret = deny (`secrets.decisions.wildcardPath`); do 0.3.0 ask,
+    #    vyvojova 0.3.1 audit.
+    (CmdCase 'N26 kontrola cat glob'    'cat *.env' 'deny')
     #    `.en?` (zastupny znak UVNITR jmena) deterministicky rozlisit nejde - pojmenovana mez (README 9), audit.
     (CmdCase 'N26 kontrola Get-Content' 'Get-Content .en?' 'allow' 'PowerShell')
-    # `*.pem` sedne DOSLOVA na vzor `denyPathPatterns` (pripona) -> trida chranena VZOREM cesty, ask dal
-    (CmdCase 'N26 kontrola cp glob'     'cp *.pem /tmp/x' 'ask')
-    (CmdCase 'N26 kontrola glob na chranenou CESTU' 'cat ~/.aws/*' 'ask')
+    # `*.pem` sedne DOSLOVA na vzor `denyPathPatterns` (pripona) -> trida chranena VZOREM cesty (A179-O18: deny)
+    (CmdCase 'N26 kontrola cp glob'     'cp *.pem /tmp/x' 'deny')
+    (CmdCase 'N26 kontrola glob na chranenou CESTU' 'cat ~/.aws/*' 'deny')
     # 🔴 a presne jmeno se pta dal bez ohledu na uvozovky
     (CmdCase 'N26 kontrola presne jmeno' 'cat .env' 'deny')
     (CmdCase 'N26 kontrola literal'      '[IO.File]::ReadAllText(''.env'')' 'deny' 'PowerShell')
@@ -373,15 +381,15 @@ $bod9Cases = @(
     (CmdCase 'NH3 cteni settings.json s 2>&1'         'cat .claude/settings.json 2>&1' 'allow')
     (CmdCase 'NH3 git checkout -- s 2>&1'             'git checkout -- .claude/settings.json 2>&1; git status --porcelain' 'allow')
     (CmdCase 'NH3 cteni defaults.json s 2>/dev/null'  'cat hooks/config/defaults.json 2>/dev/null' 'allow')
-    # 🔴 kontrolni skupina: SKUTECNY zapis do souboru brany se pta dal
-    (CmdCase 'NH3 kontrola presmerovani do settings'  'git show HEAD:.claude/settings.json > .claude/settings.json' 'ask')
-    (CmdCase 'NH3 kontrola append do settings'        'echo x >> .claude/settings.json' 'ask')
-    (CmdCase 'NH3 kontrola tee do settings'           'cat x | tee .claude/settings.json' 'ask')
-    (CmdCase 'NH3 kontrola Set-Content'               'Set-Content -Path .claude/sinogard-hooks.json -Value x' 'ask' 'PowerShell')
+    # 🔴 kontrolni skupina: SKUTECNY zapis do souboru brany je od 0.3.1 deny (A179-O3 Q16; do 0.3.1 ask)
+    (CmdCase 'NH3 kontrola presmerovani do settings'  'git show HEAD:.claude/settings.json > .claude/settings.json' 'deny')
+    (CmdCase 'NH3 kontrola append do settings'        'echo x >> .claude/settings.json' 'deny')
+    (CmdCase 'NH3 kontrola tee do settings'           'cat x | tee .claude/settings.json' 'deny')
+    (CmdCase 'NH3 kontrola Set-Content'               'Set-Content -Path .claude/sinogard-hooks.json -Value x' 'deny' 'PowerShell')
     # Z117-Q23: zapis do hooks/hooks.json mimo nainstalovanou kopii mlci; kontrolni skupina zapisu = settings.json
     (CmdCase 'NH3 kontrola Out-File (Z117-Q23)'       '$j | Out-File hooks/hooks.json' 'allow' 'PowerShell')
-    (CmdCase 'NH3 kontrola Out-File settings.json'    '$j | Out-File .claude/settings.json' 'ask' 'PowerShell')
-    (CmdCase 'NH3 kontrola 2> do souboru brany'       'dotnet build 2> .claude/settings.json' 'ask')
+    (CmdCase 'NH3 kontrola Out-File settings.json'    '$j | Out-File .claude/settings.json' 'deny' 'PowerShell')
+    (CmdCase 'NH3 kontrola 2> do souboru brany'       'dotnet build 2> .claude/settings.json' 'deny')
     # 🔴 a `deny` trida se s presmerovanim nemeni (cteni i zapis .env je deny)
     (CmdCase 'NH3 kontrola cteni .env s 2>/dev/null'  'grep -i port .env 2>/dev/null | head' 'deny')
 )
@@ -397,18 +405,24 @@ $cfgD2 = [System.IO.File]::ReadAllText(
 $textRead  = [string]$cfgD2.secrets.shapes.settingsLocal
 $textWrite = [string]$cfgD2.secrets.shapes.selfProtect -replace '\{path\}', '.claude/settings.local.json'
 
-Start-Case 'bod 9 (TASK-106): TYZ soubor, jednou cteni a jednou zapis - obe ask, texty ruzne'
-$r9r = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'cat .claude/settings.local.json 2>/dev/null' })
-$r9w = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'echo x > .claude/settings.local.json' })
-Assert-Equal 'ask' (Get-Decision $r9r) '[bod9/cteni] cat settings.local.json 2>/dev/null je ask'
-Assert-Equal 'ask' (Get-Decision $r9w) '[bod9/zapis] echo x > settings.local.json je ask'
-$reason9r = Get-SecretsReason $r9r
+# ZOPT-Q102 (0.3.1): cteni = seda zona (hook mlci, radek auditu secrets:settingsLocal), zapis = deny s textem zapisu
+# (A179-O3 Q16). Par dal meri rozliseni cteni x zapis - tvarem auditu a duvodem deny, ne dvema texty dotazu.
+Start-Case 'bod 9 (TASK-106): TYZ soubor, jednou cteni a jednou zapis - cteni audit, zapis deny (0.3.1)'
+$env9r = New-AuditEnvironment
+$env9w = New-AuditEnvironment
+$r9r = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'cat .claude/settings.local.json 2>/dev/null' }) -Environment $env9r
+$r9w = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = 'echo x > .claude/settings.local.json' }) -Environment $env9w
+Assert-Equal 'allow' (Get-Decision $r9r) '[bod9/cteni] cat settings.local.json 2>/dev/null mlci'
+Assert-Equal 'deny' (Get-Decision $r9w) '[bod9/zapis] echo x > settings.local.json je deny'
+$aud9r = Join-Path $env9r['CLAUDE_PLUGIN_DATA'] 'gate-audit.jsonl'
+$aud9w = Join-Path $env9w['CLAUDE_PLUGIN_DATA'] 'gate-audit.jsonl'
+$line9r = if ([System.IO.File]::Exists($aud9r)) { [System.IO.File]::ReadAllText($aud9r) } else { '' }
+$line9w = if ([System.IO.File]::Exists($aud9w)) { [System.IO.File]::ReadAllText($aud9w) } else { '' }
+Assert-True ($line9r -match '"shape":"secrets:settingsLocal","decision":"allow"') ("[bod9/cteni] audit jmenuje CTENI: {0}" -f $line9r)
+Assert-True ($line9w -match '"shape":"secrets:selfProtect","decision":"deny"') ("[bod9/zapis] audit jmenuje ZAPIS: {0}" -f $line9w)
 $reason9w = Get-SecretsReason $r9w
-Assert-True ($reason9r.Contains($textRead))  ("[bod9/cteni] duvod jmenuje CTENI: {0}" -f $reason9r)
-Assert-True (-not $reason9r.Contains($textWrite)) '[bod9/cteni] duvod NEMLUVI o zapisu'
 Assert-True ($reason9w.Contains($textWrite)) ("[bod9/zapis] duvod jmenuje ZAPIS: {0}" -f $reason9w)
 Assert-True (-not $reason9w.Contains($textRead)) '[bod9/zapis] duvod NEMLUVI o cteni'
-Assert-True ($reason9r -ne $reason9w) '[bod9] texty se lisi (jinak by par nic nemeril)'
 
 # --- bod 11 (N16, vyrok 8 Amber = navrh Hestie prijat): glob se posuzuje podle CELE
 #     normalizovane cesty, ne jen podle jmena. `*` a `?` neprekracuji `/`, `**` ano, kotvi se na
@@ -423,27 +437,28 @@ $bod11Cases = @(
     (CmdCase 'B11 kontrola ①: *.txt v tomtez adresari' 'cat .github/workflows/*.txt' 'allow')
     (CmdCase 'B11 Get-Content glob yml'               'Get-Content config/*.yml' 'allow' 'PowerShell')
     (CmdCase 'B11 glob bez adresare (jmenna trida)'   'cat *' 'allow')
-    # 🔴 kontrolni skupina ②: glob MIRICI na cestu z `denyPathPatterns` zustava ask
-    (CmdCase 'B11 kontrola ② ~/.aws/*'                'cat ~/.aws/*' 'ask')
-    (CmdCase 'B11 kontrola ② .docker/*.json'          'cat .docker/*.json' 'ask')
+    # 🔴 kontrolni skupina ②: glob MIRICI na cestu z `denyPathPatterns` = deny (A179-O18, `secrets:wildcardPath`; do 0.3.0
+    #    ask, vyvojova 0.3.1 audit) - jmenna trida (wildcardName) mlci dal
+    (CmdCase 'B11 kontrola ② ~/.aws/*'                'cat ~/.aws/*' 'deny')
+    (CmdCase 'B11 kontrola ② .docker/*.json'          'cat .docker/*.json' 'deny')
     # TASK-117 (Z117-Q2/Q3/Q5 = A): `ls ~/.ssh/*` jen VYPISUJE jmena - jmenujici tvar, od 0.3.0 ticho
     # (zadani par. 4: flip invariantu vyctem, README 80). Kontrolni skupina tehoz globu je ctouci tvar.
     (CmdCase 'B11 kontrola ② ~/.ssh/* vypis (Z117-Q5)' 'ls ~/.ssh/*' 'allow')
-    (CmdCase 'B11 kontrola ② ~/.ssh/* cteni'          'cat ~/.ssh/*' 'ask')
-    (CmdCase 'B11 kontrola ② ~/.kube/*'               'Get-Content ~/.kube/*' 'ask' 'PowerShell')
-    (CmdCase 'B11 kontrola ② .claude/*'               'cat .claude/*' 'ask')
-    (CmdCase 'B11 kontrola ② **/credentials'          'cat **/credentials' 'ask')
-    (CmdCase 'B11 kontrola ② UserSecrets/*/secrets.json' 'cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json' 'ask')
+    (CmdCase 'B11 kontrola ② ~/.ssh/* cteni'          'cat ~/.ssh/*' 'deny')
+    (CmdCase 'B11 kontrola ② ~/.kube/*'               'Get-Content ~/.kube/*' 'deny' 'PowerShell')
+    (CmdCase 'B11 kontrola ② .claude/*'               'cat .claude/*' 'deny')
+    (CmdCase 'B11 kontrola ② **/credentials'          'cat **/credentials' 'deny')
+    (CmdCase 'B11 kontrola ② UserSecrets/*/secrets.json' 'cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json' 'deny')
     # 🔴 presne jmeno v tomtez adresari je deny dal - mez je jen u globu
     (CmdCase 'B11 kontrola presne jmeno v adresari'   'cat .github/workflows/secrets.yml' 'deny')
-    # 🔴 C1 (delta review Amber 2026-09-13): glob, ktery na secret MIRI VZOREM, je ask - jmeno globu
+    # 🔴 C1 (delta review Amber 2026-09-13): glob, ktery na secret MIRI VZOREM, je brana (A179-O18: deny) - jmeno globu
     #    sedne na `envFile.denyNames` nebo glob bez zastupnych znaku vypisuje chranene jmeno. Mutant:
     #    vratit Test-GlobAimsAtProtectedPath bez (c)+(d) -> `cat *.env` allow -> cervena.
-    (CmdCase 'C1 cat *.env'                           'cat *.env' 'ask')
-    (CmdCase 'C1 cat .env*'                           'cat .env*' 'ask')
-    (CmdCase 'C1 cat *.env.local'                     'cat *.env.local' 'ask')
-    (CmdCase 'C1 cat *secrets.json'                   'cat *secrets.json' 'ask')
-    (CmdCase 'C1 Get-Content src/*.env'               'Get-Content src/*.env' 'ask' 'PowerShell')
+    (CmdCase 'C1 cat *.env'                           'cat *.env' 'deny')
+    (CmdCase 'C1 cat .env*'                           'cat .env*' 'deny')
+    (CmdCase 'C1 cat *.env.local'                     'cat *.env.local' 'deny')
+    (CmdCase 'C1 cat *secrets.json'                   'cat *secrets.json' 'deny')
+    (CmdCase 'C1 Get-Content src/*.env'               'Get-Content src/*.env' 'deny' 'PowerShell')
     #    kontrolni skupina C1: glob, ktery na jmeno narazi NAHODOU, mlci dal (pripad vyroku 7)
     (CmdCase 'C1 kontrola *.yml v adresari'           'head .github/workflows/*.yml' 'allow')
     (CmdCase 'C1 kontrola *.json'                     'ls docs/technical/*.json' 'allow')
@@ -486,8 +501,16 @@ Start-Case 'vyrok 7 (N26): jmenna trida u globu zapise audit a mlci; ostatni rad
 Test-SecretsAudit 'jmenna trida yml'   'head -25 .github/workflows/*.yml' 'allow' $true
 Test-SecretsAudit 'jmenna trida *'     'cat *' 'allow' $true
 Test-SecretsAudit 'kontrola txt'       'cat .github/workflows/*.txt' 'allow' $false
-Test-SecretsAudit 'kontrola cesta'     'cat ~/.aws/*' 'ask' $false
-Test-SecretsAudit 'kontrola C1 *.env'  'cat *.env' 'ask' $false
+# A179-O18 (Amber 2026-10-23): glob na chranenou CESTU a glob mirici vzorem jsou deny - radek je secrets:wildcardPath
+# (ne wildcardName) s rozhodnutim deny; do 0.3.0 ask, vyvojova 0.3.1 audit (allow).
+foreach ($wp in @(@('kontrola cesta', 'cat ~/.aws/*'), @('kontrola C1 *.env', 'cat *.env'))) {
+    $dirWp = Join-Path $script:TempDir ('audit-sec-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    $rWp = Invoke-Hook -Script 'secrets.ps1' -InputJson (New-HookInput 'pretooluse-bash' @{ 'tool_input.command' = $wp[1] }) -Environment @{ 'CLAUDE_PLUGIN_DATA' = $dirWp }
+    Assert-Equal 'deny' (Get-Decision $rWp) ("[audit/{0}] {1}" -f $wp[0], $wp[1])
+    $lineWp = if ([System.IO.File]::Exists((Join-Path $dirWp 'gate-audit.jsonl'))) { [System.IO.File]::ReadAllText((Join-Path $dirWp 'gate-audit.jsonl')) } else { '' }
+    Assert-True ($lineWp -notmatch 'secrets:wildcardName') ("[audit/{0}] zadny radek wildcardName" -f $wp[0])
+    Assert-True ($lineWp -match '"shape":"secrets:wildcardPath","decision":"deny"') ("[audit/{0}] radek secrets:wildcardPath deny: {1}" -f $wp[0], $lineWp)
+}
 Test-SecretsAudit 'kontrola bezny glob' 'ls *.md' 'allow' $false
 
 # --- bod 12 + N-H1 + N-H2 + N-H4 + N-H6 (druhy nositel): chranene JMENO v TEXTU prikazu
@@ -507,12 +530,16 @@ $bod12 = [System.IO.File]::ReadAllText($bod12Path, ([System.Text.UTF8Encoding]::
 $bod12Rows = @($bod12.rows)
 Assert-True ($bod12Rows.Count -ge 20) ("[bod12] fixture nese pripady: {0}" -f $bod12Rows.Count)
 foreach ($row in $bod12Rows) {
-    Add-CollectedCase 'secrets' 'cmd' ([string]$row.tool) ([string]$row.cmd) ([string]$row.expect) ([string]$row.name)
+    # ZOPT-Q102 (0.3.1): `audit` = allow + radek auditu sede zony (Test-GreyZoneAudit); invariant drzi allow.
+    $expB12 = if ([string]$row.expect -eq 'audit') { 'allow' } else { [string]$row.expect }
+    Add-CollectedCase 'secrets' 'cmd' ([string]$row.tool) ([string]$row.cmd) $expB12 ([string]$row.name)
     if (Test-CollectOnly) { continue }
     $template = if ([string]$row.tool -eq 'PowerShell') { 'pretooluse-powershell' } else { 'pretooluse-bash' }
     $json = New-HookInput $template @{ 'tool_input.command' = [string]$row.cmd }
-    $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json
-    Assert-Equal ([string]$row.expect) (Get-Decision $r) ("[bod12/{0}] {1}" -f $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
+    $envB12 = if ([string]$row.expect -eq 'audit') { New-AuditEnvironment } else { $null }
+    $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json -Environment $envB12
+    Assert-Equal $expB12 (Get-Decision $r) ("[bod12/{0}] {1}" -f $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
+    if ($null -ne $envB12) { Assert-True (Test-GreyZoneAudit $envB12['CLAUDE_PLUGIN_DATA']) ("[bod12/{0}] radek auditu sede zony" -f $row.name) }
     if ($row.PSObject.Properties['reasonContains']) {
         $reason = Get-SecretsReason $r
         Assert-True ($reason.Contains([string]$row.reasonContains)) ("[bod12/{0}] duvod nese doslova <{1}>: {2}" -f $row.name, $row.reasonContains, $reason)
@@ -546,13 +573,15 @@ if (-not $gitOk) {
     $r = Invoke-Hook -Script 'secrets.ps1' -InputJson $json
     Assert-Equal 'allow' (Get-Decision $r) '[tracked] web/.env.development je verzovany -> allow'
 
-    # kontrolni skupina: tyz tvar, ale netrackovane jmeno musi skoncit ask
+    # kontrolni skupina: tyz tvar, ale netrackovane jmeno je seda zona (od 0.3.1 audit envFileUntracked, do 0.3.1 ask)
     $json2 = New-HookInput 'pretooluse-read' @{
         'tool_input.file_path' = 'web/.env.neexistujici'
         'cwd'                  = $GsdRepo
     }
-    $r2 = Invoke-Hook -Script 'secrets.ps1' -InputJson $json2
-    Assert-Equal 'ask' (Get-Decision $r2) '[tracked] netrackovany .env.<x> -> ask (kontrolni skupina)'
+    $envTr = New-AuditEnvironment
+    $r2 = Invoke-Hook -Script 'secrets.ps1' -InputJson $json2 -Environment $envTr
+    Assert-Equal 'allow' (Get-Decision $r2) '[tracked] netrackovany .env.<x> -> seda zona (kontrolni skupina)'
+    Assert-True (Test-GreyZoneAudit $envTr['CLAUDE_PLUGIN_DATA']) '[tracked] netrackovany .env.<x> zapise radek auditu sede zony'
 }
 
 # --------------------------------------------------------- fail-closed (Z9) ---
@@ -605,12 +634,18 @@ function Test-PartialSecretsOverride([string]$Name, [string]$Path, [string]$Expe
         $Override,
         ([System.Text.UTF8Encoding]::new($false)))
     $j = New-HookInput 'pretooluse-read' @{ 'tool_input.file_path' = $Path }
-    $res = Invoke-Hook -Script 'secrets.ps1' -InputJson $j -Environment @{ CLAUDE_PROJECT_DIR = $dir }
-    Assert-Equal $Expect (Get-Decision $res) ("[N43/{0}] {1}" -f $Name, $Path)
+    # ZOPT-Q102 (0.3.1): `audit` = mlci a zapise radek sede zony (Test-GreyZoneAudit).
+    $envN = @{ CLAUDE_PROJECT_DIR = $dir; CLAUDE_PLUGIN_DATA = (Join-Path $dir 'data') }
+    $res = Invoke-Hook -Script 'secrets.ps1' -InputJson $j -Environment $envN
+    $exp = if ($Expect -eq 'audit') { 'allow' } else { $Expect }
+    Assert-Equal $exp (Get-Decision $res) ("[N43/{0}] {1}" -f $Name, $Path)
+    if ($Expect -eq 'audit') { Assert-True (Test-GreyZoneAudit $envN['CLAUDE_PLUGIN_DATA']) ("[N43/{0}] radek auditu sede zony" -f $Name) }
+    if ($Expect -eq 'allow') { Assert-True (-not (Test-GreyZoneAudit $envN['CLAUDE_PLUGIN_DATA'])) ("[N43/{0}] BEZ radku sede zony" -f $Name) }
 }
 
 Start-Case 'N43: override jednoho klice `secrets` nezahodi `denyPathPatterns`'
-$ovAskEmpty = '{"secrets":{"askPathPatterns":[]}}'
+# ZOPT-Q102 (0.3.1): `askPathPatterns` se prejmenovalo na `auditPathPatterns` (cteni = seda zona, audit).
+$ovAskEmpty = '{"secrets":{"auditPathPatterns":[]}}'
 Test-PartialSecretsOverride 'id_rsa drzi' 'id_rsa' 'deny' $ovAskEmpty
 Test-PartialSecretsOverride '.env drzi'   '.env'   'deny' $ovAskEmpty
 $ovEnvFile = '{"secrets":{"envFile":{"maxBytes":1024}}}'
@@ -619,11 +654,12 @@ Test-PartialSecretsOverride 'id_rsa drzi i pri override envFile' 'id_rsa' 'deny'
 #    neztratilo" mohlo znamenat "override se vubec nenacetl"
 # TASK-117 H-c (Z117-Q21 = A, Tom 2026-10-08; navrh 01 (j) to predpovedel): do 0.2.0 tu stalo
 # `allow` - prazdne `askPathPatterns` platilo. Prazdne pole je UVOLNENI, H-c ho odmitne a plati
-# vychozi -> ask. Kontrolni skupina "override se nacetl" je proto zprisnujici klic, ktery PLATI.
-Test-PartialSecretsOverride 'prazdne askPathPatterns odmitnuto (H-c)' '.claude/settings.local.json' 'ask' $ovAskEmpty
-$ovAskPlus = '{"secrets":{"askPathPatterns":["(^|/)\\.claude/settings\\.local\\.json$","(^|/)tajne\\.txt$"]}}'
-Test-PartialSecretsOverride 'zprisnujici askPathPatterns plati (H-c)' 'docs/tajne.txt' 'ask' $ovAskPlus
-Test-PartialSecretsOverride 'zprisnujici askPathPatterns drzi vychozi' '.claude/settings.local.json' 'ask' $ovAskPlus
+# vychozi -> seda zona (od 0.3.1 audit, do 0.3.1 ask). Kontrolni skupina "override se nacetl" je proto zprisnujici klic,
+# ktery PLATI - pozna se podle radku auditu sede zony (kontrola bez prepisu ho nezapise).
+Test-PartialSecretsOverride 'prazdne auditPathPatterns odmitnuto (H-c)' '.claude/settings.local.json' 'audit' $ovAskEmpty
+$ovAskPlus = '{"secrets":{"auditPathPatterns":["(^|/)\\.claude/settings\\.local\\.json$","(^|/)tajne\\.txt$"]}}'
+Test-PartialSecretsOverride 'zprisnujici auditPathPatterns plati (H-c)' 'docs/tajne.txt' 'audit' $ovAskPlus
+Test-PartialSecretsOverride 'zprisnujici auditPathPatterns drzi vychozi' '.claude/settings.local.json' 'audit' $ovAskPlus
 Test-PartialSecretsOverride 'kontrola: bez prepisu tajne.txt mlci' 'docs/tajne.txt' 'allow' '{}'
 
 # ------------------------------------------------- cesta na cizi jednotce ---
@@ -654,6 +690,14 @@ Invoke-InvariantRows 'secrets'
 #     docs/logs/mutants/task-117/. TDD: faze 1 = cervena z praveho duvodu nad 0.2.0.
 Start-Case 'TASK-117 (fixtures/task117-secrets.json)'
 Invoke-Task117Rows 'secrets'
+
+# --- TASK-179 (0.3.1): kontrolni skupina - novy rozbor kontejneroveho obalu v _common.ps1 slouzi jen DB pravidlu gate;
+#     verdikt secrets nad kontejnerovymi tvary = 0.3.0 (AOPT-O25). Pripady v tests/fixtures/task179-secrets.json.
+Start-Case 'TASK-179 (fixtures/task179-secrets.json)'
+Invoke-Task117Rows 'secrets' 'task179'
+
+# ZOPT-Q102 (0.3.1): zadny beh sady nevydal ask, zdroj ani vychozi konfigurace ask neznaji.
+Assert-NoAskVerdict
 
 Write-CollectedCases
 Assert-TimingBudget

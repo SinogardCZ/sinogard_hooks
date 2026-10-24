@@ -24,6 +24,7 @@ $script:Skip = 0
 $script:BaselineMs = $null
 $script:CurrentCase = ''
 $script:CaseHeaderPrinted = $false
+$script:AskOutputs = New-Object System.Collections.ArrayList
 
 function Start-Case([string]$name) {
     $script:CurrentCase = $name
@@ -157,15 +158,26 @@ function Invoke-Hook {
         [Parameter(Mandatory = $true)][string]$Script,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$InputJson,
         [string]$Interpreter = $script:Interpreter,
-        [hashtable]$Environment = $null
+        [hashtable]$Environment = $null,
+        # TASK-179 kolo 8 (K8-5): radek s vlastnim `maxMs` pod stropem se opakuje uz nad nim - jinak by ho jeden vykyv
+        # planovace shodil, zatimco radek bez `maxMs` by tytez vykyv prezil.
+        [int]$RetryAboveMs = 0,
+        [switch]$FreshDataOnRetry
     )
 
+    $limit = if ($RetryAboveMs -gt 0) { [Math]::Min($RetryAboveMs, [int]$script:HookCeilingMs) } else { [int]$script:HookCeilingMs }
     $first = Invoke-HookOnce -Script $Script -InputJson $InputJson -Interpreter $Interpreter -Environment $Environment
     # Do rozpoctu jde PRVNI mereni - jinak by median klesal prave o ty behy, kvuli
     # kterym se opakuje, a prestal by systematicke zpomaleni videt.
     Add-HookTime ([int]$first.Ms)
-    if ($first.Ms -lt $script:HookCeilingMs) { return $first }
+    if ($first.Ms -lt $limit) { return $first }
 
+    # K8-5: s -FreshDataOnRetry pise druhy beh audit do NOVE slozky (volajici cte `CLAUDE_PLUGIN_DATA` z tehoz slovniku) -
+    # jinak by radky auditu nesly oba behy a pocty (`auditShapeCount`) by vysly dvojnasobne. Jen na prani: sady, ktere
+    # slozku sdileji pres vic volani (stav session), ji meni nechteji.
+    if ($FreshDataOnRetry -and $null -ne $Environment -and $Environment.ContainsKey('CLAUDE_PLUGIN_DATA')) {
+        $Environment['CLAUDE_PLUGIN_DATA'] = [string]$Environment['CLAUDE_PLUGIN_DATA'] + '-r2'
+    }
     $script:Retries++
     $second = Invoke-HookOnce -Script $Script -InputJson $InputJson -Interpreter $Interpreter -Environment $Environment
     Add-Member -InputObject $second -NotePropertyName 'FirstMs' -NotePropertyValue ([int]$first.Ms)
@@ -208,6 +220,10 @@ function Invoke-HookOnce {
     # urcuje sam parametrem -Environment.
     $psi.EnvironmentVariables['CLAUDE_PROJECT_DIR'] = $script:EmptyProjectDir
     $psi.EnvironmentVariables['CLAUDE_PLUGIN_DATA'] = ''
+    # CR-R8 (TASK-179, 0.3.1): pravidlo DB cte hostitele i z prostredi hooku (PGHOST, PGHOSTADDR, PGSERVICE,
+    # SQLCMDSERVER) - tataz trida "hodnota z okoli". Pripad si je nastavuje sam (`env` radku fixtury).
+    # CR-V7 (kolo 6): vsechny promenne, ktere `allow` z gate.dbDestroyLocal vyzaduje prazdne (gate.ps1, DbHostEnvNames).
+    foreach ($k in @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'SQLCMDSERVER', 'PSQLRC')) { $psi.EnvironmentVariables[$k] = '' }
 
     if ($Environment) {
         foreach ($k in $Environment.Keys) { $psi.EnvironmentVariables[$k] = [string]$Environment[$k] }
@@ -227,6 +243,11 @@ function Invoke-HookOnce {
 
     $proc.WaitForExit()
     $sw.Stop()
+
+    # ZOPT-Q102 (Tom 2026-10-20, TASK-179 / 0.3.1): hook nesmi vratit `ask` NIKDY - kazdy beh kazde sady se pocita
+    # (Assert-NoAskVerdict), ne jen radky, ktere ocekavani `ask` nesou.
+    $stdoutText = $outTask.Result
+    if ($stdoutText -match '"permissionDecision"\s*:\s*"ask"') { [void]$script:AskOutputs.Add($Script) }
 
     return [pscustomobject]@{
         Exit   = $proc.ExitCode
@@ -382,15 +403,16 @@ function Invoke-InvariantRows([string]$HookName) {
 # audit (auditShape regex, auditDecision, auditNotContains) a faze. Radek s `faze` vetsi nez
 # `$script:Task117Faze` ceka na schvaleny navrh a pocita se jako PRESKOCENY - ne zeleny.
 $script:Task117Faze = 2
-function Invoke-Task117Rows([string]$HookName) {
-    $path = Join-Path $PSScriptRoot ('fixtures/task117-' + $HookName + '.json')
+# TASK-179 (0.3.1): tentyz format radku nese i tests/fixtures/task179-<hook>.json - `$Fixture` je predpona souboru.
+function Invoke-Task117Rows([string]$HookName, [string]$Fixture = 'task117') {
+    $path = Join-Path $PSScriptRoot ('fixtures/' + $Fixture + '-' + $HookName + '.json')
     $doc = [System.IO.File]::ReadAllText($path, ([System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
     $rows = @($doc.rows)
-    Assert-True ($rows.Count -ge 1) ("[task117/{0}] fixture nese pripady: {1}" -f $HookName, $rows.Count)
+    Assert-True ($rows.Count -ge 1) ("[{0}/{1}] fixture nese pripady: {2}" -f $Fixture, $HookName, $rows.Count)
     foreach ($row in $rows) {
         $faze = if ($row.PSObject.Properties['faze']) { [int]$row.faze } else { 1 }
         $expect = if ($row.PSObject.Properties['expect']) { [string]$row.expect } else { '' }
-        $label = ("[task117/{0}/{1}] {2}" -f $row.group, $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
+        $label = ("[{0}/{1}/{2}] {3}" -f $Fixture, $row.group, $row.name, (([string]$row.cmd) -replace '\r?\n', ' / '))
         # Faze se kontroluje PRED sberem: radek, ktery ceka na schvaleny navrh, do invariantu
         # nepatri - generator by z nej udelal tvrzeni, ktere zadna sada nemerila.
         if ($faze -gt $script:Task117Faze) {
@@ -400,9 +422,13 @@ function Invoke-Task117Rows([string]$HookName) {
             continue
         }
         # Radek s projektovym prepisem nebo rezimem meri JINY stav nez invariant (ten bezi
-        # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim.
+        # bez prepisu a v `default`) - do invariantu by prisel s chybnym ocekavanim. Radek s `{REP}` / `{REP2}` (K8-9) nese
+        # nerozvinuty zastupny text - pozna se podle presneho zastupce, tymz kriteriem jako rozvinuti nize (K9-7: predpona `{REP`
+        # by vyradila i literal jako `{REPO}`; K10-4: vlastnost `repText` by nepoznala radek jen s `{REP2}`).
+        $cmdRaw = [string]$row.cmd
         if ($expect -ne '' -and -not $row.PSObject.Properties['override'] -and -not $row.PSObject.Properties['mode'] -and
-            -not $row.PSObject.Properties['cwd'] -and -not ([string]$row.cmd).Contains('{PLUGIN_ROOT}')) {
+            -not $row.PSObject.Properties['cwd'] -and -not $row.PSObject.Properties['env'] -and -not $cmdRaw.Contains('{PLUGIN_ROOT}') -and
+            -not $cmdRaw.Contains('{REP}') -and -not $cmdRaw.Contains('{REP2}')) {
             $kind = if (@('Write', 'Edit', 'Read') -contains [string]$row.tool) { 'path' } else { 'cmd' }
             Add-CollectedCase $HookName $kind ([string]$row.tool) ([string]$row.cmd) $expect ([string]$row.name)
         }
@@ -411,6 +437,10 @@ function Invoke-Task117Rows([string]$HookName) {
         # `{PLUGIN_ROOT}` = koren pluginu, ze ktereho sada hooky spousti (= "prave bezici plugin", R2 kolo 2).
         $rootFwd = ([string]$script:RepoRoot).Replace('\', '/')
         $cmdText = ([string]$row.cmd).Replace('{PLUGIN_ROOT}', $rootFwd)
+        # TASK-179 kolo 6 (K6-4): `{REP}` = `repText` opakovany `repCount`krat (patologicky dlouhy prikaz bez tisicu znaku ve fixture).
+        if ($cmdText.Contains('{REP}')) { $cmdText = $cmdText.Replace('{REP}', ([string]$row.repText * [int]$row.repCount)) }
+        # K7-1 (kolo 7): druhe opakovani (`{REP2}`) pro vnorene UZAVRENE zavorky - otviraci v `{REP}`, zaviraci v `{REP2}`.
+        if ($cmdText.Contains('{REP2}')) { $cmdText = $cmdText.Replace('{REP2}', ([string]$row.repText2 * [int]$row.repCount2)) }
         $tool = [string]$row.tool
         $values = @{}
         if (@('Write', 'Edit', 'Read') -contains $tool) {
@@ -439,9 +469,16 @@ function Invoke-Task117Rows([string]$HookName) {
             [System.IO.File]::WriteAllText((Join-Path $dir '.claude/sinogard-hooks.json'), $ov, ([System.Text.UTF8Encoding]::new($false)))
             $envh['CLAUDE_PROJECT_DIR'] = $dir
         }
+        # CR-R8 (TASK-179): prostredi procesu hooku (`env` = objekt jmeno -> hodnota); radek s nim do invariantu nejde.
+        if ($row.PSObject.Properties['env']) {
+            foreach ($p in $row.env.PSObject.Properties) { $envh[$p.Name] = [string]$p.Value }
+        }
         $auditDir = Join-Path $script:TempDir ('t117a-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
         $envh['CLAUDE_PLUGIN_DATA'] = $auditDir
-        $r = Invoke-Hook -Script ($HookName + '.ps1') -InputJson $json -Environment $envh
+        $retryAbove = if ($row.PSObject.Properties['maxMs']) { [int]$row.maxMs } else { 0 }
+        $r = Invoke-Hook -Script ($HookName + '.ps1') -InputJson $json -Environment $envh -RetryAboveMs $retryAbove -FreshDataOnRetry
+        # K8-5: po opakovani je audit druheho behu v nove slozce.
+        $auditDir = [string]$envh['CLAUDE_PLUGIN_DATA']
         $decision = Get-Decision $r
         if ($expect -ne '') { Assert-Equal $expect $decision $label }
         if ($row.PSObject.Properties['expectNot']) {
@@ -452,19 +489,45 @@ function Invoke-Task117Rows([string]$HookName) {
             if (-not [string]::IsNullOrWhiteSpace($r.Stdout)) { $reason = [string]($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecisionReason }
             Assert-True ($reason.Contains([string]$row.reasonContains)) ("{0}: duvod nese <{1}>: {2}" -f $label, $row.reasonContains, $reason)
         }
-        if ($row.PSObject.Properties['auditShape']) {
-            $auditPath = Join-Path $auditDir 'gate-audit.jsonl'
-            $lines = @()
-            if ([System.IO.File]::Exists($auditPath)) {
-                $lines = @([System.IO.File]::ReadAllLines($auditPath, ([System.Text.UTF8Encoding]::new($false))) | Where-Object { $_ -ne '' })
+        $auditPath = Join-Path $auditDir 'gate-audit.jsonl'
+        $lines = @()
+        if ([System.IO.File]::Exists($auditPath)) {
+            $lines = @([System.IO.File]::ReadAllLines($auditPath, ([System.Text.UTF8Encoding]::new($false))) | Where-Object { $_ -ne '' })
+        }
+        # TASK-179 kolo 6 (K6-5): tvar, ktery v auditu byt NESMI (allow radek u tehoz listu, ktery konci ask).
+        if ($row.PSObject.Properties['auditAbsentShape']) {
+            # K7-9 (kolo 7): bez jedineho radku auditu by tvrzeni "tvar tam neni" proslo naprazdno (audit se vubec nezapsal).
+            Assert-True ($lines.Count -ge 1) ("{0}: audit nese aspon jeden radek (auditAbsentShape)" -f $label)
+            foreach ($l in $lines) {
+                $o = $l | ConvertFrom-Json
+                $bad = [string]$o.shape -match [string]$row.auditAbsentShape -and
+                       (-not $row.PSObject.Properties['auditAbsentDecision'] -or [string]$o.decision -eq [string]$row.auditAbsentDecision)
+                Assert-True (-not $bad) ("{0}: audit NEnese shape~<{1}>; radky: {2}" -f $label, $row.auditAbsentShape, ($lines -join ' || '))
             }
+        }
+        # TASK-179 kolo 6 (K6-4): doba jednoho behu hooku (patologicky dlouhy prikaz nesmi narazit na timeout hooku).
+        # K7-7/K8-5 (kola 7 a 8): Invoke-Hook beh nad `maxMs` (nejvys HookCeilingMs) jednou opakuje a vraci druhe mereni -
+        # jeden vykyv stroje radek neshodi. `maxMs` nad stropem se na strop zkrati: strop je absolutni mez jednoho behu sady.
+        if ($row.PSObject.Properties['maxMs']) {
+            $maxMs = [Math]::Min([int]$row.maxMs, [int]$script:HookCeilingMs)
+            Assert-True ([int]$r.Ms -lt $maxMs) ("{0}: hook do {1} ms, dostano {2} ms" -f $label, $maxMs, $r.Ms)
+        }
+        if ($row.PSObject.Properties['auditShape']) {
             $hit = $null
+            $hits = 0
             foreach ($l in $lines) {
                 $o = $l | ConvertFrom-Json
                 if ([string]$o.shape -match [string]$row.auditShape -and
-                    (-not $row.PSObject.Properties['auditDecision'] -or [string]$o.decision -eq [string]$row.auditDecision)) { $hit = $l; break }
+                    (-not $row.PSObject.Properties['auditDecision'] -or [string]$o.decision -eq [string]$row.auditDecision)) {
+                    if ($null -eq $hit) { $hit = $l }
+                    $hits++
+                }
             }
             Assert-True ($null -ne $hit) ("{0}: radek auditu shape~<{1}> decision=<{2}>; radky: {3}" -f $label, $row.auditShape, $row.auditDecision, ($lines -join ' || '))
+            # TASK-179 kolo 6 (K6-6): kazde cteni obalu nesmi zapsat tutez udalost znovu.
+            if ($row.PSObject.Properties['auditShapeCount']) {
+                Assert-Equal ([int]$row.auditShapeCount) $hits ("{0}: pocet radku auditu shape~<{1}>" -f $label, $row.auditShape)
+            }
             if ($row.PSObject.Properties['auditNotContains']) {
                 foreach ($l in $lines) {
                     Assert-True (-not $l.Contains([string]$row.auditNotContains)) ("{0}: audit NEnese text prikazu <{1}>" -f $label, $row.auditNotContains)
@@ -481,6 +544,65 @@ function Get-HookCeilingMs { return $script:HookCeilingMs }
 function Set-HookCeilingMs([int]$Ms) { $script:HookCeilingMs = $Ms }
 function Get-HookRetryCount { return $script:Retries }
 function Get-HookTimeCount { return $script:Times.Count }
+
+# ZOPT-Q102 (0.3.1): ocekavani `audit` v tabulkach pripadu = hook MLCI (rozhodnuti allow) A zapise radek auditu sede zony
+# (`gate:<id>`, `opaque:<pricina>`, `secrets:<id>`) s rozhodnutim allow. Bez toho by kontrolni skupiny "tohle je citlive"
+# a "tohle ne" (byvale ask x allow) od 0.3.1 obe koncily allow a sada by rozdil prestala merit. Jmenujici tvary
+# (`secrets:nameOnly*`, `secrets:wildcardName`) a SQL ze souboru/roury nejsou seda zona - jsou to zaznamy tichych tvaru 0.3.0.
+function New-AuditEnvironment {
+    $dir = Join-Path $script:TempDir ('aud-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    return @{ 'CLAUDE_PLUGIN_DATA' = $dir }
+}
+
+function Test-GreyZoneAudit([string]$AuditDir) {
+    $path = Join-Path $AuditDir 'gate-audit.jsonl'
+    if (-not [System.IO.File]::Exists($path)) { return $false }
+    foreach ($l in [System.IO.File]::ReadAllLines($path, ([System.Text.UTF8Encoding]::new($false)))) {
+        if ($l -eq '') { continue }
+        $o = $l | ConvertFrom-Json
+        $shape = [string]$o.shape
+        if ([string]$o.decision -notmatch '^allow') { continue }
+        if ($shape -notmatch '^(gate:|opaque:|secrets:)') { continue }
+        if ($shape -match '^secrets:(nameOnly|wildcardName)') { continue }
+        return $true
+    }
+    return $false
+}
+
+# ZOPT-Q102 (Tom 2026-10-20, A179-O2): zadny verdikt `ask` nikde v pluginu (gate i secrets). Strukturni test ve dvou vrstvach:
+# (1) zadny beh hooku v cele sade nevydal `ask` (pocita Invoke-HookOnce); (2) zdroj hooku nema zapisovac `ask` ani konstrukci
+# verdiktu `ask` a vychozi konfigurace nema hodnotu `ask` - cesta kodu, kterou zadna fixtura nepotka, se tak chyti taky.
+function Assert-NoAskVerdict {
+    Start-Case 'ZOPT-Q102: zadny verdikt ask'
+    $byScript = @($script:AskOutputs | Group-Object | ForEach-Object { '{0} {1}x' -f $_.Name, $_.Count })
+    Assert-Equal 0 $script:AskOutputs.Count ('[ask/beh] behu hooku s permissionDecision ask ({0})' -f ($byScript -join ', '))
+    foreach ($f in @(Get-ChildItem -Path $script:ScriptsDir -Filter '*.ps1' -File)) {
+        $src = [System.IO.File]::ReadAllText($f.FullName)
+        $writer = [regex]::Matches($src, '\bWrite-AskDecision\b').Count
+        $verdict = [regex]::Matches($src, '(?i)Decision\s*=\s*''ask''').Count
+        Assert-Equal 0 $writer ('[ask/zdroj] {0}: vyskytu Write-AskDecision' -f $f.Name)
+        Assert-Equal 0 $verdict ('[ask/zdroj] {0}: konstrukci verdiktu ask' -f $f.Name)
+    }
+    $defaults = ConvertFrom-Json ([System.IO.File]::ReadAllText((Join-Path $script:ScriptsDir '..\config\defaults.json')))
+    $askPaths = New-Object System.Collections.ArrayList
+    $stack = New-Object System.Collections.Stack
+    $stack.Push(@('', $defaults))
+    while ($stack.Count -gt 0) {
+        $item = $stack.Pop()
+        $path = [string]$item[0]; $node = $item[1]
+        if ($node -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($p in $node.PSObject.Properties) {
+                if ($p.Name.StartsWith('_')) { continue }
+                $stack.Push(@(($path + '.' + $p.Name), $p.Value))
+            }
+        } elseif ($node -is [System.Array]) {
+            for ($i = 0; $i -lt $node.Count; $i++) { $stack.Push(@(($path + '[' + $i + ']'), $node[$i])) }
+        } elseif ($node -is [string] -and $node -ceq 'ask') {
+            [void]$askPaths.Add($path)
+        }
+    }
+    Assert-Equal 0 $askPaths.Count ('[ask/konfigurace] defaults.json: hodnot ask ({0})' -f (@($askPaths | Sort-Object) -join ', '))
+}
 
 function Assert-TimingBudget {
     if ($script:Times.Count -eq 0) { return }

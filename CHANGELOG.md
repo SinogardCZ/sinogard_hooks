@@ -3,6 +3,616 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.4.0] — 2026-10-23
+
+**TASK-179 (GSD): destruktivní DB příkaz uvnitř kontejnerového obalu — oprava DB části README omezení 11.** Zadání
+Amber v1.1 (`2026-10-18-zadani-task-179.md`, revize Grace `T179-N1`–`N12`), rozhodnutí `ZOPT-Q82`, `ZOPT-Q89` (Tom)
+a `AOPT-O22`–`O28` (Amber). Doklady: `docs/logs/mutants/task-179/` v repu GSD (krok 0 s tabulkami voleb CLI, červená
+fáze, mutanti).
+
+**Číslo verze (`A179-O19`, Amber 2026-10-23):** vydání se vyvíjelo jako **0.3.1** (zadání, rozhodnutí `A179-O2`); mění
+rozhodnutí brány (přes 440 očekávání invariantu, přejmenované klíče přepisu), takže podle konvence `A117-O3` („mění se
+rozhodnutí brány → minor verze") vychází jako **0.4.0**. „0.3.1" v textu níž a v rozhodnutích = toto vydání; plánovaná
+„0.3.2" = **0.4.1**. Do review Amber B2 tu stálo *„Bezpečnostní oprava brány §6 → patch verze"*.
+
+### Bezpečnost — mazání větve a čtení tajemství přes zástupný znak zpět na `deny` (`A179-O17`, `A179-O18`)
+
+Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové verze dala ticho tam, kde bezpečnost chce zákaz:
+
+- **`git branch -d` = `deny` jako v 0.3.0** (`A179-O17`). Vývojová verze (`A179-O3` Q11) pustila `-d` (smaže jen
+  sloučenou větev) tichem a vzor přejmenovala na `git-branch-delete-force`. `ZOPT-Q102` povolil smazání větve po merge
+  do `main`; hook ale nepozná, kam je větev sloučená (`git branch -d` hlídá upstream nebo `HEAD`), proto 0.4.0 nechává
+  `deny` jako 0.3.0 a povolení čeká na rozhodnutí Toma. Vzor je zpět i s id `git-branch-delete`; nese ale od
+  `A179-O20` zkratky `--delete`, takže projektový přepis `gate.denyPatterns`
+  z 0.3.0 už nadmnožinou není a odmítne se (platí výchozí, přísnější) — viz Migrace přepisu níž. Skupina `O17`.
+  Do review Amber N2 (`A179-O23`) tu stálo *„takže projektový přepis `gate.denyPatterns` z 0.3.0 platí dál (pravidlo
+  `superset`)"* — platilo v `1eee799`, změnou vzoru v `c54a843` přestalo.
+- **Zástupný znak mířící na tajemství = `deny`** (`A179-O18`): `secrets.decisions.wildcardPath` výchozí `deny`, ne
+  audit — `cat ~/.ssh/*`, `cat *.env`, `cp *.pem …`, `Get-Content ~/.kube/*`. S auditem by obsah tajemství vstoupil do
+  kontextu modelu a hook by jen zapsal řádek. Glob, který na chráněné jméno jen **narazí** (`cat *`, `ls *.md`), mlčí dál
+  s auditem `secrets:wildcardName`; výpis jmen (`ls ~/.ssh/*`, Z117-Q5) mlčí dál. Cena: 4 dotazy `wildcardPath` za 30
+  dní (měření 2026-10-20) → teď 4 zákazy. Skupina `O18` v `task179-secrets.json`.
+- **Příkaz na cizím stroji = `deny`** (`A179-O18`): `gate.decisions.remoteShell` výchozí `deny` — `ssh host "…"`,
+  `ssh host <<EOF`, `plink … host příkaz`. Pravidla nad cestami tam neplatí a audit na našem stroji o cizím stroji
+  netvrdí nic. `ssh host` bez příkazu, `ssh -T git@github.com` a `git push` přes ssh mlčí dál. Skupina `O18`
+  v `task179-gate.json`.
+- **Díry 0.3.0 ve třídách O17 / O18 zavřené v tomto vydání** (`A179-O20`, Amber 2026-10-23; `/code-review` nad
+  `1eee799`, skupina `CR-AL`; `A179-O13` platí jen pro díry mimo pravidlo):
+  - **zástupná skupina `[…]` a v Bashi `{a,b}`** v neuvozeném tokenu na pozici cesty: shell ji rozvine na chráněný
+    soubor (`cat .en[v]`, `cat ~/.aws/credential[s]`, `cat {.env,x}`), hook dosud viděl jen `*` a `?` a mlčel. Skupina se
+    teď rozvine na doslovné kandidáty (množina, rozsah `a-z`, alternativy, řada `{1..3}`) a každý jde pravidlem cesty;
+    trefí-li chráněný soubor → `deny` (`secrets:wildcardPath`). Negace `[!x]` a třídy znaků se rozvinou nad abecedou jmen
+    souborů (CR-AN3 níž); co rozvinout nejde (řada s krokem) nebo by dalo víc než 64 kandidátů, se posoudí jako nadmnožina
+    (viz CR-AM níž).
+    Převod skupin na regex globu bez výčtu = 0.4.1 (GSD TASK-190);
+  - **příkaz na cizím stroji volbou:** `ssh -o RemoteCommand=…` (i `-oRemoteCommand=`, ve shluku, klíč bez ohledu na
+    velikost písmen; `RemoteCommand none` mlčí) a `plink -m <soubor>` → `deny`. `ssh -F <konfigurace>` může RemoteCommand
+    nést taky, ale soubor hook nečte — README mez 28;
+  - **zkratka dlouhé volby u `git branch`:** git bere jednoznačnou zkratku, `--d`, `--de` … `--delet` = `--delete` →
+    `deny` (vzor `git-branch-delete`).
+- **Kolo `/code-review` nad `c54a843` (CR-AM, skupina `CR-AM`):**
+  - moje regrese CR-AL1: skupina se rozvíjela i u **doslovné cesty nástrojů nad souborem** (Read/Edit/Write), takže
+    úprava `src/app/[locale]/[category]/[slug]/page.tsx` (Next.js) skončila `deny`. Teď jen u příkazu (Bash, PowerShell);
+    když žádný kandidát nesedí, posoudí se i doslovný text (Bash nesedící glob nechá doslova) (CR-AM1);
+  - co rozvinout nejde, se posoudí jako **nadmnožina** (skupina = `*`): míří-li na chráněnou cestu nebo sedne na chráněné
+    jméno, `deny`; jinak ticho. Falešné `deny` u `cat app.log.[0-9][0-9]`, `grep foo src/[!_]*.py`, `ls *.[[:digit:]]`
+    a `cat [a-z][a-z].txt` z `c54a843` je pryč (CR-AM5); řada s krokem a nulami doplněná řada v `{…}` se už nenechává
+    doslova (fail-open, CR-AM3); kandidát šedé zóny (netrackovaný `.env.dev`) má verdikt doslovné cesty, ne `deny` (CR-AM4);
+  - **místní příkaz ve volbě ssh** (`-o ProxyCommand|LocalCommand|KnownHostsCommand=…`, `plink -proxycmd`) běží na
+    tomto stroji mimo pravidla brány → `deny` (díra 0.3.0, třída O18, CR-AM2); **vstup ze souboru** (`ssh host < cmds.sh`,
+    here-string) → `deny`; přesměrování už se nepočítá jako poziční argument, `ssh host < /dev/null` a `ssh host > log`
+    proto mlčí (do opravy falešné `deny`) (CR-AM7); plink `-cert` (CR-AM8); jeden rozbor argumentů ssh/plink místo dvou
+    kopií (CR-AM10);
+  - vědomě beze změny: migrace přepisu `denyPatterns` (CR-AM6 = CR-AL4 výše); výčet kandidátů spouští pravidlo cesty
+    až 64× (CR-AM9; převod na regex = 0.4.1); roura do ssh bez příkazu a třída `[[:alpha:]]` = README mez 28.
+- **Kolo `/code-review` nad `824775e` (CR-AN, skupina `CR-AN`):**
+  - moje regrese CR-AM7: přesměrování se poznávalo v argumentech bez uvozovek, takže `ssh host '2>/dev/null rm -rf x'`
+    mlčelo (v `c54a843` `deny`). Přesměrování je teď jen slovo, které v příkazu stojí mimo uvozovky (CR-AN1); vstup ze
+    souboru se hledá v celém příkazu, i slepený `ssh host<cmds.sh` a před příkazem `< cmds.sh ssh host` (CR-AN2);
+    PowerShell `*>` / `*>>` je přesměrování, ne příkaz (falešné `deny`, CR-AN5);
+  - moje regrese CR-AM5: nadmnožina neviděla příponu klíče, `cat deploy.pe[!x]` (Bash → `deploy.pem`) mlčelo. Negace
+    a třídy znaků se teď rozvinou nad abecedou jmen souborů (CR-AN3); skupina vedle `*` se neslije do `**` (falešné
+    `deny`, CR-AN4); po prvním netrackovaném `.env.x` se další kandidáti bez `git ls-files` přeskočí (52 kandidátů:
+    5,5 s → 1,3 s, CR-AN6); `{…}` Bash rozvine vždy, doslovný text bez `[` se už neposuzuje (`cat .env.{example,sample}`
+    = falešný audit, CR-AN7); `{..}`, `{a..}` řada nejsou (falešné `deny`, CR-AN8); `[!_]*.yml` = jako `*.yml` (audit
+    `wildcardName`, CR-AN9);
+  - díra 0.3.0, třída O18: `ssh -o PKCS11Provider|SecurityKeyProvider=<knihovna>` a `ssh -I <knihovna>` načtou cizí kód
+    na tomto stroji → `deny` (`SecurityKeyProvider=internal` mlčí) (CR-AN10);
+  - vědomě: nad 64 kandidátů zůstává nadmnožina — `cat key.p[a-z][a-z]` mlčí jako `cat key.p??` (README mez 9, 28)
+    a nadmnožina na chráněné jméno je `deny` (cena, `cat docs/[a-z][a-z]*.toml`).
+- **Kolo `/code-review` nad `54dc970` (CR-AO, skupina `CR-AO`):**
+  - moje regrese CR-AN1/AN2/AN5: volba slepená s přesměrováním (`ssh -oProxyCommand=x>/dev/null host`) se zahodila
+    (CR-AO1); číslice na konci hostu (`ssh web1<cmds.sh`, IPv4) se brala jako deskriptor (CR-AO3); v Bashi je `*>x` glob
+    `*` a přesměrování, ne „všechny proudy" (CR-AO4); obal (`nohup`, `timeout`) skládá text vnitřního příkazu znovu
+    a uvozovky slova bez mezery ztratí, takže `nohup ssh host '>/srv/x'` mlčelo — uvozovky se teď posuzují v původním
+    textu příkazu (CR-AO5). **Cena:** přesměrování u ssh uvnitř vnořeného shellu (`bash -c "ssh host 2>/dev/null"`)
+    je v původním textu v uvozovkách, posoudí se jako příkaz = `deny` (fail-closed);
+  - moje regrese CR-AN3: zástupné znaky PowerShellu negaci nemají, `Get-Content .en[!v]` čte `.env` — negace jen
+    v Bashi (CR-AO2); Bash `[[=v=]]` / `[[.v.]]` = nadmnožina (CR-AO6); dvě skupiny kolem `*` se už neslijí do `**`
+    (CR-AO8); přeskok `git ls-files` jen po verdiktu `envFileUntracked` (CR-AO7: se zpřísněným `envFileUntracked` mlčelo
+    `cat {.claude/settings.local.json,.env.dev}`; do `9cd3195` tu stálo *„preventivně — falešný verdikt se neprokázal"* —
+    řádek fixtury měl přepis jen s jedním klíčem `decisions`, přepis se slučuje o jednu úroveň, takže chyběl
+    `settingsLocal` a řádek byl `deny` ze špatného důvodu; totéž u nového řádku CR-Q6, opraveno);
+  - CR-AN10: výjimka `internal` jen u `SecurityKeyProvider` (CR-AO9); `SSH_ASKPASS=<program>` a `SSH_SK_PROVIDER=<knihovna>`
+    před příkazem (i přes `env`) → `deny`; proměnná nastavená dřív (`export`, `$env:`) = README mez 28 (CR-AO10).
+  - fixtury: kontrola CR-Q6 čekala audit `envVarRead`, první verdikt je od 0.3.1 `envDump` (vada řádku z review A179-O18);
+    kontrola CR-AN7 neměla jediný řádek auditu (`auditAbsentShape` ho vyžaduje). Obojí odhalila sekce secrets pod
+    Windows PowerShell 5.1 (pod pwsh 7 se tvrzení auditu v dílčím nástroji nekontrolovala).
+- **Poslední kolo `/code-review` nad `5c43cf2` (CR-AP, skupina `CR-AP`; rozsah podle `A179-O22`):**
+  - moje regrese CR-AO5 do ticha: slova přesměrování se sbírají z celého příkazu, takže `echo x >/a; ssh host '>/a'`
+    zaměnilo argument ssh v uvozovkách se slovem jiného příkazu (0.3.0 `ask`, `5c43cf2` ticho). Text, který v příkazu
+    stojí i v uvozovkách, je nejasný a přesměrováním není (CR-AP1). **Cena:** `ssh a 2>/dev/null; ssh b '2>/dev/null'`
+    = `deny` i pro `a`;
+  - vada CR-AO10 do ticha: `SSH_ASKPASS=internal` je jméno programu, výjimka `internal` platí jen u `SSH_SK_PROVIDER` (CR-AP3);
+  - podle `A179-O22` neopraveno, README mez 28 a kostra GSD TASK-190: přiřazení `SSH_ASKPASS` ve vnořeném shellu
+    (CR-AP2, ticho; v 0.3.0 se nehlídalo vůbec), přesměrování slepené s `&` / `&&` = příkaz (CR-AP4, `deny`; 0.3.0 `ask`),
+    slovo `SSH_ASKPASS=…` kdekoli v příkazu = `deny` každému ssh (CR-AP5); escape znak vnořeného shellu nad původním
+    textem, nedosažitelná větev `>|`, opakovaný rozbor celého příkazu pro každý list ssh a dvojí význam `$Braces`
+    (CR-AP6–AP10, bez doloženého selhání) — řešení je příznak „v uvozovkách" u argumentu listu z tokenizéru 0.4.1.
+- **Delta review Amber nad `fc426ee` (`A179-O23`, skupina `O23`):** moje regrese CR-AL2 do ticha — tabulka voleb plink
+  zná `-load <relace>`, jméno relace se spotřebovalo a `plink -load relace příkaz` měl jediný poziční argument (0.3.0
+  `ask`, od `c54a843` ticho bez auditu). Uložená relace může nést host, pak je první poziční argument už příkaz (manuál
+  PuTTY, kap. 7) → s `-load` jeden poziční = příkaz = `deny` (N1). **Cena:** `plink -load relace host` s relací bez
+  hosta = `deny`; `plink -load relace` bez dalšího argumentu mlčí.
+  Text a testy z téže review: věta o migraci `gate.denyPatterns` výš (N2), oprava CR-V2 pod nadpisem bezpečnosti (A10),
+  cesty předávek (A14), popisek řádku invariantu `cat [a-z][a-z].txt` (N5), věta o číslech verzí v hlavičkách zdrojů (N6),
+  řádek `K3-2` s přijatým přepisem `@narrow` místo odmítnutého `@allow` (N7, jako B1), zastaralé `ask` v komentářích
+  `wildcardPath` (B3).
+- **Kolo `/code-review` nad `5c43cf2..01de4a3` (CR-AQ, skupina `CR-AQ`; pokrývá opravy CR-AP, fixtury `fc426ee`
+  a `A179-O23`; rozsah podle `A179-O22`):**
+  - moje regrese CR-AP1 do ticha: odebráním nejasného slova zmizel i vstup ze souboru, když slovo stálo před příkazem
+    nebo slepené s hostem (`< cmds.sh ssh host; echo '<'`; `5c43cf2` `deny`). Vstup ze souboru se teď hledá ve slovech
+    před odebráním (CR-AQ1);
+  - regrese proti 0.3.0 do ticha: přesměrování jiného příkazu zaměnilo argument ssh ve vnořeném shellu
+    (`echo hi >/a; bash -c "ssh host '>/a'"`; 0.3.0 `ask`, od CR-AM7 ticho) — text v uvozovkách vnořeného shellu je jedno
+    slovo. Nejasné je teď slovo, které je **částí** textu v uvozovkách (CR-AQ2). **Cena:** `ssh a 2>/dev/null;
+    bash -c "echo 2>/dev/null"` = `deny` i pro `a`;
+  - podle `A179-O22` neopraveno, README mez 28 a GSD TASK-190: vstup ze souboru před ssh ve vnořeném shellu (CR-AQ3,
+    ticho i v 0.3.0), uložená relace PuTTY s příkazem u `plink -load relace` (CR-AQ5, ticho i v 0.3.0),
+    `SSH_SK_PROVIDER=internal;` = falešné `deny` (CR-AQ6); porovnávání slov textem mezi celým příkazem a listem (CR-AQ4)
+    a dvojí průchod celého příkazu pro každý list ssh (CR-AQ8) řeší příznak „v uvozovkách" z tokenizéru 0.4.1; zastaralý
+    komentář „multimnožina" opraven (CR-AQ7). CR-AQ9 (počty řádků fixtur) se neprokázal: `rows` gate = 690 (JSON).
+- **Falešné `deny` u interaktivní relace (CR-AL2)** opraveno: tabulka voleb ssh s hodnotou je úplná podle ssh(1)
+  (`-O exit`, `-B rozhraní`, `-P tag` …) a čte shluk krátkých voleb (`-vp 2222`, `-p2222`); plink má vlastní tabulku
+  (`-P`, `-l`, `-pw`, `-i`, `-hostkey` …). Do opravy vypadala hodnota volby jako host a host jako příkaz (od O18 `deny`,
+  do 0.3.0 falešné `ask`).
+- ⚠️ **Migrace přepisu (CR-AL4, review A15):** pravidlo `policy` odmítne celý objekt `gate.decisions` /
+  `secrets.decisions`, když jeden jeho klíč uvolňuje (klíč H-c = objekt, jako od 0.3.0). Přepis, který opsal hodnoty
+  vývojové verze (`remoteShell: audit`, `wildcardPath: audit`), tak ztratí i svá zpřísnění — platí výchozí, kanárek
+  a audit `config:overrideRejected:<klíč>` to řeknou. Totéž `gate.denyPatterns` z 0.3.0: vzor `git-branch-delete` nese
+  od `A179-O20` zkratky, takže starý seznam už není nadmnožinou → odmítnut, platí výchozí (přísnější). Na stroji žádný
+  přepis není (`80` F3). Granularita po podklíčích = kandidát 0.4.1.
+- **Cena vzoru 0.3.0 vrácená s O17 (CR-AL6):** pomlčkové slovo s `d` v hodnotě volby `git branch` (`--sort -committerdate`)
+  = `deny`; náhrada `--sort=-committerdate`. Skupina `CR-AL`.
+
+### Dopad na HRMS (`A179-O6`)
+
+Lokální databáze HRMS (`Hrms`, `Hrms…Test`, `Hrms…Migration`; na `(localdb)\MSSQLLocalDB` změřeno 2026-10-21, 31 z 31)
+na výchozí vzory `*_test_*`, `*_test`, `*_dev` **nesedí**. Agentem psané `DROP DATABASE`, `dotnet ef database drop`
+a `sqllocaldb delete` je proto v HRMS vždy `deny` (do 0.3.0 `ask` nebo `deny` podle tvaru). Projektový přepis to povolit
+nemůže: `gate.dbDestroyLocal.databases` smí vzory jen zúžit, takže dřívější přepis `Hrms*` (žádost HRMS, `Z117-Q13`/`Q19`)
+se odmítne; na stroji žádný není. Testy (`dotnet test`) a skripty (`generate_demo_data.ps1`) hook nevidí — beze změny.
+Cesty: přejmenovat testovací DB na `*_test`, nebo rozhodne Tom (změna výchozích vzorů = změna politiky).
+
+**A v témže vydání (A179-O2, jedno vydání místo dvou): plugin už nikdy nevrací `ask` (`ZOPT-Q102`, Tom 2026-10-20).**
+Hook ve všech projektech nečeká na člověka: každé místo, které do 0.3.0 vracelo `ask`, je od 0.3.1 buď **ticho + řádek
+auditu**, nebo **`deny`** — podle mapy Toma (`ZOPT-Q102`) a rozhodnutí Amber `A179-O1` a `A179-O3` (Q1–Q16). Výčet míst
+s řádky kódu a měření dnešních zaseknutí: `W:\dev\gsd\predavka-task-179\2026-10-20-37…40` (mimo repo GSD).
+
+### Bezpečnost — oprava chyby 0.3.0: komentář s apostrofem vypínal bránu (CR-S8, `A179-O5`)
+
+Skener příkazů neznal komentář. Apostrof v komentáři (`# don't` na řádku před dalším příkazem, případně `<# it's #>`)
+otevřel „řetězec“, který trval až do konce příkazu. Další příkazy se proto nerozebraly a prošly tichem, a to v gate
+(`git reset --hard`, `rm -rf …`) i v secrets (`cat .env`). Chyba se změřila v nasazené 0.3.0 i ve verzích 0.2.0 a 0.1.9
+(cache pluginu, PowerShell, 2026-10-21). Od 0.3.1 skener zná komentář `#` (Bash i PowerShell) a `<# … #>` (PowerShell), ale z textu ho **nic
+nezahazuje**. V komentáři jen uvozovky a závorky přestanou být speciální. Oddělovače (`;`, `&`, `|`, konec řádku) dál
+dělí příkaz a skener navíc spojí výsledek čtení s komentářem i bez něj (CR-T). Tam, kde `#` komentářem není (cmd,
+`${x:- #}`, zpětné apostrofy), tak skener vidí víc příkazů, ne méně. Cenou je, že `;` uvnitř komentáře taky dělí,
+třeba `true # pak ; rm -rf x` → `deny`. Případy hlídá skupina `CR-S` v `tests/fixtures/task179-gate.json` a `task179-secrets.json`.
+
+### Bezpečnost — oprava chyby 0.3.0: příkaz za řídicím slovem Bashe a za substitucí v přiřazení (CR-AA1, CR-AA9, CR-AA10, `A179-O8`)
+
+Gate bral jako jméno příkazu první slovo statementu. Za rezervovaným slovem Bashe (`then`, `else`, `elif`, `do`, `if`,
+`while`, `until`, `!`, `coproc`), za vzorem větve `case` (`a) …`) a za přiřazením nebo přesměrováním se substitucí
+s mezerou (`X=$(echo a b) …`, i za `env`/`sudo`) proto skutečný příkaz nesedl na žádné pravidlo a prošel tichem:
+`if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`. Chyba se
+změřila v nasazené 0.3.0 i ve verzích 0.2.0 a 0.1.9 (cache pluginu, Bash, 2026-10-22). Secrets čte tokeny bez ohledu
+na pozici a chybu neměl. Od 0.3.1 gate tato slova a vzory strhne a rozebere příkaz za nimi. Co před příkazem stojí, musí
+být **prosté slovo** (`A179-O9`–`O11`, oddíl níž): hodnota přiřazení, cíl přesměrování, slovo a vzor `case`, i hlava
+příkazu. Jinak `deny`. Případy hlídají skupiny `CR-AA`, `CR-AB`, `O9` a `O11` v `tests/fixtures/task179-gate.json`.
+
+### Bezpečnost — oprava chyby 0.3.0: příkaz uvnitř výrazu PowerShellu (CR-V2, `A179-O23`)
+
+Statement PowerShellu, který začíná výrazem (`[IO.Path]::GetTempPath() + (git reset --hard)`, `[Environment]::X(...) +
+(psql …)`), gate nerozebíral a příkaz v závorce prošel tichem. Chyba se změřila v 0.3.0 (archiv tagu `v0.3.0`, pwsh,
+2026-10-23: ticho bez auditu). Od 0.3.1 rozhoduje i parser PowerShellu: každý příkaz (`CommandAst`) z výrazu se rozebere
+jako list s příznakem `FromAst` a `allow` z `gate.dbDestroyLocal` nemá (detail šesté a sedmé kolo níž, CR-V2, W1, W6).
+Případy hlídají skupiny `CR-V` a `CR-W` v `tests/fixtures/task179-gate.json`. Do review Amber A10 (`A179-O23`) byla
+oprava jen v odstavci šestého kola, bez nadpisu bezpečnosti.
+
+### Bezpečnost — slovo před příkazem v Bashi: jedno fail-closed pravidlo místo gramatiky (`A179-O9`)
+
+Kola `/code-review` 10–13 nad ručním rozborem slova Bashe (substituce, `${…}`, uvozovky, `case`, rezervovaná slova)
+nekonvergovala: každé našlo 7–10 dalších konstrukcí a 2–3 regrese předchozího kola. Kód slova se proto vrátil na stav
+kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperPrefixUnplain` v `gate.ps1`):
+
+- **Hlava příkazu a všechno před ní musí být v Bashi prosté slovo.** Před hlavou může stát hodnota přiřazení, cíl
+  přesměrování, slovo a vzor `case` nebo přiřazení za obalem (`env`, `sudo` …). Prosté slovo nemá `$`, zpětný apostrof,
+  závorku, escape ani uvozovku uprostřed. Prostý je i celý řetězec v apostrofech nebo uvozovkách (v uvozovkách bez `$`,
+  zpětného apostrofu a escape, který něco znamená). Nekvotovaná hlava navíc nesmí mít `*`, `?` ani `[` (glob vybere
+  program až shell). Slovo `case` smí být i holá proměnná (`case "$1" in`). **Hodnota přiřazení** smí navíc nést prostý
+  odkaz na proměnnou (`f=$1`, `PATH="$PATH:/usr/local/bin" npm test`; `A179-O12`), ale ne operátor `${A:-…}`.
+- **Výjimky hlavy bez prefixu (`A179-O11`):** holá proměnná (`$X`, `${X}`, `"$X"`, `"${X}"`, i za obalem) zůstává
+  `opaque:variable` (ticho + audit, T36 / `ZOPT-Q102`). Dále začátek bloku `{ …; }` a subshellu `( … )`, aritmetika
+  `(( … ))`, definice funkce `f()` a komentář. Bloky a subshelly se rozebírají dál jako dřív.
+- **Jinak `deny`** s příčinou `opaque:shellWord` a hláškou, která jmenuje náhradu: hlava jako doslovná cesta, hodnota
+  jako prosté slovo, substituce v argumentu příkazu, nebo výsledek spočítaný samostatným příkazem.
+- **Cena (vědomě, `A179-O9`–`O11`):** `deny` i u běžných tvarů:
+  - proměnná nebo substituce v hlavě za přiřazením (`NODE_ENV=test ${HOME}/bin/tool`, `PYTHONPATH=. $(pwd)/venv/bin/python`);
+  - substituce nebo uvozovka uprostřed v hodnotě přiřazení (`X=$(echo a b) git status`, `X=a"b c" git status`);
+  - **samostatné přiřazení se substitucí** bez příkazu za ním (`n=$(basename "$f" .md)`; `A179-O10`). Hook bez gramatiky
+    nepozná, že za hodnotou nic nestojí. Náhrada je substituce v argumentu příkazu;
+  - substituce nebo cesta s proměnnou jako hlava bez prefixu (`$(which python) x.py`, `"$(pwd)/bin/x"`; `A179-O11`),
+    i uvnitř obalu: `bash -c "$(cat cmd.txt)"` bylo do 0.3.0 `invoked` (ticho + audit), od 0.3.1 je `deny`. Holá
+    proměnná (`bash -c "$x"`) zůstává `invoked`.
+- **Zavřené tvary:**
+  - nálezy CR-AB1–AB5 a CR-AC6–AC8 (větev `case` začínající přesměrováním, vzor s escapem nebo substitucí, přiřazení
+    pole `NAME=(…)`);
+  - regrese kola 12 CR-AC1–AC3 (kód kola 12 je pryč);
+  - hlavy, které 0.3.0 propouštěla tichem nebo jen auditem: brace expanze, zpětné apostrofy a `$( … )` jako hlava, glob
+    v hlavě, i za obalem (`A179-O11`);
+  - díry 0.3.0 z kola 14 (CR-AD1, CR-AD4): subshell, za kterým stojí přesměrování (`( … ) > log`, `( … ) 2>&1`), a funkce
+    s tělem v subshellu (`f() ( … )`). Vnitřek nerozebral nikdo a prošel tichem. Teď se rozebere.
+- **Kolo 14 `/code-review` (CR-AD) nad pravidlem:** opravené falešné `deny` jsou konec subshellu jedním slovem
+  (`(cd x && make)`), vzor `case` na samostatném řádku a `exec "$@"` za obalem (CR-AD2, AD3, AD7). Dále tečka
+  (dot-source) za `then` a `do`, která zase vede na příčinu `invoked` (AD5), hláška jmenující `[` (AD8) a řádek výpisu
+  gsd/24 s novým verdiktem ve fixtuře místo testu (AD10). Skupina `CR-AD`.
+- **Kolo 15 `/code-review` (CR-AE) nad opravami kola 14:**
+  - ~~díra 0.3.0: poslední příkaz subshellu nese `)` — odlamování `)` z tokenu (AE4)~~ **vráceno `A179-O14`** (kolo 18);
+  - regrese kola 14: poziční parametr v hlavě (`$1`, `"$@"`, i za obalem) je zase holá proměnná. Je to `opaque:variable`
+    s auditem a kontrolou destruktivního literálu, ne list bez pravidla (AE1, AE3);
+  - subshell s ocasem, který není prosté přesměrování (`( … ) > "$LOG"`), je nerozebíratelný → `deny` (AE2);
+  - celý subshell jedním slovem (`(sh)`) se zase rozbalí (AE5);
+  - `source` je synonymum tečky (AE6);
+  - funkce `function f …` se čte jako `f()` a jména funkcí smějí mít tečku a dvojtečku (AE7, AE8);
+  - test výpisu kontroluje úplnost klíčů změny (AE9).
+
+  Skupina `CR-AE`.
+- **Kolo 16 `/code-review` (CR-AF) — od něj platí `A179-O13`:** v 0.3.1 se opravují jen regrese 0.3.1 a nálezy
+  v pravidle. Díry 0.3.0 mimo něj jdou do README meze 27 a do verze 0.4.1.
+  - Opraveno:
+    - ~~přeskok `(` prvního příkazu rozděleného subshellu (AF1) a slovo s `)` + přesměrování jako hlava (AF3)~~
+      **vráceno `A179-O14`** (kolo 18);
+    - cesta s proměnnou za tečkou nebo `source` je zase `invoked` (audit), ne `deny` (AF4, regrese AE6);
+    - ~~escapovaná `\)` se neodlamuje (AF6)~~ — s AE4 vráceno;
+    - `source` jen malými písmeny (AF7), jeden vzor proměnné (AF8), jedna větev tečky a `source` (AF9).
+  - **Odloženo (`A179-O13`):** `)` slepená s přesměrováním bez mezery (AF2, díra 0.3.0) a hloubka `( )` ve skeneru (AF5)
+    → 0.4.1, README mez 27.
+
+  Skupina `CR-AF`.
+- **Kolo 17 `/code-review` (CR-AG) nad opravami kola 16:**
+  - ~~počet závorek místo přítomnosti `)` u přeskoku `(` (AG1), glob ve slově s `)` + přesměrováním (AG2)~~ **vráceno
+    `A179-O14`**. Falešné `deny` u `(cd "$(git rev-parse --show-toplevel)" && make)` po návratu řeší kolo 18 jinak (níž);
+  - řada vzorů větví za sebou se rekurzí kopírovala kvadraticky. Červená fáze: 2000 vzorů = 21 s, tedy hook po timeoutu
+    prošel **bez verdiktu**. Ocas za `)` se teď čte bez větví (`-NoArm`, AG3);
+  - ~~escape před `)` podle parity (AG4)~~ — s AE4 vráceno;
+  - rozlišující fixtury pro AF7 (AG6) a jedna funkce „ocas je jen přesměrování“ (AG7).
+
+  Skupina `CR-AG`.
+- **Kolo 18 `/code-review` (CR-AH) → návrat (`A179-O14`, Amber 2026-10-22):** všech 8 nálezů kola 18 byly regrese
+  heuristik pro **rozdělený subshell**, tedy pro úlomky, které vzniknou, když skener dělí příkaz i uvnitř `( … )`
+  (CR-AF5). Ty heuristiky jsou vrácené na stav kola 14: AE4/AF6/AG4, AF1/AG1, AF3/AG2.
+  - **Tiché projití shodné s 0.3.0** (README mez 27, oprava ve verzi 0.4.1 s vysokou prioritou): první a poslední příkaz
+    rozděleného subshellu, např. **`(cd x && git reset --hard)`** a **`(rm -rf src; ls)`**.
+  - Zůstávají opravy, které na úlomcích nestojí: celý subshell s přesměrováním za ním (AD1, AE2), funkce (AD4, AE7),
+    poziční parametr v hlavě (AE1, AE3), `source` (AE6, AF4) a lineární čtení ocasu (AG3).
+  - Konec celého subshellu teď hledá `Find-CloseParen` (uvozovky, escape, komentář), ne poslední `)` v textu. Úlomek
+    `(cd "$(git rev-parse --show-toplevel)"` proto už neskončí falešným `deny` (regrese AE2, CR-AG1, CR-AH2).
+- **Kolo 19 `/code-review` (CR-AI) nad návratem:**
+  - celý subshell jedním slovem s přesměrováním (`(psql) < drop.sql`) se četl jako větev `case` a příkaz zmizel. Teď ho
+    rozebere cesta celého subshellu, glob v něm je `deny` (AI1, AI3);
+  - falešné `deny` u komentáře za přesměrováním (AI4);
+  - ~~záloha „poslední `)` v textu“ pro AI2 a AI5~~ — **vrácena v kole 20** (níž);
+  - názvy fixtur bez vrácených heuristik (AI6) a sdílený vzor aritmetiky (AI7).
+
+  Skupina `CR-AI`.
+- **Kolo 20 `/code-review` (CR-AJ):** záloha „poslední `)` v textu“ z kola 19 poslala celý subshell starou cestou i tehdy,
+  když poslední `)` patřila procesní substituci, substituci v cíli přesměrování nebo komentáři. Např. `(git reset --hard)
+  > >(tee log)` prošlo tichem místo `deny` (AJ1–AJ3). Je vrácená. Když `Find-CloseParen` subshell uzavře před koncem
+  textu, rozhoduje jeho konec a ocas, který není jen přesměrování, je `deny`. Když ho neuzavře (vrátí konec textu), jde tvar
+  dál starou cestou z 0.3.0 (líný regex do poslední `)`). Tou cestou projdou i tvary, které `Find-CloseParen` nepřečte:
+  ANSI-C `$'…'` (AK1) a vnořený subshell `((…) )`, který vypadá jako aritmetika (AK2). Obojí byla díra už v 0.3.0 →
+  README mez 27, 0.4.1 (`A179-O13`; kolo 21).
+  - **Cena (fail-closed):** falešné `deny` u vnořeného subshellu s přesměrováním na konci rozděleného subshellu
+    (`(cd x; (git status) 2>/dev/null)`) a u uvozovek vnořených v `$( … )` uvnitř uvozovek. `Find-CloseParen` kontext
+    uvozovek nevnořuje (AJ5) → oprava ve verzi 0.4.1.
+  - Větev `case` se závorkou, globem a tělem jen z přesměrování (`(*) > /dev/null ;;`) je `deny`. Příčinou je CR-AI1
+    z kola 19, ne tento návrat. Od celého subshellu s globem v hlavě ji nejde rozeznat (AJ4, vědomě fail-closed).
+
+  Skupina `CR-AJ`.
+- **Finále (mutanti a plné sady nad `dc0b1de`):**
+  - fixtura CR-AI1 slibovala u `(psql) < drop.sql` řádek auditu `sqlFromFile`. Přesměrování celého subshellu se ale
+    do vnitřního příkazu nepřenáší, stejně jako v 0.3.0. Rozhodnutí je stejné (ticho), chybí jen řádek auditu → README
+    mez 27, 0.4.1. Fixtura už řádek auditu nečeká. Kontrolní běh bez mutace (M0) ji ukázal červeně;
+  - test B15 `bash -c "$(cat cmd.txt)"` čekal audit. Od `A179-O11` je to `deny` (cena výše), test i invariant jsou
+    přijaté s citací `A179-O11`;
+  - test kanárku H-c (`resume-cost`) bral jako zpřísňující přepis `depth: audit`. Od `A179-O1` má `depth` výchozí
+    `deny`, takže to je uvolnění a přepis se správně odmítne. Test teď nese `depth: deny`;
+  - rozlišující fixtury pro dva mutanty, které pravidlo přestalo zabíjet jinou cestou: escape PowerShellu ve jménu
+    přiřazení za `env` a `$( … )` s mezerou jako hodnota volby `git -C` (skupina `MUT`);
+  - **`A179-O15` (Amber 2026-10-22, regrese 0.3.1):** force push s cílem, který není doslovné jméno větve (proměnná,
+    substituce, `HEAD`, `@`, i `+` v refspecu), mapování Q102 zařadilo jako `forcePushOther` — ticho, i když cíl může
+    být chráněná větev. Teď je to `forcePushUnknown` (`deny`) jako force push bez cíle. **Cena:** `deny` i u force push
+    na vlastní feature větev přes proměnnou nebo `HEAD` (`git push --force-with-lease origin HEAD`) — náhrada je
+    doslovné jméno větve. Totéž v Bashi u refspecu se zdrojem z proměnné a doslovným cílem
+    (`git push --force origin $SRC:feature/x`): rozbor nepozná, kde proměnná končí (`$env:X` v PowerShellu nese
+    dvojtečku), takže celý refspec je nečitelný → `deny` (review Amber A7). Skupina `O15`.
+- **Doba K7-1:** kolo 11 zpomalilo řádky `K7-1` (3000 vnořených substitucí, Bash) z ~2 s na ~6 s. `Find-CloseParen`
+  totiž volal `Get-CommentStart` na každý znak a od CR-AA1 běží pro každou substituci. Teď se volá jen u `#` a `<`, kde
+  může vrátit nenulu. Sémantika je beze změny a doba je zpět ~2 s (změřeno 2026-10-22 bez zátěže).
+- **Doba:** regex prefixu (už jen pro PowerShell) má slovo jako atomickou skupinu. Hodnota s mnoha substitucemi bez
+  mezery za ní dřív zkoušela každé rozdělení a hook přetekl timeout, tedy prošel **bez verdiktu**. Červená fáze ukázala
+  20 s u Bashe (regrese kola 11) i u PowerShellu, teď je to pod 2 s (řádky `maxMs` ve skupinách `CR-AB` a `O9`).
+- **Co pravidlo nezavře:** README omezení 27 (uvozovky a substituce v **argumentech**, ANSI-C `$'…'`, druhá gramatika
+  slova v `Split-Arguments`). Oprava je jeden tokenizér Bashe ve verzi 0.4.1 (GSD TASK-190).
+
+### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
+
+| místo (id v auditu) | do 0.3.0 | od 0.3.1 | rozhodnutí |
+|---|---|---|---|
+| force push na nechráněnou větev (`forcePushOther`) | `ask` | ticho + audit | Q2 (zakázaný je jen přepis historie `main`) |
+| force push bez cíle (`forcePushUnknown`) | `ask` | `deny` | Q1 (může mířit na `main`) |
+| force push s cílem, který není doslovné jméno větve — proměnná, substituce, `HEAD`, `@` (`forcePushUnknown`; i `+` v refspecu bez přepínače) | `ask` (`+` bez přepínače: ticho) | `deny` | `A179-O15` (může mířit na `main`; do O15 omylem `forcePushOther` = ticho) |
+| `git -c alias.…` (`gitAlias`) | `ask` | `deny` | Q3 (alias spustí cokoli) |
+| `git branch -d`, `-D`, `-dr`, `--delete`, `-d -f`, `--delete --force` (vzor `git-branch-delete`) | `deny` | `deny` (beze změny) | `A179-O17` (`ZOPT-Q40`; vývojová verze podle Q11 pustila `-d` tichem a vzor přejmenovala — vráceno) |
+| mazání s cílem v proměnné, s `..`, `.NET` mazání s proměnnou, krátká absolutní cesta (`recursiveDeleteVariable`, `recursiveDeleteDotDot`, `netDeleteVariable`, `shortAbsolutePath`) | `ask` | `deny` | Q4 (cíl nejde doložit) |
+| hvězdička uvnitř povolené složky (`recursiveDeleteWildcard`), mazání z roury (`deleteFromPipeline`) | `ask` | ticho + audit | Q4, mapa |
+| kód interpretu s destruktivním voláním (`interpreterDestructive`) | `ask` | ticho + audit | Q6 |
+| kód interpretu s DB tokenem — `DROP TABLE/DATABASE/SCHEMA`, `TRUNCATE` (`interpreterDestructiveDb`, nový seznam `gate.interpreterDbTokens`) | `ask` | `deny` | Q6 (jméno DB nečitelné) |
+| nerozebratelný tvar s destruktivním literálem (`opaqueDestructive`) | `ask` | `deny` | Q5 |
+| totéž u **spuštění** nerozbalené hlavy (příčina `invoked`, např. hlava po vícenásobném přiřazení) — kontrola literálu nově i tady; nový literál `reset --hard` (bez `git`) | `ask` (sama příčina) | `deny` | Q5 — bez toho by `invoked` = ticho pustilo destruktivní příkaz |
+| nerozebratelné: spuštění proměnné, `-EncodedCommand`, neukončený heredoc (`opaque:invoked/encoded/heredocUnterminated`) | `ask` | ticho + audit | mapa |
+| zanoření nad 5 (`opaque:depth`), neznámá příčina (`opaque:unknown`) | `ask` | `deny` | `A179-O1` (N31), Q8, Q9 |
+| `ssh host "příkaz"`, `ssh prod <<EOF`, `plink … host příkaz` (`remoteShell`) | `ask` | `deny` | `A179-O18` (vývojová verze podle mapy: ticho + audit) |
+| `dotnet ef migrations remove`, `Invoke-Expression` (`auditPatterns`, do 0.3.0 `askPatterns`) | `ask` | ticho + audit | Q7 |
+| `Invoke-Expression` / `iex` **bez argumentu** (text z roury) — vzor `askPatterns` na něj v 0.3.0 nikdy nedosáhl | ticho **bez auditu** | ticho + audit `gate:invoke-expression` | `A179-O4` (mezera v auditu, žádný deny) |
+| destruktivní DB operace na **místním** hostiteli, jméno DB čitelné a ve vzoru `*_test_*`, `*_test`, `*_dev` | `ask` | ticho + audit `gate:dbDestroyLocal` | Q10 |
+| totéž mimo vzory, se jménem, které nejde přečíst, `sqllocaldb delete` | `ask` | `deny` | Q10 |
+| destruktivní DB operace uvnitř kontejneru (i nerozebratelná, i po stropu práce substitucí) | `ask` | `deny` | Q10 + `AOPT-O26` (v kontejneru nikdy povoleno) |
+| glob mířící na chráněnou cestu nebo vzor (`secrets:wildcardPath`: `cat ~/.ssh/*`, `cat *.env`, `cp *.pem …`) | `ask` | `deny` | `A179-O18` (vývojová verze podle mapy: ticho + audit) |
+| netrackovaný `.env.*` (`envFileUntracked`), čtení `.claude/settings.local.json` (`settingsLocal`), výpis prostředí (`envDump`), citlivá proměnná (`envVarRead`), nedekódovatelný `-EncodedCommand` (`wrapperEncoded`) | `ask` | ticho + audit | mapa |
+| **zápis** do `.claude/settings*.json`, `.claude/sinogard-hooks.json`, `hooks.json` a `hooks/config/*` nainstalované kopie (`secrets:selfProtect`) | `ask` | **`deny`** s textem „změnu nastavení provede Tom — zapiš ji do dávky" | Q16 (agent nesmí umět vypnout vlastní pojistku) |
+| `ask` v režimu `bypassPermissions` (vydával se jako `deny`, audit `ask-bypass`) | `deny` | podle mapy výše | — (`ask` neexistuje) |
+
+Jména DB se čtou doslova z příkazu (`-d`, `--dbname`, `dbname=`, URI, `Database=`/`Initial Catalog=`, `PGDATABASE`, první
+poziční argument `psql`, cíl `dropdb`, jméno v `DROP DATABASE`); u `DROP DATABASE`/`dropdb`/`ef database drop` rozhoduje
+rušená databáze. `USE`, meta-příkaz psql, dynamické SQL a trojdílné jméno = nečitelné → `deny`. Přepis
+`gate.dbDestroyLocal.databases` smí vzory jen zúžit; `decision` má hodnoty `allow` (výchozí) | `deny`; `hosts` se nečte.
+ℹ️ Do review Amber (A1) tu stálo *„Ticho u `secrets:wildcardPath` platí i pro glob, který míří na adresář s klíči …
+(mapa `ZOPT-Q102`, „wildcard cesty = povolit")"*. Od `A179-O18` je takový glob `deny`; glob, který na chráněné jméno jen
+narazí (`secrets:wildcardName`), mlčí dál. Mapa `ZOPT-Q102` z chatu (2026-10-20 21:1x) je přepsaná z kódu do souboru
+`W:\dev\gsd\predavka-task-179\2026-10-23-85-mapa-ask-rozhodnuti.md` (mimo repo GSD; review A11).
+
+**Konfigurace (0.3.1):** nové objekty politik `gate.decisions` a `secrets.decisions` (hodnoty `audit` | `deny`, chybějící =
+`deny`); `gate.opaque` má hodnoty `audit` | `deny`. H-c pravidlo `policy`: přepis smí jen zpřísnit (`audit` → `deny`).
+Přejmenováno: `gate.askPatterns` → `gate.auditPatterns`, `secrets.askPathPatterns` → `secrets.auditPathPatterns`,
+`secrets.envFile.otherPolicy` = `trackedAllowElseAudit`; projektový přepis se starým jménem H-c odmítne (platí výchozí).
+⚠️ Migrace: přepis `gate.opaque` s `depth: audit` (tvar dřívějšího zúžení GSD) je od 0.3.1 uvolnění → celý klíč
+`gate.opaque` odmítnut (platí výchozí, audit `config:overrideRejected:gate.opaque`). Hodnoty `ask` H-c odmítne také.
+Text `texts.bypassSuffix` zmizel. „Nasazení do produkce" jako `deny` není v 0.3.1 — tvar neexistuje (Q13, nositel GSD TASK-53).
+
+**Po `/code-review` změny `ZOPT-Q102` (CR-Q, řádky `tests/fixtures/task179-gate.json` / `task179-secrets.json`, skupina `CR-Q`):**
+lokální destruktivní DB operace je `deny` (jméno nečitelné) i se seznamem jmen v `DROP DATABASE a, b` (CR-Q1b), s trojdílným
+jménem v hranatých závorkách (CR-Q2), se SQL ze souboru nebo stdin vedle viditelného (CR-Q3), s příkazem `sqlcmd`
+(`:connect`, `:r`, `!!` …, CR-Q4) a s hostitelem z proměnné prostředí (`PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `SQLCMDSERVER`
+v textu příkazu nebo nemístní hodnota v prostředí hooku, CR-Q7). Přepis `gate.dbDestroyLocal` s `decision: deny` platí i se
+vzory mimo strop (dřív odmítnut → výchozí `allow`, CR-Q5). Zpřísněná politika `envDump` / `envVarRead` přebije dřívější
+audit téhož příkazu (CR-Q6). `iex` bez argumentu s destruktivním literálem v příkazu = `deny` jako `iex '…'` (CR-Q9, Q5;
+bez literálu dál `A179-O4`). Vědomě beze změny: přejmenované klíče přepisu (CR-Q8, migrace výše; na stroji žádný přepis
+není) a nečtené `gate.dbDestroyLocal.hosts` (CR-Q10, popsáno výše).
+
+**Druhé kolo `/code-review` nad CR-Q (CR-R, skupina `CR-R`):** SQL s komentářem (`/**/`, `--`) je pro lokální destruktivní
+operaci nečitelné → `deny`. Komentář před čárkou seznamu nebo mezi částmi jména obcházel CR-Q1b i CR-Q2 (CR-R1, CR-R2).
+Trojdílné jméno se pozná i s mezerou v závorkách nebo uvozovkách (CR-R2). SQL ze souboru se pozná i z `--file=x`, `--file x`,
+slepeného `-fx` (psql/pgcli) a z `-ix` / `--input-file` (sqlcmd) (CR-R3). U `dropdb` přestaly `-f` (`--force`) a `-i`
+(`--interactive`) znamenat soubor, takže `dropdb -f gsd_test_1` je zase ticho + audit (CR-R4, regrese CR-Q3).
+`… | iex` rozebere každý řetězcový literál příkazu stejně jako `iex '…'` (plný rozbor místo hledání tokenů). Lze tak zachytit
+`'rm -r -fo C:\x' | iex`, a destruktivní text mimo literál (`git log --grep "reset --hard"; 'git status' | iex`) už nevede
+k zákazu (CR-R6, CR-R10). Hostitele z prostředí mění i příkaz bez doslovného jména proměnné, proto vede k `deny`
+načtení souboru (`. ./x`, `source x`), `SetEnvironmentVariable`, `Set-Item`/`New-Item` na `env:` a `export`/`declare`
+se substitucí (CR-R7). Hodnota z prostředí hooku se týká jen klienta, který ji čte: PG* platí pro psql/pgcli/dropdb
+a `SQLCMDSERVER` pro sqlcmd. Výslovný hostitel v příkazu přebije `PGHOST` i `SQLCMDSERVER`, `PGHOSTADDR` ani soubor
+služby ne. `PGHOST` s cestou k socketu je místní (CR-R8). Testy čištění prostředí hooku: sada nuluje PG*/`SQLCMDSERVER`,
+řádek fixtury je nastaví polem `env` (takový řádek nejde do invariantu).
+Vědomě beze změny: `service=` / `hostaddr=` v conninfo končí `deny` už dnes, protože řetězec s mezerou je nečitelné jméno
+(CR-R5, změřeno, hlídají řádky). Tečky v textu SQL (`'A. B. C'`) jsou nečitelné ve směru `deny` (CR-R9). Profil shellu,
+který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, README).
+
+**Třetí kolo `/code-review` nad CR-R (CR-S, skupina `CR-S`):**
+- **Komentáře v příkazech (CR-S8).** Skener příkazů nově zná komentář `#` (Bash i PowerShell) a `<# … #>` (PowerShell).
+  Apostrof v komentáři (`# don't` + nový řádek + `git reset --hard`) dosud otevřel „řetězec“ až do konce příkazu. Další
+  příkazy se pak vůbec nerozebraly a prošly tichem, a to v gate i v secrets, **i v nasazené 0.3.0**. Tvar opravy z tohoto
+  kola (zahazování komentáře) nahradilo kolo CR-T.
+- **Rozbor `… | iex` (CR-S1, S4, S8).** Literály se berou z textu, který se právě rozebírá, ne z celého příkazu (vnořený
+  `pwsh -c "'x' | iex"`). Čte je tokenizer PowerShellu a každý se rozebere jen jednou. Holé `iex` uvnitř rozebíraného
+  literálu je `depth` (deny), takže rozbor už neroste exponenciálně (dřív 9–69 s → timeout hooku).
+- **`allow` z `gate.dbDestroyLocal` (CR-S2, S5, S6).** Ostatní příkazy v téže řádce musí patřit do krátké množiny, která
+  prostředí nemění: `cd`, výpis, další volání SQL klienta, `export` s literálem. Výčet tvarů z CR-R7 třídu nezavřel
+  (`./setenv.ps1`, `eval`, `if …; then . x; fi`), proto ho nahradila tato množina. Výslovný hostitel se čte jen
+  z argumentů, ne z textu SQL. Zkratky dlouhých voleb psql/dropdb (`--fil=`, `--ho=`; getopt_long) vedou k `deny`.
+- **Proměnné prostředí hooku (CR-S3, S10).** `PGHOST` se seznamem (`/tmp,db.firma.cz`) je místní, jen když je místní
+  každá položka. Klient z `gate.sqlClients`, kterého hook nezná, čte z prostředí hooku PG* i `SQLCMDSERVER`.
+- **Ostatní (CR-S7, S9).** Volby psql `-Ufred`, `-dfoo` nejsou soubor SQL. Escape `]]` / `""` ve jménu je nečitelný → `deny`.
+
+**Čtvrté kolo `/code-review` nad CR-S (CR-T, skupina `CR-T`):**
+- **Komentář podruhé (CR-T2 až T6).** První oprava komentář zahazovala, a kde `#` komentářem není, zahodila i spouštěný
+  příkaz: `Start-Process cmd '/c echo # & rd …'`, `cmd /c "echo # & type .env"` v secrets, `` `true # x`; rm … ``,
+  `${x:- #}; rm …`. Komentář teď nic nezahazuje (viz Bezpečnost výše). Začíná i hned za `|`, `&`, `(`, `{` a uvnitř bloku
+  `{ }` a substituce `$( )` se v něm nepočítají závorky.
+- **`allow` z `gate.dbDestroyLocal` (CR-T1, T7 až T10).**
+  - DB příkaz rozebraný vnořeně, například v těle `bash <<EOF`, `allow` nemá. Jeho sousední statementy hook nevidí.
+  - Neutrální příkazy kolem testovací DB nově zahrnují `createdb`, `pg_restore`, `| cat`, `Select-String` a podobné. Přesměrování
+    do souboru (`printf … > ~/.psqlrc`) neutrální není, povolené jsou jen `2>&1`, `> /dev/null`, `> $null` a `> nul`.
+  - Jméno proměnné se hledá i po odstranění escapů a uvozovek (`PGHO\ST`), nově i `PSQLRC`.
+  - Argumenty SQL klienta čte jeden rozbor podle tabulky voleb s hodnotou: hodnota `-v` není hostitel, `psql -q` hodnotu nebere.
+
+**Páté kolo `/code-review` nad CR-T (CR-U, skupina `CR-U`) — konec záplatování:**
+- **`allow` z `gate.dbDestroyLocal` jen pro jednoduchý příkaz (CR-U3, U5, U6, U10).** Kola CR-R až CR-T hledala, které
+  okolní příkazy a hodnoty prostředí hostitele nemění: výčty tvarů, množinu neutrálních příkazů, výslovného hostitele
+  přebíjejícího `PGHOST`, `PGHOST` se socketem. Každé kolo našlo další obchvat. Nově platí: jediný statement, všechny listy
+  jsou tentýž SQL klient (nebo tělo heredocu pro něj), v textu žádné jméno proměnné hostitele (ani se escapem) a
+  `PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `PGSERVICEFILE`, `SQLCMDSERVER` a `PSQLRC` v prostředí hooku prázdné. `cd x; …`,
+  `dropdb x && createdb x`, `… | cat` a `… # komentář` tedy končí `deny`, `2>&1` a prefix `PGPASSWORD=x` ne. Kód
+  rozboru argumentů, množiny neutrálních příkazů a pravidel pro hodnoty proměnných z kola CR-S a CR-T zmizel.
+  **Zúžení potvrdila Amber jako `A179-O7`**: `allow` z `gate.dbDestroyLocal` platí v 0.3.1 jen pro samostatný příkaz
+  jednoho SQL klienta bez proměnných hostitele. Složený tvar se jménem ve vzoru končí novým tvarem
+  `gate:dbDestroyLocalCompound`. Jeho hláška jmenuje povolený tvar (`psql -d <db> -c "…"` nebo `dropdb <db>`).
+  Zúžení platí i pro SQL rourou (`echo "TRUNCATE t" | psql -d gsd_dev` → `deny`).
+- **Komentář potřetí (CR-U1, U2, U4, U7–U9).**
+  - Blokový komentář bez oddělovače je mezera. S oddělovačem uvnitř (`git reset <# ; #> --hard`) je nerozebratelný → `deny`.
+  - `${#x}` není komentář.
+  - `&>` je v cmd oddělovač (`echo hi &>nul rd …`) a přesměrování před příkazem (`>nul rd …`, `>out rm …`) se strhává.
+  - Sjednocení čtení s komentářem a bez něj místo čtyř kopií: hook gate rozebere příkaz s `#` podruhé bez komentáře
+    a z druhého čtení bere jen `deny` (bez auditu), `Split-CommandLine` sjednocuje segmenty pro secrets.
+
+**Šesté kolo `/code-review` nad CR-U (CR-V, skupina `CR-V`):**
+- **Příkaz uvnitř výrazu PowerShellu (CR-V2, chyba i v 0.3.0).** Statement, který začíná výrazem, třeba
+  `[IO.Path]::GetTempPath() + (git reset --hard)` nebo `[Environment]::X(...) + (psql …)`, gate nerozebíral a příkaz
+  v závorce prošel tichem. V PowerShellu teď rozhoduje i parser PowerShellu: každý příkaz (`CommandAst`), jehož text
+  žádný list nemá, se rozebere navíc. `allow` z `gate.dbDestroyLocal` navíc vyžaduje, aby statement byl přesně ten DB
+  příkaz.
+- **Přesměrování a přiřazení před příkazem (CR-V1).** Strhávají se v libovolném pořadí a bez mezery
+  (`>out X=1 rm …`, `2>/dev/null>out rm …`, `<>f`, `>|f`, `<<<x`). Zbytek `<`/`>` na začátku je nerozebíratelný → `deny`.
+- **Ostatní (CR-V3 až V9).**
+  - Blokový komentář mezi statementy (hlavička `<# .SYNOPSIS … #>`) zákaz nespouští.
+  - `&>soubor` v Bashi neruší jednoduchost DB příkazu.
+  - Proměnná `PGSYSCONFDIR` patří mezi proměnné hostitele.
+  - Druhé čtení bez komentáře má vlastní rozpočet práce a dělá ho i hook secrets.
+  - Sada nuluje všech sedm proměnných hostitele.
+  - Rekurzivní sjednocení ve `Split-CommandLine` zmizelo.
+
+**Sedmé kolo `/code-review` nad CR-V (CR-W, skupina `CR-W`):** toto kolo nenašlo žádný potvrzený obchvat.
+- **Regrese CR-V2 (W1, W6).** Porovnání textu statementu s listem zakázalo i jednoduché příkazy v obalu, například
+  `sudo -u postgres dropdb x`, `env PGPASSWORD=x psql …`, `bash -c "psql …"` a `(psql …)`. Příkaz uvnitř výrazu teď
+  pozná přímo parser: list z parseru nese příznak `FromAst` a `allow` nemá. Porovnávání textu zmizelo.
+- **Hláška u proměnné v prostředí hooku (W4).** Nový tvar `gate:dbDestroyLocalEnv` jmenuje proměnnou (jen jméno,
+  ne hodnotu). Hláška složeného tvaru by tu radila přesně ten příkaz, který agent napsal.
+- **Druhé čtení bez komentáře (W2, W3, W8).** Pro gate i secrets je to jedna funkce (`Invoke-PlainCommentReading`).
+  Spouští se i u zakódovaného příkazu (`-EncodedCommand`), protože dekódované tělo `#` mít může. Rozpočet práce se
+  nenuluje a hook tak drží timeout. Když druhé čtení na rozpočet narazí, výsledek je `deny`.
+- **Parser PowerShellu (W5).** Běží jen tam, kde text má závorku, a nezvyšuje hloubku. Při porovnání ignoruje `&` a obalové závorky.
+- **Vědomě beze změny (W7).** Segment, který je jen přesměrováním (`>soubor`), nemá list. `allow` pro DB ho odmítne
+  kontrolou počtu statementů.
+
+**Osmé kolo `/code-review` nad CR-W (CR-X, skupina `CR-X`):**
+- **Moje regrese z CR-W (X1, X2).**
+  - Parser PowerShellu znovu běží vždy. Podmínka „text má závorku“ pouštěla `return git reset --hard` a `throw …`.
+  - CR-W1 dovolil `allow` i v obalu. Obal ale načítá startovní soubory (`BASH_ENV`, profil pwsh, AutoRun cmd,
+    `sudo -i`/`-E`), které mohou nastavit `PGHOST`. Statement proto musí začínat tím SQL klientem. Před klientem smí
+    stát jen přiřazení neškodných proměnných libpq (`PGPASSWORD`, `PGUSER`, `PGDATABASE`, `PGPORT`, `PGCONNECT_TIMEOUT`,
+    `PGAPPNAME`) nebo obalová závorka PowerShellu. `HOME=/x psql …` (přesune `~/.psqlrc`) a `env PGHO\ST=x dropdb …`
+    vedou k `deny`.
+- **Druhé čtení bez komentáře (X3, X5, X6, X7).**
+  - Spouští se, když příkaz obsahuje `#` nebo jmenuje `pwsh`/`powershell`. Regex na `-EncodedCommand` minul mezeru
+    v uvozovkách i slepené uvozovky a zároveň chytal `grep -e …`.
+  - Při přetečení rozpočtu se už nezakazuje celý příkaz. Platí záloha K7-1 pro DB literál, stejně v gate i secrets.
+- **Ostatní (X8, X10).**
+  - Obalová závorka se strhává jen jako jeden pár, `(a) + (b)` se nezdvojí.
+  - U složeného příkazu má hláška složeného tvaru přednost před hláškou o proměnné prostředí.
+
+**Deváté kolo `/code-review` nad CR-X (CR-Y, skupina `CR-Y`):**
+- **Spouštěč druhého čtení (Y1, Y3, Y4).** Druhé čtení bez komentáře spouští `#` v příkazu, nebo `#` v těle
+  `-EncodedCommand`, které dekódovalo první čtení. Signál vzniká v místě dekódování, ne odhadem nad textem. Jméno
+  interpretu rozdělené uvozovkami (`pw''sh -ec …`) odhad z CR-X minul, a naopak každá zmínka slova „powershell“
+  spouštěla druhé čtení zbytečně.
+- **Přetečení rozpočtu v druhém čtení (Y2).** V gate je to znovu `deny` (nerozebíratelné). Secrets žádnou zálohu pro
+  přetečení nemá. Věta „stejně v gate i secrets“ výše neplatí.
+- **Ostatní (Y5, Y6).**
+  - Parser PowerShellu běží jen tam, kde příkaz může stát ve výrazu: závorka, `@{`, nebo `return`/`throw`/`exit`.
+  - Přiřazení před SQL klientem se čtou z tokenů, takže `PGPASSWORD=a"b c" psql …` je jedno přiřazení.
+
+**Desáté kolo `/code-review` nad CR-Y (CR-Z, skupina `CR-Z`):**
+- **Moje regrese z CR-Y5 (Z1, Z2).** Odhad „závorka, `@{` nebo `return`/`throw`/`exit` za oddělovačem“ minul statement
+  za zavírací složenou závorkou (`try {} catch {} …`, `function f {} …`, `trap {} …`) i za samotným CR. Parser
+  PowerShellu proto znovu běží pro každý text PowerShellu, jako v CR-X. Věta o Y5 výše už neplatí.
+- **Přiřazení a přesměrování před příkazem (Z3, Z4).** Hodnota přiřazení i cíl přesměrování se čtou jako celé slovo
+  shellu (kvotované části, escape a nekvotované znaky v libovolném pořadí). Do teď `X=a"b c" <příkaz>` skrylo příkaz
+  pro všechna pravidla, nejen pro DB. Řádek CR-Y6 díky tomu skutečně testuje čtení přiřazení; přibyly řádky `deny`.
+- **Rozpočet druhého čtení (Z5, Z6).** Druhé čtení bez komentáře má vlastní rozpočet práce na substituce. Když na strop
+  narazilo už první čtení, příkaz s `#` je `deny` (nerozebíratelné). Dřív druhé čtení po vyčerpaném rozpočtu nic
+  nenašlo a mlčelo, a neškodný příkaz s komentářem mohl přetéct jen součtem obou čtení.
+- **Ostatní (Z7, Z8, Z9).**
+  - Druhé čtení spouští `#` v kterémkoli rozebíraném textu (`Register-ParsedText`), ne jen v dekódovaném těle.
+  - Pravidlo „token je přiřazení“ je jedna funkce (`Get-AssignmentName`) pro obaly i pro DB `allow`.
+  - Věta o `texts.bypassSuffix` je zpět u konfigurace.
+
+**Jedenácté kolo `/code-review` nad CR-Z (CR-AA, skupina `CR-AA`):**
+- **Substituce v přiřazení a přesměrování před příkazem (AA1–AA3, díra i v 0.3.0).** Oprava Z3 znala jen uvozovky
+  a escape. Substituce s mezerou uvnitř (`X=$(echo a b) <příkaz>`, `$((1 + 2))`, `${Y:-a b}`, zpětné apostrofy
+  v Bashi) proto dál skrývala příkaz všem pravidlům, i za obalem (`env X=$(echo a b) <příkaz>`). Slovo shellu teď tvoří
+  i substituce, jak v přiřazení před příkazem, tak v tokenech (`Split-Arguments`). Zbyde-li za přiřazením nebo
+  přesměrováním slovo se závorkou z neuzavřené substituce, tvar je nerozebíratelný (`deny`). Věta „pro všechna
+  pravidla“ u Z3 platila jen pro uvozovky.
+- **Rozpočet druhého čtení (AA4, AA5).** Vlastní rozpočet z Z5/Z6 je pryč, strop práce zase platí pro celý běh hooku
+  (drží timeout). Druhé čtení už rozdělené substituce nepočítá znovu (změřeno: 12 jednotek u 400 vnořených závorek),
+  takže součet obou čtení falešné `deny` nedává. Přetečení v prvním čtení u příkazu s `#` zůstává `deny`; bez `#`
+  platí dál záloha K7-1 (jen DB literál) — u příkazu bez komentáře není druhé čtení, které by chybělo.
+- **Parser PowerShellu (AA6, AA8).** Nespouští se jen u textu bez jakékoli závorky `( ) { }`, bez `@`, bez CR a bez
+  slov `return`/`throw`/`exit` (kdekoli v textu). Regex přiřazení před příkazem se sestaví jednou pro každý escape znak.
+- **Řídicí konstrukce Bashe (AA9, AA10, díry i v 0.3.0 — nalezeno při ověřování AA1).** Příkaz za rezervovaným slovem
+  (`then`, `else`, `elif`, `do`, `if`, `while`, `until`, `!`, `coproc`) i za vzorem větve `case` (`a) <příkaz>`) neviděla
+  žádná pravidla: `if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`
+  a `X=$(case x in a) echo;; esac) <příkaz>` prošly. Brána slova strhne a rozebere příkaz za nimi. Konec subshellu
+  (`(cd x; ls) > out`) zůstává beze změny. Secrets čte tokeny bez ohledu na pozici a díru neměl.
+- **Známá mez (AA7) → 0.4.1.** Gramatika slova shellu je na dvou místech: prefix před příkazem (v Bashi od `A179-O9`
+  `Get-BashCommandStart`) a `Split-Arguments`. Jeden tokenizér Bashe je kostra verze 0.4.1 (GSD TASK-190, README omezení 27).
+
+**Dvanácté a třinácté kolo `/code-review` (CR-AB, CR-AC) → návrat a jedno pravidlo (`A179-O9`):**
+- Kolo 12 přepsalo slovo shellu na lineární průchod (`Split-CommandPrefix`, `Get-ShellWordEnd`, `Find-CloseBrace`).
+  Kolo 13 nad ním našlo 10 nálezů, z toho 3 regrese kola 12 (CR-AC1–AC3) a časovou regresi řádků `K7-1`. Kód kola 12
+  je **vrácen** na stav kola 11 a nálezy CR-AB1–AB5 a CR-AC6–AC8 zavírá pravidlo z oddílu „Bezpečnost — slovo před
+  příkazem“ výš (skupiny `CR-AB` a `O9`). Řádky „kontrola … ticho“ s neprostou hlavou za přiřazením (CR-AA1, CR-AA2,
+  CR-AB5, CR-Y6, CR-Z3 a výpis 7. 9. `gsd/24`) jsou teď `deny` s hláškou — to je cena pravidla. Totéž platí pro kontrolu
+  `L1` v Bashi (hlava `$_.Name`).
+- **Vědomě beze změny (AB6).** Sdílený rozpočet obou čtení může falešně přetéct jen v okně, kdy první čtení skončí
+  méně než ~12 jednotek pod stropem 200 000 (druhé čtení rozdělené substituce znovu nepočítá; změřeno u 400 vnořených
+  závorek: první čtení 160 833, druhé 12, u 450 už přeteklo první čtení samo).
+
+### Opraveno — díra 0.3.0 (všechny projekty na stroji)
+
+README omezení 11 tvrdilo, že destrukce databáze v kontejneru je krytá. Platilo to jen pro tělo heredocu a rouru do
+klienta; vnitřní příkaz s `-c` i `dropdb` hook **neviděl** (`docker|podman` byl list bez SQL klienta).
+
+| třída tvaru | 0.3.0 | 0.3.1 |
+|---|---|---|
+| `docker\|podman exec\|run … <kontejner> psql\|sqlcmd … -c/-Q "<destruktivní SQL>"`, `dropdb`, `dotnet ef database drop`, `sqllocaldb delete` uvnitř — místní | ticho | `deny` (v kontejneru nikdy povoleno, `AOPT-O26`; do `ZOPT-Q102` `ask`) |
+| totéž s vzdáleným hostitelem ve **vnitřním** příkazu (`-h`, `Host=`, URI) nebo v proměnné prostředí obalu (`-e PGHOST=…`, průchozí `-e PGHOST` s hodnotou v témže příkazu, i v dekódovaném `-EncodedCommand`) | ticho | `deny` |
+| `podman-remote` (tentýž klient podmana) | ticho | jako řádky výše |
+| cíl kontejneru substitucí (`$(docker ps -q)`, zpětné apostrofy, `(docker ps -q)` v PowerShellu), zkratky dlouhých voleb `podman-compose` | ticho | jako řádky výše |
+| heredoc do shellu v `docker exec -i c sh` (tvar, který 0.3.0 rozbalovala): s přepisem `gate.dbDestroyLocal = allow` | ticho | `deny` (tvar v kontejneru nikdy `allow`) |
+| totéž s `-e PGHOST=<vzdálený>` | `ask` | `deny` |
+| management podpříkaz `container exec\|run`, compose (`docker compose`, `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem (podman i za ním), `run --entrypoint`, `podman exec --latest\|--cidfile`, volby s hodnotou ve všech zápisech (`--x=h`, `-xh`, shluk `-iu h`, `--`) | ticho | jako řádky výše |
+| volba, kterou tabulka CLI nezná (čte se s hodnotou i bez); tělo heredocu a roury se posoudí pro **každé** čtení obalu (i proti staršímu průchodu, který `--entrypoint` / `--detach-keys` nezná) a platí nejpřísnější | ticho | jako řádky výše |
+| vnořený `bash -c` / `sh -c` uvnitř kontejneru, `xargs … dropdb` uvnitř, obal za `sudo` / `env` / `timeout` s globální volbou | ticho | jako řádky výše |
+| heredoc a roura do klienta v kontejneru za globální volbou nebo management podpříkazem, heredoc do shellu v kontejneru (compose, globální volba, `env -S "…"`) | ticho | jako řádky výše (heredoc do shellu jen DB pravidlem) |
+| nerozebratelná hlava uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem | ticho | `deny` (tvar `dbDestroyContainerOpaque`) |
+| uvozovaná závorka nebo zpětný apostrof v hodnotě volby obalu, vnořený kontejner s vlastním `-e PGHOST=…` | ticho | jako řádky výše (proměnné obou obalů se sčítají) |
+| heredoc do interpretu (`python`, `node` …) v kontejneru, který 0.3.0 nerozbalila (compose, globální volba), s destruktivním DB literálem | ticho | `deny` |
+| heredoc do interpretu v `docker exec` (tvar, který 0.3.0 rozbalovala): verdikt 0.3.0 (destruktivní volání `ask`, jinak audit) | audit | podle tabulky „žádné `ask`" výše; navíc destruktivní DB literál v těle → `deny` |
+| `-EncodedCommand` v kontejneru | ticho | dekódované tělo jde DB pravidlem (v kontejneru `deny`) |
+| `-EncodedCommand` v kontejneru, které nejde dekódovat nebo dává prázdný text (i bez DB textu) | ticho | ticho + audit `opaque:encoded` (politika `gate.opaque.encoded`, jako na hostiteli) |
+| obal kontejneru se substitucí v příkazu, jehož rozbor substitucí narazí na strop práce (tisíce vnořených uzavřených závorek), s destruktivním DB literálem | ticho nebo timeout hooku | `deny` (jméno DB nejde přečíst; s přepisem `gate.dbDestroyLocal = deny` tvar `dbDestroyLocalDenied`; přebije i ticho jiného listu; literál se hledá v každém rozebíraném textu příkazu, i v datech) |
+| cíl enginu jinde (volba nebo proměnná prostředí CLI) + destruktivní příkaz s místním vnitřním hostitelem | ticho | `deny` — nová README mez 26 |
+
+Tvar uvnitř kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (`AOPT-O26`) — od `ZOPT-Q102` je proto `deny`.
+
+### Beze změny (kontrolní skupiny, `AOPT-O25`)
+
+- Mazání cest a destruktivní git **uvnitř** kontejneru: verdikt 0.3.0 (ticho), README omezení 11 — cestová část a její
+  spouštěč přehodnocení zůstávají. Obal za prefixem (`sudo docker exec …`) dál posuzuje vnitřní příkaz všemi pravidly jako v 0.3.0.
+- Hook **`secrets` nad kontejnerovými tvary: verdikt 0.3.0.** Nový rozbor kontejneru v `_common.ps1` slouží DB pravidlu
+  gate; kontrolní skupina `ctl-secrets` v `tests/fixtures/task179-secrets.json` (8 řádků) je zelená. Dekódování
+  `-EncodedCommand` se přesunulo do sdílené funkce (gate ji používá pro `-EncodedCommand` v kontejneru).
+  ⚠️ **Jinde se verdikty `secrets` v tomto vydání mění** (review Amber A4; do opravy tu stálo *„`secrets`: žádná změna
+  verdiktu … `Get-WrapperTail` a jeho volání v `secrets.ps1` se nemění"*): žádné `ask` (tabulka výše), komentář s
+  apostrofem (CR-S8, oddíl Bezpečnost), druhé čtení bez komentáře (CR-U až CR-Z), změny sdílených funkcí `Get-WrapperTail`
+  (`Get-AssignmentName`, CR-X9, CR-Z8) a `Split-Arguments` (substituce ve slově, CR-AA1), glob mířící na tajemství
+  (`A179-O18`). Řádky: skupiny `Q102-sec`, `CR-Q` … `CR-Y`, `O18`.
+- Tentýž SQL bez kontejneru, tělo heredocu a roura do `docker exec -i … psql -h …` (už v 0.3.0 `deny`), `scripts/…ps1`
+  spuštěný souborem (README omezení 1): beze změny.
+- Nový řádek auditu (verdikt beze změny = ticho): `sqlFromFile` / `sqlFromPipe` i pro klienta uvnitř kontejneru. Obal,
+  který hook čte víckrát (neznámá volba, tělo heredocu a roury pro každé čtení), zapíše událost tolikrát, kolikrát ji nese
+  jeho nejbohatší čtení — ne jednou za každé čtení (i pro tělo shellu, které se rozebírá znovu pro každé čtení vnějšího
+  obalu); jiný výskyt v témže příkazu se počítá zvlášť.
+- Heredoc do interpretu v `docker exec` (tvar 0.3.0) s destruktivním voláním interpretu nese dál id tvaru
+  `interpreterDestructive` i tehdy, když tělo má navíc destruktivní DB literál.
+- Coreutils `truncate` a volání `truncate(` (`os.truncate`, `f.truncate()`) v kódu interpretu nejsou SQL `TRUNCATE` → ticho.
+- `dotnet ef database drop|update` v obalu: DB pravidlo dál posuzuje i celý příkaz obalu jako v 0.3.0 (přísnější verdikt
+  zůstává; README omezení 11).
+
+### Konfigurace
+
+Nový text tvaru `gate.shapes.dbDestroyContainerOpaque` (výchozí konfigurace). Nová příčina `gate.opaque.shellWord`
+(výchozí `deny`; přepis smí jen zpřísnit, takže zůstává `deny`) a text `gate.shapes.opaqueShellWord` (`A179-O9`).
+
+### Testy
+
+`tests/fixtures/task179-gate.json` (696 řádků, změřeno 2026-10-23: tvary 17–24, třída `AOPT-O27`, členové M-a–M-d z kroku 0,
+kontrolní skupiny, `ZOPT-Q102`, nálezy `/code-review` kol 1–21, `O9`–`O18`, `CR-AL`–`CR-AQ`, `O23` a rozlišující řádky mutantů),
+`tests/fixtures/task179-secrets.json` (86); červená fáze nad 0.3.0: 59 z prvních 105 řádků gate červených ze správného důvodu
+(čekáno `ask`/`deny`, dostáno ticho), nálezy review vlastní červenou fází nad předchozí verzí opravy. Invariant 1152 →
+1850 řádků; očekávání se měnilo jen nástrojem `-Prijmout` s citací (`ZOPT-Q102`/`A179-O3`/`O1`, `A179-O7`, `A179-O11`,
+`A179-O17`, `A179-O18`, `A179-O20`/`A179-O21`; výčet v `_zmeneno`). Do review Amber A4 tu stálo *„207 řádků … (8) … 1152 → 1347 řádků (jen přidání)"*. `Invoke-Task117Rows` bere předponu fixtury
+a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu být nesmí; audit přitom musí mít aspoň jeden
+řádek), `auditShapeCount` (počet řádků auditu), `maxMs` (doba jednoho běhu hooku, nejvýš tvrdý strop sady; běh
+nad `maxMs` se jednou opakuje a druhý běh píše audit do nové složky) a `{REP}` / `{REP2}` + `repText` / `repCount` / `repText2` / `repCount2` (dlouhý příkaz bez tisíců znaků ve
+fixtuře; takový řádek nejde do invariantu).
+
+### Meze TASK-161 přecházejí na 0.4.1
+
+Meze vydání 0.3.0 (`Z117-Q29`, README omezení 1 a 25) se opravují ve verzi **0.4.1** (GSD TASK-161; do `A179-O19` značeno
+0.3.2), ne v tomto vydání. Tokenizér Bashe (README omezení 27) = GSD TASK-190, téže verze.
+
 ## [0.3.0] — 2026-10-08
 
 **TASK-117 (GSD): `secrets` jen u čtení obsahu, tři díry 0.2.0 zavřené, H-a–H-g.** Zadání

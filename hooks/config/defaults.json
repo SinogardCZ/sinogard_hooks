@@ -1,23 +1,25 @@
 {
-  "_comment": "Vychozi konfigurace sinogard-hooks. Projektovy override: ${CLAUDE_PROJECT_DIR}/.claude/sinogard-hooks.json (stejny tvar, JEDNOUROVNOVE slouceni od 0.1.11 - objekt se slucuje klic po klici o jednu uroven, pole a skalary se nahrazuji CELE; obsah override kontroluje od 0.3.0 _overridePolicy). Skripty .ps1 jsou zamerne ASCII-only, vsechny lidske texty zijou tady a ctou se jako UTF-8.",
+  "_comment": "Vychozi konfigurace sinogard-hooks. Projektovy override: ${CLAUDE_PROJECT_DIR}/.claude/sinogard-hooks.json (stejny tvar, JEDNOUROVNOVE slouceni od 0.1.11 - objekt se slucuje klic po klici o jednu uroven, pole a skalary se nahrazuji CELE; obsah override kontroluje od 0.3.0 _overridePolicy). Skripty .ps1 jsou zamerne ASCII-only, vsechny lidske texty zijou tady a ctou se jako UTF-8. Verze v komentarich (A179-O19, A179-O23 N6): 0.3.1 = vydani 0.4.0 (vyvijelo se pod 0.3.1), 0.3.2 = 0.4.1.",
 
-  "_overridePolicyComment": "TASK-117 H-c (0.3.0, Z117-Q21 = A, Tom 2026-10-08): projektový přepis smí bránu jen ZPŘÍSNIT, s pojmenovanými výjimkami. Pravidla se čtou z TÉTO výchozí konfigurace PŘED sloučením — přepis je sám změnit nemůže. Pravidla: `superset` = pole přepisu musí obsahovat všechny výchozí položky (přidání zpřísňuje; kratší pole by tiše odebralo ochranu, protože pole se nahrazují celá) · `subset` = pole přepisu smí jen vybírat z výchozích (přidání povoluje) · `localHosts` = jen jména z pevné místní množiny v kódu (localhost, 127.0.0.1, ::1, (local), ., (localdb)\\<instance>) — jinak by přepis udělal ze vzdáleného hostitele „lokální“ · `opaque` = hodnoty `audit`|`ask`, `encoded` jen `ask` · `envFile` = `denyNames` nadmnožina, `allowNames` podmnožina, `otherPolicy` beze změny · `dbDestroyLocal` = schéma H-f · `accept` = beze změny. Klíč bez pravidla (regexy jmen proměnných, `shapes`, `auditFile`, neznámý klíč) se ODMÍTNE. Režim selhání: odmítne se jen vadný klíč (platí jeho výchozí hodnota), zbytek přepisu platí; kanárek vypíše jména odmítnutých klíčů a každé volání hooku, které je potkalo, zapíše audit `config:overrideRejected:<klíč>`.",
+  "_overridePolicyComment": "TASK-117 H-c (0.3.0, Z117-Q21 = A, Tom 2026-10-08): projektový přepis smí bránu jen ZPŘÍSNIT, s pojmenovanými výjimkami. Pravidla se čtou z TÉTO výchozí konfigurace PŘED sloučením — přepis je sám změnit nemůže. Pravidla: `superset` = pole přepisu musí obsahovat všechny výchozí položky (přidání zpřísňuje; kratší pole by tiše odebralo ochranu, protože pole se nahrazují celá) · `subset` = pole přepisu smí jen vybírat z výchozích (přidání povoluje) · `localHosts` = jen jména z pevné místní množiny v kódu (localhost, 127.0.0.1, ::1, (local), ., (localdb)\\<instance>) — jinak by přepis udělal ze vzdáleného hostitele „lokální“ · `policy` (0.3.1, ZOPT-Q102: `gate.opaque`, `gate.decisions`, `secrets.decisions`) = hodnoty `audit`|`deny`, klíč s výchozím `deny` zůstává `deny`, neznámý klíč se odmítne · `envFile` = `denyNames` nadmnožina, `allowNames` podmnožina, `otherPolicy` beze změny · `dbDestroyLocal` = schéma H-f · `accept` = beze změny. Klíč bez pravidla (regexy jmen proměnných, `shapes`, `auditFile`, neznámý klíč) se ODMÍTNE. Režim selhání: odmítne se jen vadný klíč (platí jeho výchozí hodnota), zbytek přepisu platí; kanárek vypíše jména odmítnutých klíčů a každé volání hooku, které je potkalo, zapíše audit `config:overrideRejected:<klíč>`.",
   "_overridePolicy": {
     "acceptTopLevel": ["hooks", "texts", "notify", "resumeCost"],
     "gate": {
-      "denyPatterns": "superset", "askPatterns": "superset", "rawDestructiveTokens": "superset",
-      "interpreterDestructiveTokens": "superset", "sqlClients": "superset", "shellInterpreters": "superset",
+      "denyPatterns": "superset", "auditPatterns": "superset", "rawDestructiveTokens": "superset",
+      "interpreterDestructiveTokens": "superset", "interpreterDbTokens": "superset", "sqlClients": "superset", "shellInterpreters": "superset",
       "codeInterpreters": "superset", "remoteShells": "superset", "protectedBranches": "superset",
       "allowedRemoveRoots": "subset",
       "localDbHosts": "localHosts",
-      "opaque": "opaque",
+      "opaque": "policy",
+      "decisions": "policy",
       "dbDestroyLocal": "dbDestroyLocal"
     },
     "secrets": {
-      "denyPathPatterns": "superset", "askPathPatterns": "superset", "selfProtectPathPatterns": "superset",
+      "denyPathPatterns": "superset", "auditPathPatterns": "superset", "selfProtectPathPatterns": "superset",
       "protectedBaseNames": "superset", "protectedPaths": "superset", "pathCommands": "superset", "writeCommands": "superset",
       "dataHeredocHosts": "subset",
-      "envFile": "envFile"
+      "envFile": "envFile",
+      "decisions": "policy"
     }
   },
 
@@ -29,8 +31,7 @@
   },
 
   "texts": {
-    "gateReason": "Brána §6 persony: {shape} bez SCHVALUJU Toma se neprovádí. Deny úkony provádí Tom sám; u ask řekni Tomovi, co a proč.",
-    "bypassSuffix": " V bypass režimu se šedá zóna nedotazuje — SCHVALUJU v chatu.",
+    "gateReason": "Brána §6 persony: {shape} — zakázáno. Úkon provádí Tom sám; zapiš ho do dávky.",
     "gateInternalError": "gate.ps1: interní chyba, blokováno",
     "secretsInternalError": "secrets.ps1: interní chyba, blokováno",
     "canary": "sinogard-hooks {version} aktivní: gate {gate} secrets {secrets} resume {resume} notify {notify}",
@@ -52,7 +53,8 @@
     "localDbHosts": ["localhost", "127.0.0.1", "::1"],
 
     "_dbDestroyLocalComment": "TASK-117 H-f (0.3.0; Z117-Q13 = A, tvar Z117-Q19 = A, Tom 2026-10-08; žádost HRMS): rozhodnutí o destruktivní operaci nad LOKÁLNÍ databází je nastavitelné projektovým přepisem. `decision`: `ask` (výchozí = 0.2.0) | `deny` | `allow`. `allow` platí JEN pro příkaz, který jméno serveru i databáze nese sám a jednoznačně: `sqlcmd -S <server> -Q \"[ALTER DATABASE [X] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;] DROP DATABASE [X]\"` (přepínače jen -S, -Q, -E, -b) nebo `dotnet ef database drop --connection \"Server=…;Database=…\"` (EF Core 11+). Server musí být v `hosts` A v pevné místní množině v kódu; jméno DB musí sedět na vzor z `databases` (glob `*`/`?`, ukotvený na celé jméno, bez ohledu na velikost písmen). „allow“ = hook MLČÍ a zapíše audit `gate:dbDestroyLocal` — NE `permissionDecision: allow`; v headless běhu je potřeba i pravidlo `permissions.allow` Claude Code. Vzdálený hostitel = `deny` vždy; `sqllocaldb delete` (Z117-Q20) se `allow` nikdy netýká.",
-    "dbDestroyLocal": { "decision": "ask", "databases": [], "hosts": [] },
+    "_dbDestroyLocal0310Comment": "ZOPT-Q102 + A179-O3 (Q10), 0.3.1: `ask` zmizel. `decision`: `allow` (výchozí) | `deny`. `allow` = destruktivní operace nad MÍSTNÍ databází, jejíž jméno příkaz nese a které sedí na vzor z `databases` (testovací a vývojové DB ve tvaru `*_test_*`, `*_test`, `*_dev`, např. GSD; lokální DB HRMS `Hrms…Test` na vzory NESEDÍ — změřeno 2026-10-21, 31 z 31 mimo, A179-O6) → hook mlčí + audit `gate:dbDestroyLocal`; jméno mimo vzory, jméno, které nejde přečíst (proměnná, chybí, SQL z roury, `USE`/`\\c`, trojdílné jméno), `sqllocaldb delete` a tvar uvnitř kontejneru (AOPT-O26) → `deny`. Čte se: `-d`/`--dbname`, `dbname=`, URI, `Database=`/`Initial Catalog=`, `PGDATABASE`, jméno v `DROP DATABASE` a cíl `dropdb`; u `DROP DATABASE` / `dropdb` / `ef database drop` rozhoduje jméno RUŠENÉ databáze. Přepis smí vzory jen zúžit (H-c `subset`); `hosts` se od 0.3.1 nečte (místní = pevná množina, `gate.localDbHosts`).",
+    "dbDestroyLocal": { "decision": "allow", "databases": ["*_test_*", "*_test", "*_dev"], "hosts": [] },
 
     "_auditFileComment": "Rozhodnutí Toma 2026-09-07/T36-F1 T-10 A: tvary, kde SQL v příkazu není vidět, se už neptají — zapíšou se sem a pustí dál (audit místo brány). Loguje se UDÁLOST, ne obsah: čas, nástroj, id tvaru, rozhodnutí. Soubor vzniká v ${CLAUDE_PLUGIN_DATA}; bez té proměnné se nezapisuje nic a hook mlčí.",
     "auditFile": "gate-audit.jsonl",
@@ -70,22 +72,43 @@
 
     "_opaqueComment": "Rozhodnutí Toma 2026-09-07/T36-O5 = A: „nerozebratelné“ přestalo být jednou třídou. Do 0.1.9 končil každý takový tvar dotazem — nad reálnými čísly 7. 9. to bylo 45 dotazů ze 46 při DVOU skutečných zásazích §6. Politika je per PŘÍČINA. 🔴 `audit` znamená, že hook MLČÍ (zapíše řádek a nevydá rozhodnutí) — NE `permissionDecision: allow`; ten by přeskočil vrstvu oprávnění Claude Code, a právě ta má nadále rozhodovat. Hodnoty: `audit` | `ask`; cokoli jiného se čte jako `ask` (fail-closed). `invoked` = `& $cmd`, tedy obsah proměnné se SPUSTÍ; `encoded` = `-EncodedCommand`. Obojí zůstává dotazem — je to kontrolní skupina celé změny.",
     "_opaque0111Comment": "0.1.11 (nález Ady N35): `depth` a `heredocUnterminated` se vracejí na `ask`. Ve výpisu 46 dotazů ze 7. 9. mají OBĚ příčiny **0 výskytů**, takže default `ask` nestojí ani jeden dotaz navíc — a u tvaru, kde nevíme ani kde tělo končí, je audit tvrzení, které nemáme čím podložit. `variable` a `interpreter` zůstávají `audit`: ty ta čísla nesou.",
+    "_opaque0310Comment": "ZOPT-Q102 + A179-O3, 0.3.1: hodnoty `audit` | `deny` (`ask` zmizel). `depth` (zanoření nad 5) = `deny` (A179-O1, N31); ostatní příčiny = `audit` (hook mlčí + řádek auditu). Destruktivní literál v nerozebratelném listu dál rozhoduje dřív (`gate.decisions.opaqueDestructive`).",
     "opaque": {
       "variable": "audit",
       "interpreter": "audit",
-      "heredocUnterminated": "ask",
-      "depth": "ask",
-      "invoked": "ask",
-      "encoded": "ask"
+      "heredocUnterminated": "audit",
+      "depth": "deny",
+      "invoked": "audit",
+      "encoded": "audit",
+      "shellWord": "deny"
+    },
+    "_opaqueShellWordComment": "A179-O9 (Amber 2026-10-22), 0.3.1: v Bashi smí před příkazem stát jen prostá slova (hodnota přiřazení, cíl přesměrování, slovo a vzor `case`) a stojí-li tam cokoli z toho, musí být prostým slovem i hlava příkazu; totéž pro přiřazení za obalem (`env`, `sudo` …). Prosté slovo = bez `$`, zpětného apostrofu, závorek, escape a uvozovky uprostřed (celý řetězec v apostrofech / uvozovkách prostý je). Jinak `shellWord` = `deny` s hláškou `shapes.opaqueShellWord`, která jmenuje náhradu. A179-O10: i samostatné přiřazení se substitucí (`n=$(…)`). A179-O11: pravidlo platí pro každou hlavu (i bez prefixu; nekvotovaná hlava navíc bez `*`, `?` a `[`); výjimka bez prefixu je holá proměnná (`$X`, `${X}`, `$1`, `$@`, `\"$X\"` → `variable`, `invoked`), začátek bloku, subshellu, aritmetiky, komentář a definice funkce. A179-O12: hodnota přiřazení smí nést prostý odkaz na proměnnou (`$NAME`, `${NAME}`, `$1`, `$@`, i v uvozovkách), ne operátor `${A:-…}`.",
+
+    "_decisionsComment": "ZOPT-Q102 (Tom 2026-10-20) + A179-O3 (Amber): každé místo, které do 0.3.0 vracelo `ask`, má politiku `audit` (hook mlčí a zapíše řádek auditu `gate:<id>` / `secrets:<id>` s rozhodnutím `allow`) nebo `deny`. Chybějící nebo neznámá hodnota = `deny`. Přepis smí jen zpřísnit (`audit` → `deny`). forcePushUnknown = force push bez cíle nebo s cílem, který není doslovné jméno větve — proměnná, substituce, `HEAD`, `@` (může mířit na main; A179-O15) · forcePushOther = force push na nechráněnou větev · gitAlias = alias přes `-c` (spustí cokoli) · netDeleteVariable / shortAbsolutePath / recursiveDeleteVariable / recursiveDeleteDotDot = mazání, jehož cíl nejde doložit · recursiveDeleteWildcard = hvězdička uvnitř povoleného kořene · deleteFromPipeline = mazání z roury · interpreterDestructive = destruktivní volání v kódu interpretu · interpreterDestructiveDb = DB token v kódu interpretu (jméno DB nečitelné) · opaqueDestructive = destruktivní literál v nerozebratelném tvaru · remoteShell = příkaz na cizím stroji (`ssh host \"…\"`, `ssh host <<EOF`; `deny` od A179-O18 — pravidla nad cestami tam neplatí; `ssh host` bez příkazu a `ssh -T` mlčí).",
+    "decisions": {
+      "forcePushUnknown": "deny",
+      "forcePushOther": "audit",
+      "gitAlias": "deny",
+      "netDeleteVariable": "deny",
+      "shortAbsolutePath": "deny",
+      "deleteFromPipeline": "audit",
+      "recursiveDeleteVariable": "deny",
+      "recursiveDeleteDotDot": "deny",
+      "recursiveDeleteWildcard": "audit",
+      "interpreterDestructive": "audit",
+      "interpreterDestructiveDb": "deny",
+      "opaqueDestructive": "deny",
+      "remoteShell": "deny"
     },
 
     "_rawDestructiveTokensComment": "🔴 Nález Ady N35 (0.1.11), sourozenec N28: klasifikace PŘED pohledem na text. `Where-Object { … -or (git reset --hard) }`, `ForEach-Object { $_.Delete() }` a `$SUDO git reset --hard` mají hlavu nerozebratelnou, ale destruktivní literál v nich VIDĚT JE — a od 0.1.10 končily auditem. Shoda nad `Leaf.Raw` u příčin `variable`, `heredocUnterminated` a `depth` → `ask` (ne `deny`: kontext neznáme). Porovnání je stejné jako u `interpreterDestructiveTokens` — IndexOf, Ordinal, case-SENSITIVNÍ, žádný parser. N50 — asymetrie s důvodem: `DELETE FROM` je TADY (o tvaru nevíme nic jiného, ask je levný), v `interpreterDestructiveTokens` NENÍ (tělo interpretu běžně nese SQL řetězce s WHERE, které ověřit nejde). Cena nad výpisem 46 dotazů: 0.",
     "rawDestructiveTokens": [
-      "git reset --hard", "push -f", "push --force", "branch -D", "clean -fd",
+      "git reset --hard", "reset --hard", "push -f", "push --force", "branch -D", "clean -fd",
       "rm -rf", "Remove-Item", "-Recurse", "Delete(",
       "DROP TABLE", "TRUNCATE", "DELETE FROM"
     ],
 
+    "_rawDestructiveTokens0310Comment": "ZOPT-Q102 (0.3.1): `reset --hard` bez `git` — spuštění nerozbalené hlavy (`& $x reset --hard`, příčina `invoked`) bylo do 0.3.1 `ask` samo; od 0.3.1 je `invoked` šedá zóna, takže destruktivní literál musí chytit seznam (A179-O3 Q5 → deny).",
     "_interpreterDestructiveTokensComment": "Kód interpretu (`python -c`, `node -e`, tělo heredocu interpretu) se nerozebírá — ale JMÉNO destruktivního volání v něm vidět je. Je to test na TOKEN, ne parser jazyka: prostý case-SENSITIVNÍ výskyt v těle → `ask`. Case-sensitivní schválně — `Remove-Item` ano, `remove-item` ne; jinak by seznam falešně chytal běžná anglická slova. Kontrolní skupina 7. 9. (15 příkazů HRMS + Útraty: `pathlib`, `read_text`/`write_text`, `io.open`, `node -e require(...)`) žádný z nich nenese. `.rmSync(`, `.rmdirSync(` a `.unlinkSync(` jsou tu proto, že Node se píše `require('fs').rmSync(`, ne `fs.rmSync` — vzor postavený na druhém tvaru by minul invariantní řádek `node -e \"require('fs').rmSync('src')\"`.",
     "interpreterDestructiveTokens": [
       "shutil.rmtree", "os.remove", "os.unlink", "os.rmdir",
@@ -94,11 +117,14 @@
       "subprocess", "os.system", "child_process",
       "Remove-Item", "DROP TABLE", "TRUNCATE"
     ],
+    "_interpreterDbTokensComment": "A179-O3 (Q6), 0.3.1: DB token v kódu interpretu = zničení databáze, jejíž jméno hook nepřečte → `gate.decisions.interpreterDestructiveDb` (`deny`). Ostatní tokeny z `interpreterDestructiveTokens` → `interpreterDestructive` (`audit`). Porovnání stejné: IndexOf, Ordinal, case-SENSITIVNÍ.",
+    "interpreterDbTokens": ["DROP TABLE", "DROP DATABASE", "DROP SCHEMA", "TRUNCATE"],
 
     "denyPatterns": [
       { "id": "git-reset-hard",     "pattern": "^git\\s+reset\\b.*\\s--hard(\\s|$)",                   "shape": "git reset --hard" },
       { "_pozn_checkout_restore": "`git checkout .` a `git restore .` řeší Test-GitRestoreRule v gate.ps1 nad TOKENY, ne regexem nad textem. Regex to neuměl: nález Amber E3 ukázal, že `-s HEAD .` regex nikdy nechytí (`-s` bere hodnotu, `HEAD` není přepínač), a Amberin vlastní návrh `(-\\S*\\s+)*` má tutéž díru." },
-      { "id": "git-branch-delete",  "pattern": "^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--delete)(\\s|$)", "shape": "git branch -d/-D" },
+      { "_pozn_branch_delete": "A179-O17 (Amber 2026-10-23): smazání jakékoli větve — `-d` (sloučené) i `-D` — je deny jako v 0.3.0 (ZOPT-Q40: SCHVALUJU pro smazání jakékoli větve). Vývojová verze 0.3.1 (A179-O3 Q11) `-d` uvolnila; id vzoru je zpět. A179-O20 (CR-AL5): git bere i jednoznačnou zkratku dlouhé volby — u `git branch` je každé `--d…` až `--delete` mazání (`--del`), proto vzor nese zkratky; projektový přepis `denyPatterns` z 0.3.0 tím přestává být nadmnožinou (H-c ho odmítne, platí výchozí). Cena vzoru 0.3.0: pomlčkové slovo s `d` v hodnotě volby (`--sort -committerdate`) = deny; náhrada `--sort=-committerdate`." },
+      { "id": "git-branch-delete",  "pattern": "^git\\s+branch\\b.*\\s(-[A-Za-z]*[dD][A-Za-z]*|--d(e(l(e(te?)?)?)?)?)(\\s|$)", "shape": "git branch -d/-D" },
       { "id": "git-update-ref-del", "pattern": "^git\\s+update-ref\\b.*\\s(-d|--delete)(\\s|$)",       "shape": "git update-ref -d" },
       { "id": "git-push-delete",    "pattern": "^git\\s+push\\b.*\\s(--delete|-d)(\\s|$)",             "shape": "git push --delete" },
       { "id": "git-stash-destroy",  "pattern": "^git\\s+stash\\s+(drop|clear)(\\s|$)",                 "shape": "git stash drop/clear" },
@@ -108,7 +134,8 @@
       { "id": "git-gc-prune",       "pattern": "^git\\s+gc\\b.*\\s--prune(\\s|=|$)",                   "shape": "git gc --prune" }
     ],
 
-    "askPatterns": [
+    "_auditPatternsComment": "ZOPT-Q102 + A179-O3 (Q7), 0.3.1: do 0.3.0 `askPatterns`. Shoda = hook mlčí a zapíše řádek auditu `gate:<id>` s rozhodnutím `allow`.",
+    "auditPatterns": [
       { "id": "ef-migrations-rm",   "pattern": "^dotnet\\s+ef\\s+migrations\\s+remove(\\s|$)",         "shape": "dotnet ef migrations remove" },
       { "id": "invoke-expression",  "pattern": "^(invoke-expression|iex)(\\s|$)",                      "shape": "Invoke-Expression" }
     ],
@@ -120,13 +147,17 @@
       "gitClean": "git clean -f",
       "gitCleanIgnored": "git clean nad ignorovanými soubory",
       "recursiveDelete": "rekurzivní mazání mimo povolené složky ({target})",
-      "recursiveDeleteWildcard": "rekurzivní mazání v povolené složce s hvězdičkou/proměnnou v cestě ({target})",
+      "recursiveDeleteWildcard": "rekurzivní mazání v povolené složce s hvězdičkou v cestě ({target})",
+      "recursiveDeleteVariable": "rekurzivní mazání, jehož cíl je proměnná — nejde doložit, že míří do povolené složky ({target})",
+      "recursiveDeleteDotDot": "rekurzivní mazání s `..` v cestě — cíl může opustit povolenou složku ({target})",
       "netDeleteVariable": "mazání .NET voláním, kde cíl je proměnná ({text})",
       "gitCheckoutDot": "git checkout . (návrat pracovního stromu = ztráta práce)",
       "gitRestoreDot": "git restore . (návrat pracovního stromu = ztráta práce)",
       "sqlFromPipe": "SQL, které v příkazu není vidět — teče do klienta z roury nebo ze souboru ({text})",
       "dbDestroyRemote": "destruktivní DB operace na hostiteli {host}",
-      "dbDestroyLocal": "destruktivní DB operace na lokální databázi (dotaz v terminálu = SCHVALUJU vynucené nástrojem)",
+      "dbDestroyLocal": "destruktivní DB operace na lokální databázi mimo testovací a vývojové vzory nebo se jménem, které nejde přečíst",
+      "dbDestroyLocalEnv": "destruktivní DB operace na testovací databázi, ale v prostředí hooku je nastavená proměnná {name} — hook nepozná, ke kterému serveru se klient připojí; bez ní je samostatný příkaz povolený",
+      "dbDestroyLocalCompound":"destruktivní DB operace na testovací databázi ve složeném příkazu (další příkaz, roura, komentář nebo proměnná hostitele) — povolený je jen samostatný příkaz, např. `psql -d <db> -c \"…\"` nebo `dropdb <db>`",
       "dbDestroyLocalDenied": "destruktivní DB operace na lokální databázi — projekt ji zakázal (gate.dbDestroyLocal = deny)",
       "efUpdateRemote": "dotnet ef database update proti hostiteli {host}",
       "pushDeleteRefspec": "smazání vzdálené větve prázdným refspecem",
@@ -134,8 +165,14 @@
       "_shortAbsolutePathComment": "TASK-106 bod 4 (nález Amber I6, 0.2.0): `rm -rf /srv` končilo ask s hláškou o rouře. Skutečná příčina: `/xxx` do tří znaků je od přepínače cmd (`/s`, `/q`) k nerozeznání, cíl není vidět. Rozhodnutí se nemění, věta ano.",
       "shortAbsolutePath": "rekurzivní mazání s krátkou absolutní cestou ({target}) — do tří znaků je od přepínače cmd (/s, /q) k nerozeznání, cíl není vidět",
       "opaque": "příkaz, který nejde rozebrat ({text})",
+      "opaqueShellWord": "v hlavě příkazu nebo před ní (přiřazení, přesměrování, case) stojí slovo, které hook neumí přečíst ($, zpětný apostrof, závorka, uvozovka uprostřed, hvězdička / otazník / hranatá závorka v hlavě) ({text}) — napiš hlavu jako doslovnou cestu a hodnotu jako prosté slovo; substituci dej do argumentu příkazu (ne do přiřazení), nebo ji spočítej samostatným příkazem a sem dej doslovnou hodnotu",
       "interpreterDestructive": "kód interpretu s destruktivním voláním ({token})",
-      "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})"
+      "interpreterDestructiveDb": "kód interpretu ruší databázi, jejíž jméno nejde přečíst ({token})",
+      "opaqueDestructive": "nerozebratelný tvar s destruktivním literálem ({token})",
+      "remoteShell": "příkaz na cizím stroji ({text})",
+      "gitAlias": "git alias definovaný v příkazu ({text}) — spustí cokoli",
+      "dbDestroyContainerOpaque": "destruktivní DB literál uvnitř kontejneru v příkazu, který nejde celý rozebrat (jméno DB nejde přečíst)",
+      "dbDestroyContainer": "destruktivní DB operace uvnitř kontejneru (v kontejneru se nepovoluje nikdy, AOPT-O26)"
     }
   },
 
@@ -156,7 +193,8 @@
       "(^|/)\\.docker/config\\.json$"
     ],
 
-    "askPathPatterns": [
+    "_auditPathPatterns0310Comment": "ZOPT-Q102, 0.3.1: do 0.3.0 `askPathPatterns`. ČTENÍ takové cesty = hook mlčí + audit `secrets:settingsLocal`; ZÁPIS chytá dřív `selfProtectPathPatterns` (deny, A179-O3 Q16).",
+    "auditPathPatterns": [
       "(^|/)\\.claude/settings\\.local\\.json$"
     ],
 
@@ -172,7 +210,18 @@
     "envFile": {
       "denyNames": ["\\.env$", "\\.env\\.local$", "\\.env\\.[^/]+\\.local$"],
       "allowNames": ["\\.env\\.(example|sample|template)$"],
-      "otherPolicy": "trackedAllowElseAsk"
+      "otherPolicy": "trackedAllowElseAudit"
+    },
+
+    "_decisionsComment": "ZOPT-Q102 + A179-O3, 0.3.1: politika míst, která do 0.3.0 vracela `ask` — `audit` (hook mlčí + řádek auditu `secrets:<id>` s `allow`) | `deny`; chybějící = `deny`; přepis smí jen zpřísnit. Zápis do konfigurace hooku a do `.claude/settings*.json` (`selfProtect`) = `deny` (Q16: agent nesmí umět vypnout vlastní pojistku). `wildcardPath` (glob, který MÍŘÍ na chráněnou cestu nebo vzor: `cat ~/.ssh/*`, `cat *.env`, `cp *.pem …`) = `deny` (A179-O18: obsah tajemství by vstoupil do kontextu modelu); glob, který na chráněné jméno jen narazí (`cat *`), dál mlčí s auditem `secrets:wildcardName`.",
+    "decisions": {
+      "wildcardPath": "deny",
+      "envFileUntracked": "audit",
+      "settingsLocal": "audit",
+      "selfProtect": "deny",
+      "envDump": "audit",
+      "envVarRead": "audit",
+      "wrapperEncoded": "audit"
     },
 
     "_protectedBaseNamesComment": "Kanonická jména chráněných souborů. Slouží JEN k testu, jestli cesta se zástupným znakem (`.en?`, `*`) vůbec může na chráněné jméno padnout — bez toho by se `ls *.md` ptalo pokaždé. `config.json` a `config` odsud odešly (nález Amber B3), `credentials` až v druhém kole (nález Amber C3 — komentář, CHANGELOG i README to tvrdily, seznam ne): chráněné jsou jen s adresářem (`.docker/config.json`, `.kube/config`, `.aws/credentials`), a holá jména dělala z `*.json` a `config*` dotaz. Seznam ale pořád nese `secrets.json` a `settings.local.json`, takže `*.json` se ptá dál — měření a dvě možnosti jsou v hlášení 02.",
@@ -202,7 +251,7 @@
     "_dataHeredocHostsComment": "TASK-106 bod 12 / N-H6 (0.2.0): tělo heredocu, jehož host je datový příkaz, jsou DATA — próza hlášení nebo commit message (`cat >> notes.md <<EOF`, `git commit -F - <<EOF`) se do rozboru cest nebere. Tělo pro shell, interpret nebo NEZNÁMÝ host je kód a rozebírá se dál (`bash <<EOF` s příkazem čtoucím soubor prostředí).",
     "dataHeredocHosts": ["cat", "tee", "git", "type", "set-content", "out-file", "add-content", "printf", "echo", "sort", "uniq", "wc", "head", "tail", "less", "more", "diff", "patch", "jq", "yq", "sed", "awk", "tr", "cut", "base64"],
 
-    "_protectedPathsComment": "TASK-106 bod 11 (0.2.0, N16 = výrok 8, N26 = výrok 7): glob se posuzuje podle CELÉ cesty. Glob MÍŘÍ na chráněnou cestu, když `denyPathPatterns` sedne doslova na jeho text (`~/.ssh/*`, `*.pem`) nebo když jeho poslední segmenty padnou na kanonickou cestu odsud (`~/.aws/*` → `.aws/credentials`) — pak zůstává `ask`. Glob, který adresář chráněné cesty nejmenuje a na chráněné JMÉNO jen NARAZÍ (`.github/workflows/*.yml` ~ `secrets.yml`, `cat *`), mlčí a zapíše řádek `secrets:wildcardName` do auditu. C1 (delta review Amber 2026-09-13): glob, který na secret MÍŘÍ vzorem — jméno globu sedne na `envFile.denyNames` (`*.env`) nebo glob bez zástupných znaků vypisuje chráněné jméno (`.env*`, `*secrets.json`) — zůstává `ask`. Mez: `cat *` a `.en?`. `*` a `?` nepřekračují `/`, `**` ano. Spouštěč přehodnocení: fixture adresář u invariantu.",
+    "_protectedPathsComment": "TASK-106 bod 11 (0.2.0, N16 = výrok 8, N26 = výrok 7): glob se posuzuje podle CELÉ cesty. Glob MÍŘÍ na chráněnou cestu, když `denyPathPatterns` sedne doslova na jeho text (`~/.ssh/*`, `*.pem`) nebo když jeho poslední segmenty padnou na kanonickou cestu odsud (`~/.aws/*` → `.aws/credentials`) — pak `secrets.decisions.wildcardPath` (do 0.3.0 `ask`, od A179-O18 `deny`). Glob, který adresář chráněné cesty nejmenuje a na chráněné JMÉNO jen NARAZÍ (`.github/workflows/*.yml` ~ `secrets.yml`, `cat *`), mlčí a zapíše řádek `secrets:wildcardName` do auditu. C1 (delta review Amber 2026-09-13): glob, který na secret MÍŘÍ vzorem — jméno globu sedne na `envFile.denyNames` (`*.env`) nebo glob bez zástupných znaků vypisuje chráněné jméno (`.env*`, `*secrets.json`) — jde touž politikou `wildcardPath` (od A179-O18 `deny`; do review Amber B3, A179-O23 tu stálo „zůstává `ask`“ = stav do 0.3.0). Mez: `cat *` a `.en?`. `*` a `?` nepřekračují `/`, `**` ano. Spouštěč přehodnocení: fixture adresář u invariantu.",
     "protectedPaths": [".ssh/id_rsa", ".aws/credentials", ".azure/azureProfile.json", ".kube/config", ".docker/config.json", "UserSecrets/x/secrets.json", ".claude/settings.local.json"],
 
     "_envVarNamePatternComment": "DVA vzory se DVĚMA režimy velikosti písmen — jeden vzor to neumí. `envVarNamePattern` (podtržítkový zápis) se matchuje IGNORE-CASE, aby chytil i `db_password` a `github_token` (nález Amber E5); množné číslo je povolené jen ZA podtržítkem, takže `API_KEYS` se ptá a holé `tokens` ne. `envVarNameCamelPattern` se matchuje CASE-SENSITIVNĚ, protože jen tak zůstane `monkey` a `keyFile` běžnou prací, zatímco `secretKey` a `apiKey` se ptají. Holé `PWD` je vyňaté schválně — je to working directory, ne heslo; `DB_PWD` chycené zůstává.",
@@ -214,7 +263,7 @@
       "secretFile": "čtení/zápis souboru se secrets ({path})",
       "envFileUntracked": "netrackovaný soubor prostředí ({path})",
       "settingsLocal": "čtení .claude/settings.local.json (nese hodnoty secrets)",
-      "selfProtect": "zápis do souboru, kterým se brána vypíná ({path})",
+      "selfProtect": "zápis do souboru, kterým se brána vypíná ({path}): změnu nastavení provede Tom — zapiš ji do dávky",
       "wildcardPath": "cesta se zástupným znakem, která může padnout na chráněný soubor ({path})",
       "wrapperEncoded": "příkaz zakódovaný pro PowerShell (-EncodedCommand), jehož obsah hook nepřečte",
       "envDump": "výpis proměnných prostředí",

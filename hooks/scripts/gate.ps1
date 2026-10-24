@@ -1,19 +1,22 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  PreToolUse brana par. 6: destruktivni git a DB operace konci deny nebo ask.
+  PreToolUse brana par. 6: destruktivni git a DB operace konci deny; seda zona audit (hook mlci).
 
 .DESCRIPTION
   ASCII-ONLY zdroj (viz _common.ps1). Vsechny lidske texty jsou v
   hooks/config/defaults.json.
+
+  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.1.
 
   Fail-closed: jakakoli vyjimka, nevalidni nebo prazdny vstup, chybejici prikaz
   i neznamy nastroj konci exit 2. Ukazkovy validator Anthropicu tohle nedela
   (exit 1 = fail-open); lisime se vedome.
 
   deny = JSON permissionDecision "deny" + exit 2 + tyz duvod na stderr.
-  ask  = JSON permissionDecision "ask" + exit 0.
-  jinak = exit 0 bez vystupu (zadne rozhodnuti, plati normalni tok opravneni).
+  jinak = exit 0 bez vystupu (zadne rozhodnuti, plati normalni tok opravneni); seda zona navic zapise radek auditu.
+  ZOPT-Q102 (Tom 2026-10-20, 0.3.1): hook nevraci `ask` nikdy - kazde byvale `ask` ma politiku `audit` nebo `deny`
+  (gate.decisions, gate.opaque, gate.dbDestroyLocal v defaults.json; A179-O3).
 #>
 
 # Trap MUSI byt drive nez dot-source: kdyby _common.ps1 chybelo nebo bylo vadne,
@@ -96,10 +99,180 @@ $script:NetDeleteTargetPattern = $script:NetDeleteCallHeads + '\(\s*[''"]([^''"]
 # OuterExe `sudo` resp. `docker`, ty nejsou v sqlClients, telo heredocu se proto vubec
 # nectlo jako SQL a destruktivni operace propadla na allow.
 function Get-UnwrappedExe([string]$Command) {
+    # K2-9 (kolo 2 /code-review): jen pruchod obaly - volaji ho clanky roury PRED klientem, kde se hleda jen echo/printf.
     if ([string]::IsNullOrWhiteSpace($Command)) { return '' }
     $tail = Get-WrapperTail (Split-Arguments $Command)
     if ($tail.Count -eq 0) { return '' }
     return (Get-ExecutableName ([string]$tail[0]))
+}
+
+# TASK-179 (0.3.1): uvozujici prikaz tela heredocu a cil roury. Pruchod obaly (Get-WrapperTail) zustava, jak byl - jeho verdikty
+# (vcetne shellu v kontejneru, `docker exec -i c sh <<EOF`) se nemeni (AOPT-O25). Kdyz ale NEnajde SQL klienta ani shell a prikaz
+# je kontejnerovy obal, rozhodne rozbor obalu (Get-ContainerCommand): `podman --connection x exec -i c psql <<SQL` daval do 0.3.0
+# jako klienta jmeno kontejneru a telo se necetlo jako SQL. Pak je hostitelsky text VNITRNI prikaz + promenne prostredi obalu
+# (AOPT-O26, ne volby obalu) a telo nese priznak Container (jen DB pravidlo, nikdy `allow` z gate.dbDestroyLocal).
+# K2-1 (kolo 2): totez pro shell v kontejneru (`docker compose exec -T db bash <<EOF`) - telo se rozebere, ale jen DB pravidlem.
+# K2-5 (kolo 2): obal kontejneru muze stat az v ocasu starsiho pruchodu (`env -S "docker ... exec -i db psql" <<SQL`).
+# K3-2/K3-3/K3-9 (kolo 3): i kdyz klienta nebo shell najde STARSI pruchod (tvar 0.3.0, vsechna pravidla), je to porad tvar
+# v kontejneru: telo nese NoAllow (zadne `allow` z gate.dbDestroyLocal, AOPT-O26) a ContainerEnv (promenne `-e` obalu,
+# ktere starsi pruchod zahodil). ContainerEnv nese JEN promenne obalu, ne argumenty vnitrniho prikazu (K3-5).
+# K5-1/K5-3/K5-4 (kolo 5): vysledek nese i `Alt` = dalsi cteni obalu (jiny klient, shell nebo interpret). Telo heredocu
+# a roura se pak posoudi pro KAZDE cteni a plati nejhorsi verdikt: starsi pruchod muze obal precist spatne (`--entrypoint`,
+# `--detach-keys` nezna) a nezname volby davaji dve cteni - zadne z nich nesmi vyhrat jen proto, ze prislo prvni.
+# Interpret nalezeny starsim pruchodem (`docker exec -i app python3 <<EOF`) zustava na ceste 0.3.0 (verdikt beze zmeny).
+function Get-UnwrappedCommand([string]$Command) {
+    $res = @{ Exe = ''; Outer = $Command; Container = $false; NoAllow = $false; ContainerEnv = ''; Alt = @() }
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $res }
+    $argv = Split-Arguments $Command
+    $tail = Get-WrapperTail $argv
+    if ($tail.Count -gt 0) { $res.Exe = Get-ExecutableName ([string]$tail[0]) }
+    $oldExe = $res.Exe.ToLowerInvariant()
+    $cargv = $null
+    if ($oldExe -match $script:ContainerCli) { $cargv = @($tail) }
+    else {
+        $ci = Get-ContainerIndex $argv
+        if ($ci -ge 0) { $cargv = @($argv[$ci..($argv.Count - 1)]) }
+    }
+    $cc = if ($null -ne $cargv) { Get-ContainerCommand $cargv } else { $null }
+    $envText = if ($null -ne $cc) { Resolve-ContainerEnv $cc.Env } else { '' }
+    # Cteni rozboru obalu: klient, shell nebo interpret (K4-3) v kontejneru - telo posoudi Test-ContainerLeaf.
+    $hits = New-Object System.Collections.ArrayList
+    if ($null -ne $cc) {
+        $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($t0 in $cc.Tails) {
+            # Bez `@()` kolem volani: Get-WrapperTail vraci `,@(...)` (N-H10).
+            $t = Get-WrapperTail @($t0)
+            if ($t.Count -eq 0) { continue }
+            $exe = Get-ExecutableName ([string]$t[0])
+            $lx = $exe.ToLowerInvariant()
+            $rank = if (@($script:SqlClients) -ccontains $lx) { 0 } elseif (@($script:ShellInterpreters) -ccontains $lx) { 1 } elseif (@($script:CodeInterpreters) -ccontains $lx) { 2 } else { -1 }
+            if ($rank -lt 0) { continue }
+            $outer = ((Join-Argument @($t0)) + ' ' + $envText).Trim()
+            if (-not $keys.Add($lx + '|' + $outer)) { continue }
+            [void]$hits.Add(@{ Exe = $exe; Outer = $outer; Container = $true; NoAllow = $true; ContainerEnv = $envText; Rank = $rank })
+        }
+    }
+    if ((@($script:SqlClients) -ccontains $oldExe) -or (@($script:ShellInterpreters) -ccontains $oldExe) -or (@($script:CodeInterpreters) -ccontains $oldExe)) {
+        if ($null -ne $cc) {
+            $res.NoAllow = $true; $res.ContainerEnv = $envText
+            # K5-3: cteni rozboru obalu s JINYM programem nez starsi pruchod (ten treba vzal hodnotu `--entrypoint` za kontejner).
+            $res.Alt = @($hits | Where-Object { $_.Exe.ToLowerInvariant() -cne $oldExe })
+        }
+        return $res
+    }
+    if ($hits.Count -eq 0) { return $res }
+    # K5-4: poradi klient > shell > interpret jen urcuje hlavni cteni; ostatni jdou do Alt a posoudi se taky.
+    # Bez Sort-Object: Windows PowerShell 5.1 nema -Stable a poradi cteni ma zustat.
+    $sorted = @(foreach ($rk in 0, 1, 2) { foreach ($h in $hits) { if ($h.Rank -eq $rk) { $h } } })
+    $main = $sorted[0]
+    $main['Alt'] = @(if ($sorted.Count -gt 1) { $sorted[1..($sorted.Count - 1)] })
+    return $main
+}
+
+# K6-10 (kolo 6): vsechna cteni vysledku Get-UnwrappedCommand (hlavni + Alt) z jednoho mista - spotrebitel, ktery by Alt
+# zapomnel rozbalit, by posoudil jen prvni cteni (trida K5-3/K5-4).
+function Get-UnwrappedReadings($Unwrapped) {
+    return ,@(@($Unwrapped) + @($Unwrapped.Alt))
+}
+
+# K7-3/K7-4 (kolo 7): kazdy vyskyt obalu s vic ctenimi (telo heredocu a roury pro kazde cteni, kandidati vnitrniho prikazu
+# kontejneru) dostane vlastni skupinu; list nese ReadingGroup a Reading (poradi cteni). Write-GateAudit pak za skupinu zapise
+# udalost jen tolikrat, kolikrat ji nese nejbohatsi cteni - ruzne vyskyty se navzajem nepotlacuji. Vnoreny vyskyt si
+# skupinu necha (nejvnitrnejsi vyhrava, Set-LeafReading).
+# K8-1 (kolo 8): telo obalu se rozebira znovu PRI VERDIKTU kazdeho cteni (Test-ContainerLeaf -> Get-NestedShellLeaf). Skupina
+# zalozena v takovem rozboru je proto `<skupina vnejsiho cteni>.<poradi v nem>` - n-ta skupina tela ma v kazdem vnejsim cteni
+# tyz klic a Invoke-LeafVerdict ji vede pod cestou vnejsiho cteni. Jinak by kazde vnejsi cteni zalozilo novou skupinu
+# a udalost tela by se zapsala tolikrat, kolik cteni ma vnejsi obal.
+# K9-2/K9-3 (kolo 9, zamitnuto): poradi je pozicni - lisi-li se vnejsi cteni POCTEM listu, ktere telo rozebiraji znovu,
+# muze se udalost zapsat vickrat (soucet maxim po pozicich >= maximum souctu). Jen nadpocet, nikdy chybejici radek; verdikt beze zmeny.
+$script:ReadingGroupSeq = 0
+$script:ReadingGroupLocal = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
+function New-ReadingGroup {
+    $ctx = $script:AuditReading
+    if ($null -eq $ctx) {
+        $script:ReadingGroupSeq++
+        return [string]$script:ReadingGroupSeq
+    }
+    $key = [string]$ctx.G + '|' + [string]$ctx.R
+    $n = 1
+    if ($script:ReadingGroupLocal.ContainsKey($key)) { $n += $script:ReadingGroupLocal[$key] }
+    $script:ReadingGroupLocal[$key] = $n
+    return ([string]$ctx.G + '.' + $n)
+}
+function Set-LeafReading($Leaf, [string]$Group, [int]$Reading) {
+    if ([string](Get-LeafField $Leaf 'ReadingGroup' '') -ne '') { return }
+    $Leaf['ReadingGroup'] = $Group
+    $Leaf['Reading'] = $Reading
+}
+
+# Hodnoty `-e/--env` obalu kontejneru jako text pro Get-DbHosts. CR-3 (kolo 1 /code-review): pruchozi `-e PGHOST` (bez `=`)
+# preda vnitrnimu prikazu hodnotu z prostredi hostitele - stoji-li v TEMZE prikazu (`PGHOST=x docker ...`, `export PGHOST=x; ...`,
+# `$env:PGHOST = 'x'; ...`), vezme se odtud. Jinak hodnotu nevidime -> hostitel neznamy = mistni (`ask`, ne ticho);
+# totez `--env-file` (obsah souboru v prikazu neni, README omezeni 11).
+# K8-6/K8-7 (kolo 8): tytez promenne tehoz obalu se ptaji vickrat (vetev prefixu, Get-ContainerLeaves, Get-UnwrappedCommand) -
+# vysledek plati, dokud nepribude rozebirany text.
+$script:ContainerEnvCache = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+function Resolve-ContainerEnv($Envs) {
+    $cacheKey = [string]$script:ParsedTexts.Count + [char]0 + (@($Envs | ForEach-Object { [string]$_ }) -join [string][char]0)
+    if ($script:ContainerEnvCache.ContainsKey($cacheKey)) { return $script:ContainerEnvCache[$cacheKey] }
+    # K7-2 (kolo 7): prirazeni se hleda ve VSECH textech, ktere beh rozebira (Register-ParsedText) - dekodovany
+    # `-EncodedCommand` v $script:FullCommand neni a vzdaleny hostitel by se tam cetl jako neznamy (mistni, `ask`).
+    # K8-6: hlavni prikaz je mezi nimi (Get-CommandLineLeaves ho zapise prvni); samostatne jen pred prvnim rozborem.
+    $texts = @(foreach ($pt in $script:ParsedTexts) { [string]$pt.Text })
+    if ($texts.Count -eq 0) { $texts = @([string]$script:FullCommand) }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($e in @($Envs)) {
+        $v = [string]$e
+        if ($v -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { [void]$out.Add($v); continue }
+        $n = [regex]::Escape($v)
+        $val = '("[^"]*"|''[^'']*''|[^\s;&|]+)'
+        foreach ($text in $texts) {
+            # K2-4 (kolo 2): prirazeni muze stat i hned za uvozovkou tela obalu (`bash -c "PGHOST=x docker ..."`).
+            foreach ($m in [regex]::Matches($text, ('(?:^|[\s;&|("''])(?:export\s+)?' + $n + '=' + $val))) {
+                [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
+            }
+            foreach ($m in [regex]::Matches($text, ('\$env:' + $n + '\s*=\s*' + $val), 'IgnoreCase')) {
+                [void]$out.Add($v + '=' + $m.Groups[1].Value.Trim('"').Trim("'"))
+            }
+        }
+    }
+    $res = (@($out | Select-Object -Unique) -join ' ')
+    $script:ContainerEnvCache[$cacheKey] = $res
+    return $res
+}
+
+# TASK-179 (0.3.1): listy VNITRNIHO prikazu kontejneroveho obalu (Get-ContainerCommand v _common.ps1). List obalu samotny
+# (`Exe = docker`) vznika dal beze zmeny, takze vsechna pravidla nad nim maji dnesni verdikt. Vnitrni listy nesou priznak
+# Container: Test-Leaf na ne pousti JEN DB pravidlo (AOPT-O25 - cesty a git v obrazu zustavaji README omezenim 11)
+# a `gate.dbDestroyLocal = allow` se jich nikdy netyka (AOPT-O26). Hostitel = vnitrni prikaz + promenne prostredi,
+# ktere obal predava (`-e PGHOST=...`), nikdy volby obalu (`-H` enginu, `run -h` hostname kontejneru).
+function Get-ContainerLeaves($Argv, [int]$Depth, [string]$SkipTail = '', $Parsed = $null, [string]$Group = '') {
+    $out = New-Object System.Collections.ArrayList
+    # K4-8 (kolo 4): vetev prefixu rozbor uz ma - podruhe se nepocita.
+    $cc = if ($null -ne $Parsed) { $Parsed } else { Get-ContainerCommand $Argv }
+    if ($null -eq $cc) { return $out }
+    $envText = Resolve-ContainerEnv $cc.Env
+    # K7-3 (kolo 7): kandidati vnitrniho prikazu (surove a slepene ARGV, obe cteni nezname volby) jsou cteni TEHOZ obalu -
+    # jedna skupina pro audit. Cteni 0 je list starsiho pruchodu ve vetvi prefixu (ta skupinu predava v $Group).
+    $grp = if ($Group -ne '') { $Group } else { New-ReadingGroup }
+    $ti = 0
+    foreach ($t0 in $cc.Tails) {
+        $t = @($t0)
+        $ti++
+        if ($t.Count -eq 0) { continue }
+        # CR-5: vnitrni prikaz, ktery uz rozebral pruchod prefixovym obalem (vsemi pravidly), se podruhe nerozebira. Promenne
+        # obalu (`-e PGHOST=...`, K2-2) a zakaz `allow` nese od K3-6 rovnou ten starsi list (vetev prefixu v Get-CommandLeaf).
+        if ($SkipTail -ne '' -and (Join-Argument $t) -ceq $SkipTail) { continue }
+        foreach ($l in (Get-CommandLeaf (Join-Argument $t) ($Depth + 1))) {
+            $l['Container'] = $true
+            Set-LeafReading $l $grp $ti
+            # K4-2 (kolo 4): pripojit, ne prepsat - vnoreny obal (`docker exec outer docker exec -e PGHOST=... inner`) uz svou
+            # promennou do listu zapsal a vnejsi vrstva by ji jinak smazala.
+            Add-LeafContainerEnv $l $envText
+            [void]$out.Add($l)
+        }
+    }
+    return $out
 }
 
 # Test-ParameterPrefix a Test-EncodedCommandFlag ziji od 0.3.0 v _common.ps1 (Z117-Q27, A117-N16).
@@ -138,8 +311,12 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
         if ($stages.Count -lt 2) { continue }
 
         $sink = $stages[$stages.Count - 1]
-        $sinkExe = Get-UnwrappedExe $sink
-        if (-not ($SqlClients -ccontains $sinkExe.ToLowerInvariant())) { continue }
+        $sinkU0 = Get-UnwrappedCommand $sink
+        # K5-3/K5-4: klient muze byt i jen v dalsim cteni obalu (Alt) - telo roury se posoudi pro kazde cteni s klientem.
+        # Bez `@()` kolem volani a ne primo do roury: Get-UnwrappedReadings vraci `,@(...)` (N-H10).
+        $sinkReadings = Get-UnwrappedReadings $sinkU0
+        $sinks = @($sinkReadings | Where-Object { $SqlClients -ccontains ([string]$_.Exe).ToLowerInvariant() })
+        if ($sinks.Count -eq 0) { continue }
 
         $literal = New-Object System.Collections.ArrayList
         $opaque = $false
@@ -157,10 +334,18 @@ function Split-SqlPipeline([string]$Command, $SqlClients) {
             }
         }
 
-        if ($opaque) {
-            [void]$bodies.Add(@{ Outer = $sink; OuterExe = $sinkExe; Body = ''; Opaque = $true })
-        } elseif ($literal.Count -gt 0) {
-            [void]$bodies.Add(@{ Outer = $sink; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false })
+        # K6-6/K7-4: cteni tehoz obalu jsou jedna skupina - do auditu jde udalost jednou (New-ReadingGroup, Write-GateAudit).
+        $grp = New-ReadingGroup
+        for ($si = 0; $si -lt $sinks.Count; $si++) {
+            $sinkU = $sinks[$si]
+            $sinkExe = [string]$sinkU.Exe
+            if ($opaque) {
+                [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ''; Opaque = $true; Container = [bool]$sinkU.Container
+                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv; ReadingGroup = $grp; Reading = $si })
+            } elseif ($literal.Count -gt 0) {
+                [void]$bodies.Add(@{ Outer = $sinkU.Outer; OuterExe = $sinkExe; Body = ($literal -join ' ; '); Opaque = $false; Container = [bool]$sinkU.Container
+                                     NoAllow = [bool]$sinkU.NoAllow; ContainerEnv = [string]$sinkU.ContainerEnv; ReadingGroup = $grp; Reading = $si })
+            }
         }
     }
 
@@ -246,8 +431,16 @@ function Split-Heredoc([string]$Command) {
             }
             if ($j -ge $lines.Count) { $unterminated = $true }
             $myOuter = if ($d -lt $outerStages.Count) { [string]$outerStages[$d] } else { $outer }
-            [void]$bodies.Add(@{ Outer = $myOuter; OuterExe = (Get-UnwrappedExe $myOuter)
-                                 Body = ($bodyLines -join "`n") })
+            $myU0 = Get-UnwrappedCommand $myOuter
+            # K5-3/K5-4: telo se posoudi pro kazde cteni obalu (Alt) - plati nejhorsi verdikt.
+            $readings = Get-UnwrappedReadings $myU0
+            $grp = New-ReadingGroup
+            for ($ri = 0; $ri -lt $readings.Count; $ri++) {
+                $myU = $readings[$ri]
+                [void]$bodies.Add(@{ Outer = $myU.Outer; OuterExe = [string]$myU.Exe; Container = [bool]$myU.Container
+                                     NoAllow = [bool]$myU.NoAllow; ContainerEnv = [string]$myU.ContainerEnv
+                                     Body = ($bodyLines -join "`n"); ReadingGroup = $grp; Reading = $ri })
+            }
             $j++   # radek s ukoncovacim delimiterem se zahazuje
         }
 
@@ -371,6 +564,12 @@ function Get-InvokedLeaves([string]$Inner, [string]$ShellTool, [int]$Depth) {
 function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     $out = New-Object System.Collections.ArrayList
     if ([string]::IsNullOrWhiteSpace($Text)) { return $out }
+    # K6-1/K6-2 (TASK-179, kolo 6): text a jeho escape pro spojeni substituci v rozboru kontejneroveho obalu (_common.ps1);
+    # K7-2: i pro prirazeni promennych pruchozich `-e VAR` (Resolve-ContainerEnv).
+    Register-ParsedText $Text
+    # CR-S4 (TASK-179, kolo 3): text, ktery se prave rozebira - holy `iex` v nem hleda literaly roury (Get-CommandLeaf).
+    $prevLineText = $script:LineText
+    $script:LineText = $Text
 
     # Tela heredocu se vytahnou PRED delenim - jinak by se telo stalo samostatnym
     # podprikazem bez hosta a vzdalena operace by se cetla jako lokalni (Amber A4).
@@ -384,9 +583,44 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     foreach ($sub in (Split-CommandLine $pl.Rest @('&'))) {
         foreach ($l in (Get-CommandLeaf $sub $Depth)) { [void]$out.Add($l) }
     }
+    # CR-V2 (TASK-179, kolo 6): statement, ktery zacina VYRAZEM (`[Environment]::X(...) + (psql ...)`), Get-CommandLeaf
+    # nerozebira (Test-ExpressionStatement) - prikaz v zavorce se nespustil pres zadne pravidlo (i v 0.3.0). V PowerShellu
+    # proto rozhoduje i parser PowerShellu: kazdy prikaz (CommandAst), jehoz text zadny list nema, se rozebere navic.
+    # Prikaz s blokem skriptu (`& { ... }`, `ForEach-Object { ... }`) se preskoci - jeho vnitrni prikazy jsou vlastni
+    # CommandAst a blok uz rozebral Get-CommandLeaf.
+    # CR-W5/W6 (kolo 7): porovnani textu bez operatoru spusteni a obalovych zavorek (`& x`, `(x)`); hloubka se nezvysuje
+    # (prikaz ve vyrazu je na teze urovni jako statement).
+    # List z parseru nese `FromAst` - Test-DbAllowContext ho bere jako slozeny tvar (prikaz uvnitr vyrazu).
+    # CR-X1 (kolo 8): prikaz spusti i `return` / `throw` bez zavorky.
+    # CR-Z1/Z2 (kolo 10): odhad "zavorka, @{ nebo return/throw/exit za oddelovacem" z kola 9 (CR-Y5) minul statement za
+    # zaviraci slozenou zavorkou (`try {} catch {} <prikaz>`, `function f {} <prikaz>`) i za samotnym CR.
+    # CR-AA6 (kolo 11): parser se nespousti jen u textu BEZ jakekoli zavorky `( ) { }`, `@`, CR a slov return/throw/exit
+    # (kdekoli, ne jen za oddelovacem) - takovy text nema vyraz ani blok, ve kterem by prikaz stal mimo statement.
+    # CR-X8: obalova zavorka se strhava jen jako JEDEN par (`(a) + (b)` ne).
+    if ((Get-ScannerEscape) -eq '`' -and ($pl.Rest.IndexOfAny([char[]]@('(', ')', '{', '}', '@', "`r")) -ge 0 -or
+        $pl.Rest -match '(?i)\b(?:return|throw|exit)\b')) {
+        $normCmd = {
+            param($s)
+            $t = ([string]$s).Trim()
+            while ($t.StartsWith('(') -and $t.EndsWith(')') -and (Find-CloseParen $t 1) -eq $t.Length) { $t = $t.Substring(1, $t.Length - 2).Trim() }
+            ($t -replace '^[&.]\s+', '').Trim()
+        }
+        $raws = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($l in $out) { [void]$raws.Add((& $normCmd $l.Raw)) }
+        $tk = $null; $pe = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($pl.Rest, [ref]$tk, [ref]$pe)
+        $cmds = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true))
+        foreach ($ca in $cmds) {
+            $ct = $ca.Extent.Text.Trim()
+            if (-not $raws.Add((& $normCmd $ct))) { continue }
+            if ($null -ne $ca.Find({ param($a) $a -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true)) { continue }
+            foreach ($l in (Get-CommandLeaf $ct $Depth)) { $l['FromAst'] = $true; [void]$out.Add($l) }
+        }
+    }
     foreach ($b in $hd.Bodies) {
         [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+                          Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; ReadingGroup = [string]$b.ReadingGroup; Reading = [int]$b.Reading })
     }
     # Neukonceny heredoc: nevime, kde telo konci, takze nevime, co se spusti.
     if ($hd.Unterminated) {
@@ -395,12 +629,15 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
     foreach ($b in $pl.Bodies) {
         if ($b.Opaque) {
             [void]$out.Add(@{ Kind = 'sqlPipeOpaque'; Exe = 'sql-pipe'; Args = @(); Raw = $b.Outer
-                              Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+                              Text = $b.Outer; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; ReadingGroup = [string]$b.ReadingGroup; Reading = [int]$b.Reading })
         } else {
             [void]$out.Add(@{ Kind = 'heredoc'; Exe = 'heredoc'; Args = @(); Raw = $b.Body
-                              Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @() })
+                              Text = $b.Body; Outer = $b.Outer; OuterExe = $b.OuterExe; GitConfig = @(); Container = [bool]$b.Container
+                          NoAllow = [bool]$b.NoAllow; ContainerEnv = [string]$b.ContainerEnv; ReadingGroup = [string]$b.ReadingGroup; Reading = [int]$b.Reading })
         }
     }
+    $script:LineText = $prevLineText
     return $out
 }
 
@@ -422,6 +659,9 @@ function Get-CommandLineLeaves([string]$Text, [int]$Depth) {
 # Jen PowerShell nastroj - tvar `invoked` se ve vzorku vyskytl jen tam.
 $script:LiteralAssign = @{}
 $script:FullCommand = ''
+$script:LineText = ''
+$script:IexLiteralScan = $false
+$script:AllLeaves = @()
 $script:EnvLiteralNames = '(?:LOCALAPPDATA|TEMP|TMP|USERPROFILE|APPDATA|HOME)'
 
 function Get-LiteralAssignment([string]$Command) {
@@ -512,6 +752,202 @@ function Expand-LiteralHead([string]$Head, [string]$Raw) {
     return $out
 }
 
+# Prirazeni a presmerovani pred prikazem (Get-CommandLeaf). CR-Z3 (kolo 10): hodnota prirazeni i cil presmerovani je cele
+# SLOVO shellu - kvotovane casti, escape a nekvotovane znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni).
+# CR-AA1 (kolo 11): slovo tvori i substituce `$( ... )` / `$(( ... ))` (zavorky parovane, kvotovane zavorky se nepocitaji),
+# `${ ... }` a v Bashi zpetne apostrofy. CR-AA8: regex se sestavi jednou pro kazdy escape znak.
+# A179-O9 (2026-10-22): Bash tenhle regex nepouziva (Get-BashCommandStart); slovo je atomicka skupina - bez ni regex nad
+# hodnotou s mnoha substitucemi, za kterou nestoji mezera, zkousel kazde rozdeleni na substituce a znaky (CR-AB1, cas
+# rostl exponencialne a hook by prekrocil timeout = bez verdiktu).
+$script:PrefixStripRegexes = @{}
+function Get-PrefixStripRegex {
+    $esc = [string](Get-ScannerEscape)
+    if ($script:PrefixStripRegexes.ContainsKey($esc)) { return $script:PrefixStripRegexes[$esc] }
+    $escRx = [regex]::Escape($esc)
+    $subst = '\$\((?>"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]|[^()"''' + $escRx + ']+|\((?<d>)|\)(?<-d>))*(?(d)(?!))\)|\$\{[^}]*\}'
+    $wq = $subst + '|"(?:[^"' + $escRx + ']|' + $escRx + '[\s\S])*"|''[^'']*''|' + $escRx + '[\s\S]'
+    $wordValue = '(?>(?:' + $wq + '|[^\s"''' + $escRx + '])*)'
+    $wordTarget = '(?>(?:' + $wq + '|[^\s"''<>' + $escRx + '])+)'
+    $rx = [regex]::new('^\s*(?:[A-Za-z_][A-Za-z0-9_]*=' + $wordValue + '\s+|[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)\s*' + $wordTarget + '\s*)+')
+    $script:PrefixStripRegexes[$esc] = $rx
+    return $rx
+}
+
+# A179-O9 (Amber 2026-10-22, TASK-179): kola /code-review 10-13 nad rucni gramatikou slova Bashe (substituce, `${}`, uvozovky,
+# `case`, rezervovana slova) nekonvergovala - kazde naslo dalsi konstrukci, kterou skener necte. Misto dalsi gramatiky JEDNO
+# fail-closed pravidlo: pred prikazem smi v Bashi stat jen PROSTA slova (hodnota prirazeni, cil presmerovani, slovo a vzor
+# `case`) a stoji-li tam cokoli z toho, musi byt prostym slovem i hlava prikazu. Proste slovo = znaky bez `$`, zpetneho
+# apostrofu, zavorek, escape, uvozovek a oddelovacu, NEBO jeden cely retezec v apostrofech / uvozovkach (v uvozovkach bez `$`,
+# zpetneho apostrofu a escape, ktery neco znamena). Uvozovka uprostred slova prosta neni. Cokoli jineho = `Bad` = deny
+# `opaque:shellWord` s hlaskou, ktera jmenuje nahradu.
+# A179-O11 (Amber 2026-10-22): pravidlo plati pro KAZDOU hlavu prikazu (brace expanze, zpetne apostrofy, `$( ... )` a
+# glob v hlave spusti neco, co hook nevidi). Vyjimky bez prefixu: hola promenna (`$X`, `${X}`, `"$X"`, `"${X}"` = `variable`,
+# audit T36/Q102), zacatek bloku `{ ...; }`, subshellu `( ... )` a definice funkce `f()` - ty rozebira Get-CommandLeaf dal.
+# A179-O12 (Amber 2026-10-22): HODNOTA prirazeni smi navic nest prosty odkaz na promennou (`$NAME`, `${NAME}`, `$1`, `$@`,
+# i v uvozovkach) - nic nespousti a konec slova se urci stejne trivialne (nic se nevnoruje). Operatory `${A:-...}`, `$(`,
+# zpetne apostrofy a uvozovka uprostred dal ne; v hlave prikazu jen hola promenna (O11).
+$script:BashVarRef = '\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{[A-Za-z_][A-Za-z0-9_]*\})'
+$script:BashPlainWord = '(?:[^\s$`"''\\(){}<>;&|]+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n])*")'
+$script:BashValueWord = '(?:(?:[^\s$`"''\\(){}<>;&|]|' + $script:BashVarRef + ')+|''[^'']*''|"(?:[^"$`\\]|\\[^"$`\\\r\n]|' + $script:BashVarRef + ')*")'
+$script:BashBareVar = '(?<q>"?)' + $script:BashVarRef + '\k<q>'
+# CR-AE7/AE8 (kolo 15): i tvar `function f`, `function f()` a jmeno s teckou / dvojteckou (`lib.helper()`, `ns::f()`).
+$script:BashFuncDef = '(?:function\s+[^\s$`"''\\(){}<>;&|]+(?:\s*\(\s*\))?|[A-Za-z_][A-Za-z0-9_.:-]*\s*\(\s*\))'
+$script:BashZoneRx = @{
+    Ws      = [regex]'\G\s*'
+    Keyword = [regex]'\G(?:then|do|else|elif|if|while|until|coproc|!)(?=\s|$)'
+    Case    = [regex]'\Gcase(?=\s)'
+    In      = [regex]'\Gin(?=\s|$)'
+    Assign  = [regex]'\G[A-Za-z_][A-Za-z0-9_]*\+?='
+    Redir   = [regex]'\G[0-9]*(?:<<<|<>|>\||>>|>&|<&|&>>|&>|>|<)'
+    Word    = [regex]('\G' + $script:BashPlainWord)
+    Value   = [regex]('\G' + $script:BashValueWord)
+    # Slovo `case` smi byt i HOLA promenna (`case $1 in`, `case "${x}" in`) - nic nespousti a je to bezny tvar.
+    CaseWord = [regex]('\G(?:' + $script:BashPlainWord + '|' + $script:BashBareVar + ')')
+    Pattern = [regex]('\G\(?\s*' + $script:BashPlainWord + '(?:\s*\|\s*' + $script:BashPlainWord + ')*\s*\)')
+    ArmLike = [regex]'\G(?!\)(?:\s|$))\S*\)(?=\s|$)'
+    BareVar = [regex]('\G' + $script:BashBareVar)
+    # Zacatek bloku / subshellu (komentar `#` konci rozbor hned na zacatku smycky, definice funkce se preskoci jako slovo).
+    Structural = [regex]'\G(?:\(|\{(?=\s))'
+    # CR-AD4 (kolo 14, dira i v 0.3.0): `f()` se preskoci jako rezervovane slovo - telo (`{ ... }` i `( ... )`) se pak cte
+    # jako statement (do kola 14 byla hlava `f()` a telo v subshellu nerozebral nikdo).
+    FuncDef = [regex]('\G' + $script:BashFuncDef + '(?=\s|$|[({<>])')
+    Arith   = [regex]'\G\(\('
+    # Konec viceradkoveho bloku / subshellu (segment `} > log`, `) > log`) - cte se jako prefix: za nim smi stat jen
+    # presmerovani nebo prosta hlava.
+    Closer  = [regex]'\G[})](?=\s|$|[<>;&|])'
+    Glob    = [regex]'[*?]|\[(?!\[?$)'
+}
+function Test-BashWordEnd([string]$Text, [int]$Pos) {
+    return ($Pos -ge $Text.Length -or $Text[$Pos] -match '[\s<>;&|]')
+}
+# CR-AG7 (kolo 17): ocas za `)` je jen prosta presmerovani (zadna hlava, nic neprosteho) - pro CR-AD1 (CR-AF3 vracen, A179-O14).
+function Test-BashRedirectOnlyTail([string]$Tail) {
+    $tz = Get-BashCommandStart $Tail -NoArm
+    # CR-AI4 (kolo 19): komentar za presmerovanim (`( ... ) > out # log`) nic nespousti.
+    return (-not $tz.Bad -and ($tz.Start -ge $Tail.Length -or $Tail[$tz.Start] -eq [char]'#'))
+}
+# Vraci @{ Start = index hlavy prikazu; Bad = $true, kdyz pred prikazem nebo v hlave za prefixem stoji neproste slovo }.
+# Rezervovana slova (`if`, `then`, `!` ...) se preskoci (CR-AA10), ale hlavu prostou nevyzaduji - nejsou to hodnoty.
+# Vzor vetve `case` (CR-AA9) se cte za `case <slovo> in` a na zacatku segmentu za `;;`; tam jen kdyz za `)` neco stoji -
+# `(rm)` je subshell, ne vetev.
+# `-NoArm` (CR-AG3, kolo 17): bez vzoru vetve na zacatku - pro ocas za `)` (Test-BashRedirectOnlyTail), jinak by rada slov
+# `a) a) ...` rekurzi kopirovala text kvadraticky.
+function Get-BashCommandStart([string]$Text, [switch]$NoArm) {
+    $r = $script:BashZoneRx
+    $n = $Text.Length
+    $pos = 0
+    $prefix = $false
+    $first = -not $NoArm
+    for ($guard = 0; $guard -lt 256; $guard++) {
+        $pos += $r.Ws.Match($Text, $pos).Length
+        if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
+        # Komentar: segment konci koncem radku (Split-CommandLine deli i na nem), takze za `#` uz zadny prikaz nestoji.
+        if ($Text[$pos] -eq [char]'#') { return @{ Start = $pos; Bad = $false } }
+        # A179-O14 (Amber 2026-10-22): heuristiky fragmentu ROZDELENEHO subshellu (Split-CommandLine deli i uvnitr `( ... )`;
+        # kola 15-17: odlamovani `)` CR-AE4/AF6/AG4, preskok `(` CR-AF1/AG1, ocas za slovem s `)` CR-AF3/AG2) jsou vraceny -
+        # kola 16-18 v nich nachazela regrese. Prvni a posledni prikaz rozdeleneho subshellu je dira 0.3.0 (README mez 27),
+        # oprava = hloubka `( )` ve skeneru (CR-AF5) ve verzi 0.4.1 (puvodne 0.3.2, A179-O19).
+        $m = $r.Keyword.Match($Text, $pos)
+        if (-not $m.Success) { $m = $r.FuncDef.Match($Text, $pos) }
+        if ($m.Success) { $pos += $m.Length; $first = $false; continue }
+        $m = $r.Case.Match($Text, $pos)
+        if ($m.Success) {
+            $pos += $m.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            $w = $r.CaseWord.Match($Text, $pos)
+            if (-not $w.Success -or -not (Test-BashWordEnd $Text ($pos + $w.Length))) { return @{ Start = $pos; Bad = $true } }
+            $pos += $w.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            $m = $r.In.Match($Text, $pos)
+            if (-not $m.Success) { return @{ Start = $pos; Bad = $true } }
+            $pos += $m.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            if ($pos -ge $n) { return @{ Start = $pos; Bad = $false } }
+            $m = $r.Pattern.Match($Text, $pos)
+            if (-not $m.Success) {
+                # Vzor `a|b)` rozdeli Split-CommandLine na `|` - tady zbude jen prvni prosta alternativa, prikaz vetve je
+                # v dalsim segmentu (`b) prikaz`) a rozebere se tam.
+                $w = $r.Word.Match($Text, $pos + ($(if ($Text[$pos] -eq '(') { 1 } else { 0 })))
+                if ($w.Success -and $Text.Substring($w.Index + $w.Length).Trim() -eq '') { return @{ Start = $n; Bad = $false } }
+                return @{ Start = $pos; Bad = $true }
+            }
+            $pos += $m.Length; $prefix = $true; $first = $false; continue
+        }
+        if ($first) {
+            $m = $r.Pattern.Match($Text, $pos)
+            if ($m.Success) {
+                # CR-AD2/AD3 (kolo 14): bez niceho za `)` je to konec subshellu jednim slovem (`(cd x; ls)` -> segment
+                # `ls)`), cely subshell `(sh)` nebo vzor `case` na samostatnem radku. CR-AE5 (kolo 15): rozebira se dal od
+                # zacatku (`(sh)` rozbali zavorkovy obal; `ls)` zustava listem jako v 0.3.0, A179-O14). Glob se tu nehlida:
+                # vzor `*)` je bezny.
+                if ($Text.Substring($pos + $m.Length).Trim() -eq '') { return @{ Start = $pos; Bad = $false } }
+                # CR-AI1 (kolo 19): CELY subshell jednim slovem s presmerovanim (`(psql) < drop.sql`) neni vetev `case`
+                # - rozebere ho cesta celeho subshellu v Get-CommandLeaf (Find-CloseParen, ocas jen presmerovani).
+                if ($Text[$pos] -eq [char]'(' -and (Test-BashRedirectOnlyTail $Text.Substring($pos + $m.Length))) { return @{ Start = $pos; Bad = $false } }
+                $pos += $m.Length; $prefix = $true; $first = $false; continue
+            }
+            # Prvni slovo zakoncene `)` (vzor vetve), ktere prosty vzor neni (`$(x))`, escape) - za nim muze stat prikaz vetve.
+            # Neni to aritmetika `(( ... ))`.
+            if ($r.ArmLike.IsMatch($Text, $pos) -and -not $r.Arith.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $true } }
+        }
+        $first = $false
+        $m = $r.Closer.Match($Text, $pos)
+        if ($m.Success) { $pos += $m.Length; $prefix = $true; continue }
+        $m = $r.Assign.Match($Text, $pos)
+        if ($m.Success) {
+            $pos += $m.Length
+            $w = $r.Value.Match($Text, $pos)
+            if ($w.Success) { $pos += $w.Length }
+            if (-not (Test-BashWordEnd $Text $pos)) { return @{ Start = $pos; Bad = $true } }
+            $prefix = $true; continue
+        }
+        $m = $r.Redir.Match($Text, $pos)
+        if ($m.Success) {
+            $pos += $m.Length
+            $pos += $r.Ws.Match($Text, $pos).Length
+            $w = $r.Word.Match($Text, $pos)
+            if (-not $w.Success -or -not (Test-BashWordEnd $Text ($pos + $w.Length))) { return @{ Start = $pos; Bad = $true } }
+            $pos += $w.Length; $prefix = $true; continue
+        }
+        $w = $r.Word.Match($Text, $pos)
+        if ($w.Success -and (Test-BashWordEnd $Text ($pos + $w.Length))) {
+            # Glob v nekvotovane hlave (`/bin/r?`) vybere program az shell.
+            $bad = ($w.Value[0] -ne [char]"'" -and $w.Value[0] -ne [char]'"' -and $r.Glob.IsMatch($w.Value))
+            return @{ Start = $pos; Bad = $bad }
+        }
+        if (-not $prefix) {
+            if ($r.Structural.IsMatch($Text, $pos)) { return @{ Start = $pos; Bad = $false } }
+            $v = $r.BareVar.Match($Text, $pos)
+            if ($v.Success -and (Test-BashWordEnd $Text ($pos + $v.Length))) { return @{ Start = $pos; Bad = $false } }
+        }
+        return @{ Start = $pos; Bad = $true }
+    }
+    return @{ Start = $pos; Bad = $true }
+}
+
+# A179-O9: prirazeni mezi obalem a prikazem (`env X=... prikaz`, `sudo X=... prikaz`) je prefix stejne jako pred prikazem.
+# Tokeny uz prosly Split-Arguments (uvozovky pryc), proto se tu hlida jen `$`, zpetny apostrof a zavorky. Ocas, ktery neni
+# koncem ARGV (`env -S`), se nekontroluje - jeho text rozebira Get-WrapperTail sam.
+function Test-WrapperPrefixUnplain($Argv, $Tail) {
+    $end = $Argv.Count - $Tail.Count
+    if ($end -lt 1) { return $false }
+    for ($k = 0; $k -lt $Tail.Count; $k++) { if ([string]$Argv[$end + $k] -cne [string]$Tail[$k]) { return $false } }
+    $seen = $false
+    for ($i = 1; $i -lt $end; $i++) {
+        $t = [string]$Argv[$i]
+        if ($null -eq (Get-AssignmentName $t)) { continue }
+        $seen = $true
+        # A179-O12: prosty odkaz na promennou v hodnote smi (`env PATH=$PATH:/x ...`).
+        if (([regex]::Replace($t.Substring($t.IndexOf('=') + 1), $script:BashVarRef, '')) -match '[$`(){}]') { return $true }
+    }
+    $head = [string]$Tail[0]
+    if ($seen) { return ($head -match '[$`(){}]') }
+    # A179-O11: hlava za obalem bez prirazeni smi byt hola promenna (`sudo $TOOL x`, `exec "$@"` = `variable`; CR-AD7 kolo 14:
+    # tataz mnozina jako BareVar). Join-Argument by jinak token se substituci a mezerou (`$(echo rm)`) obalil apostrofy
+    # a rekurze by ho cetla jako proste slovo.
+    return ($head -match '[$`(){}]' -and $head -notmatch ('^' + $script:BashVarRef + '$'))
+}
+
 # Rozbali obaly (bash -c, cmd /c, eval, xargs, sudo, find -exec, ...) na listy.
 # Obal s literalem -> rozebrat vnitrek. Obal s promennou -> 'opaque' (= ask).
 function Get-CommandLeaf([string]$Sub, [int]$Depth) {
@@ -533,10 +969,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # jako `& $x`, jen v aktualnim scope. Resi se tady vedle `&`, ne jako `exe`: kdyby
     # se cekalo az na Split-Arguments, byl by argv[0] jen tecka a priznak by se ztratil.
     # Bila znaka za teckou je podminka - `./script.sh` ani `cd ..` dot-source nejsou.
-    elseif ($trimmed -match '^\.\s') {
+    # CR-AE6 (kolo 15): `source` je v Bashi synonymum tecky (jen malymi pismeny - CR-AF7, kolo 16; jedna vetev - CR-AF9).
+    elseif ($trimmed -cmatch '^\.\s' -or ((Get-ScannerEscape) -eq '\' -and $trimmed -cmatch '^source\s')) {
         $invoked = $true
         $trimmedHadDot = $true
-        $trimmed = $trimmed.Substring(1).Trim()
+        $trimmed = $trimmed.Substring($(if ($trimmed[0] -eq [char]'.') { 1 } else { 6 })).Trim()
         if ($trimmed -eq '') { return $out }
     }
 
@@ -571,8 +1008,38 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         return $out
     }
 
-    $stripped = [regex]::Replace($trimmed,
-        '^\s*([A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|''[^'']*''|\S*)\s+)+', '')
+    # CR-U2 + CR-V1 (TASK-179, kola 5 a 6): pred prikazem muze stat prirazeni i presmerovani v libovolnem poradi a bez
+    # mezery mezi presmerovanimi (`>out X=1 rm -rf src`, `2>/dev/null>out rm -rf src`, `<>f`, `>|f`, `<<<x`, `>nul rd ...`
+    # v cmd) - jinak by exe vyslo `>out` a zadne pravidlo nesedlo. Zbyde-li na zacatku `<` nebo `>`, tvar je nerozebratelny.
+    # CR-Z3 (kolo 10): hodnota prirazeni i cil presmerovani je cele SLOVO shellu - kvotovane casti, escape a nekvotovane
+    # znaky v libovolnem poradi (`X=a"b c" rm -rf src` je jedno prirazeni, ne `X=a"b` a prikaz `c"`).
+    # CR-AA1/AA2 (kolo 11): i substituce s mezerou uvnitr (`X=$(echo a b)`, `$((1 + 2))`, `${Y:-a b}`, zpetne apostrofy
+    # v Bashi). Zbude-li za prefixem slovo se zavorkou, slozenou zavorkou nebo zpetnym apostrofem z neuzavrene substituce,
+    # tvar je nerozebratelny. Regex je jeden na escape znak (Get-PrefixStripRegex).
+    # CR-AA9 / CR-AA10 (kolo 11, diry i v 0.3.0): v Bashi pred prikazem stoji i rezervovana slova (`if`, `then`, `do`, `!` ...)
+    # a vzor vetve `case` - do 0.3.0 byl prikazem `then` nebo `<vzor>)` a zadne pravidlo nesedlo.
+    # A179-O9 (2026-10-22): v Bashi prefix, rezervovana slova i `case` cte Get-BashCommandStart; neproste slovo pred prikazem
+    # (nebo hlava za prefixem) = nerozebiratelne = deny `opaque:shellWord`.
+    if ((Get-ScannerEscape) -eq '\') {
+        $zone = Get-BashCommandStart $trimmed
+        # CR-AF4 (kolo 16, regrese O11): za teckou / `source` je slovo CESTA spousteneho souboru, ne hlava prikazu - cesta
+        # s promennou (`source $VIRTUAL_ENV/bin/activate`) je spusteni obsahu, ktery hook nevidi = `invoked` (audit) jako do
+        # 0.3.0, ne `shellWord`.
+        if ($zone.Bad -and $trimmedHadDot -and $zone.Start -eq 0) { [void]$out.Add((New-OpaqueLeaf $raw 'invoked')); return $out }
+        if ($zone.Bad) { [void]$out.Add((New-OpaqueLeaf $trimmed 'shellWord')); return $out }
+        $stripped = $trimmed.Substring($zone.Start)
+        # CR-AD5 (kolo 14): tecka (dot-source = spusteni) za rezervovanym slovem nebo vzorem (`then . $x`) - do kola 13 se
+        # slova strhavala rekurzi, ktera `. ` poznala nahore. Rekurze tu zustava jen pro tenhle tvar.
+        if ($zone.Start -gt 0 -and $stripped -cmatch '^(?:\.|source)\s') {
+            foreach ($l in (Get-CommandLeaf $stripped ($Depth + 1))) { [void]$out.Add($l) }
+            return $out
+        }
+    } else {
+        $stripped = (Get-PrefixStripRegex).Replace($trimmed, '')
+        if ($stripped.Length -lt $trimmed.Length -and $stripped -match '^\s*[^\s]*[)}`]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
+    }
+    if ($stripped.Trim() -eq '' -and $trimmed -match '^\s*[0-9]*[<>&]') { return $out }
+    if ($stripped -match '^\s*[<>]') { [void]$out.Add((New-OpaqueLeaf $trimmed 'depth')); return $out }
 
     # PowerShellove PRIRAZENI `$x = <prikaz>` neni volani promenne v pozici prikazu.
     # Bez teto vetve bral Test-Unexpandable `$out` jako promennou v pozici prikazu
@@ -627,6 +1094,34 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # rozebira DAL jako bezny prikaz; rekurze tu neni, bloky uz v `$out` jsou.
     if ($blocks.Whole) { return $out }
 
+    # CR-AD1 (kolo 14, dira i v 0.3.0): subshell, za kterym stoji jen presmerovani (`( ... ) > log`, `( ... ) 2>&1`) - regex
+    # nize chtel `)` na konci, takze vnitrek nikdo nerozebral. Ocas se cte Get-BashCommandStart: musi to byt jen prosta
+    # presmerovani (skoncit na konci textu bez hlavy), jinak se tvar posuzuje jako dosud.
+    # A179-O14: konec subshellu hleda Find-CloseParen (uvozovky, escape, komentar) - regex `)` posledni v textu bral i `)`
+    # z `$( ... )` uvnitr uvozovek prvniho prikazu rozdeleneho subshellu (`(cd "$(git rev-parse ...)" && make)`) a ocas `"`
+    # skoncil falesnym deny (regrese CR-AE2). Neuzavreny `(` (fragment rozdeleneho subshellu) sem nepatri - jde starou cestou.
+    # CR-AI7 (kolo 19): escape a aritmetika `((` ze sdileneho vzoru.
+    # CR-AJ1-AJ3 (kolo 20): zaloha "posledni `)` v textu" z kola 19 (CR-AI2/AI5) poslala celou cestu starym regexem i u `)`
+    # procesni substituce nebo komentare (`( ... ) > >(tee log)`) - z deny bylo allow. Vracena: uzavre-li Find-CloseParen subshell
+    # pred koncem textu, rozhoduje jeho konec a ocas, ktery neni jen presmerovani, je deny (CR-AE2); neuzavre-li ho, jde tvar
+    # starou cestou 0.3.0 (CR-AK1/AK2: ANSI-C `$'...'`, `((...) )` - README mez 27). Cena: vnoreny subshell s presmerovanim na konci rozdeleneho subshellu
+    # a uvozovky vnorene v `$( ... )` uvnitr uvozovek (Find-CloseParen je nevnoruje, CR-AJ5 -> 0.4.1) = falesny deny.
+    if ((Get-ScannerEscape) -eq '\') {
+        $lead = [regex]::Match($stripped, '^\s*\(')
+        if ($lead.Success -and -not $script:BashZoneRx.Arith.IsMatch($stripped, $lead.Index + $lead.Length - 1)) {
+            $close = Find-CloseParen $stripped $lead.Length
+            if ($close -lt $stripped.Length -and $stripped.Substring($close).Trim() -ne '') {
+                $inner = $stripped.Substring($lead.Length, $close - 1 - $lead.Length)
+                if ($inner.Trim() -ne '' -and (Test-BashRedirectOnlyTail $stripped.Substring($close))) {
+                    foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
+                    return $out
+                }
+                # CR-AE2 (kolo 15): ocas, ktery neni jen prosta presmerovani (`> "$LOG"`, `<<EOF`, slovo za `)`), = nerozebiratelne.
+                [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out
+            }
+        }
+    }
+
     $paren = [regex]::Match($stripped, '^\s*(?:&\s*)?[$@]?\(\s*(.*?)\s*\)\s*$')
     if ($paren.Success -and $paren.Groups[1].Value.Trim() -ne '') {
         # TASK-106 bod 15: uvnitr obalu, ktery text spousti, je substituce v hlave
@@ -643,7 +1138,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     $argv = Split-Arguments $stripped
     if ($argv.Count -eq 0) { return $out }
 
-    if (Test-Unexpandable $argv[0]) {
+    # CR-AE1/AE3 (kolo 15): pozicni a specialni parametr v hlave (`$1`, `"$@"`) je hola promenna stejne jako `$X` (A179-O11)
+    # - Test-Unexpandable zna jen jmena, takze bez tohohle byla hlava `$1` obycejny list bez pravidla a bez auditu.
+    if ((Test-Unexpandable $argv[0]) -or ((Get-ScannerEscape) -eq '\' -and [string]$argv[0] -match ('^' + $script:BashVarRef))) {
         # `& $cmd` obsah promenne SPUSTI, `$out` nebo `"EXIT=$code"` ne. Priznak `$invoked`
         # se proto musi DONEST az sem - jinak by obe veci mely tutez politiku.
         # TASK-106 bod 15: uvnitr obalu, ktery text spousti (Get-InvokedLeaves), je promenna
@@ -673,9 +1170,36 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $exe = Get-ExecutableName $argv[0]
     $rest = Get-RestTokens $argv
+    # TASK-179: vnitrni prikaz kontejneroveho obalu - pripoji se ZA list obalu (ten zustava beze zmeny, viz Get-ContainerLeaves).
+    $containerLeaves = New-Object System.Collections.ArrayList
 
     switch -Regex ($exe) {
+        ($script:ContainerCli) {   # K2-6: tentyz seznam CLI jako Get-ContainerCommand, ne druha kopie
+            foreach ($l in (Get-ContainerLeaves $argv $Depth)) { [void]$containerLeaves.Add($l) }
+        }
         '^(sudo|nice|nohup|time|doas|timeout|command|builtin|exec|env|stdbuf)$' {
+            # TASK-179: kontejnerovy obal za prefixem (`sudo docker --context x exec ...`). Pruchod nize (Get-WrapperTail) zustava
+            # dnesni - u tvaru, ktery jeho starsi kontejnerova vetev rozbali, dal posuzuje vnitrni prikaz VSEMI pravidly (0.3.0).
+            # CR-5 (kolo 1 /code-review): dvoji list = dvoji audit. Kdyz starsi pruchod konci na CLI kontejneru
+            # (`sudo docker-compose ...`), rozebere ho rekurze nize sama; tail, ktery uz nasel, se nepridava podruhe.
+            $ci = Get-ContainerIndex $argv
+            $oldTail = Get-WrapperTail $argv
+            $oldHead = if ($oldTail.Count -gt 0) { Get-ExecutableName ([string]$oldTail[0]) } else { '' }
+            $inContainer = ($ci -gt 0 -and $oldHead -notmatch $script:ContainerCli)
+            $prefixEnv = ''
+            $prefixGroup = ''
+            if ($inContainer) {
+                $skip = if ($oldTail.Count -gt 0) { Join-Argument $oldTail } else { '' }
+                $ccP = Get-ContainerCommand @($argv[$ci..($argv.Count - 1)])
+                if ($null -ne $ccP) {
+                    # K7-3: list starsiho pruchodu (cteni 0) a kandidati rozboru obalu jsou jedna skupina pro audit.
+                    $prefixGroup = New-ReadingGroup
+                    foreach ($l in (Get-ContainerLeaves $null $Depth $skip $ccP $prefixGroup)) { [void]$out.Add($l) }
+                    # K3-6 (kolo 3): starsi pruchod `-e` obalu zahodi - jeho listy (vsechna pravidla, 0.3.0) dostanou promenne obalu
+                    # a zakaz `allow` (tvar v kontejneru, AOPT-O26) samy, misto druheho listu s tymz prikazem (dvoji audit).
+                    $prefixEnv = Resolve-ContainerEnv $ccP.Env
+                }
+            }
             # Nalez Amber G2: tady stala DRUHA, chudsi kopie tabulky obalu. Vetev jen
             # spojila `$rest` a rekurzivne se zavolala, takze u obalu s prepinacem
             # BEROUCIM HODNOTU (`sudo -u root rm -rf /srv`, `nice -n 10 rm -rf src`,
@@ -686,7 +1210,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             #
             # Nalez Metis 5: `command rm -rf src` obchazi jmeno spustitelneho souboru -
             # `command|builtin|exec` jsou v tabulce jako obaly bez prepinacu s hodnotou.
-            $tail = Get-WrapperTail $argv
+            $tail = $oldTail   # K2-8: tentyz pruchod jako vyse, podruhe se nepocita
             if ($tail.Count -eq 0) {
                 # `env` bez prikazu je legitimni vypis prostredi, ne obal.
                 if ($exe -eq 'env') {
@@ -694,7 +1218,17 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
                 }
                 return $out
             }
-            foreach ($l in (Get-CommandLeaf (Join-Argument $tail) ($Depth + 1))) { [void]$out.Add($l) }
+            if ((Get-ScannerEscape) -eq '\' -and (Test-WrapperPrefixUnplain $argv $tail)) {
+                [void]$out.Add((New-OpaqueLeaf $raw 'shellWord')); return $out
+            }
+            foreach ($l in (Get-CommandLeaf (Join-Argument $tail) ($Depth + 1))) {
+                if ($inContainer) {
+                    $l['NoAllow'] = $true
+                    if ($prefixEnv -ne '') { Add-LeafContainerEnv $l $prefixEnv }
+                    if ($prefixGroup -ne '') { Set-LeafReading $l $prefixGroup 0 }
+                }
+                [void]$out.Add($l)
+            }
             return $out
         }
         '^(python|python3|node|nodejs|ruby|perl|php|deno)$' {
@@ -833,19 +1367,48 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             # N34 (i): obal SPOUSTI obsah promenne, stejne jako `& $cmd` -> `invoked`.
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni (`cmd /c %X%` zustava ask,
             # `cmd /c "echo %PATH% && dir"` uz ne). Nalez Ada N19: cely retez pruchodu.
+            # CR-T (kolo 4): cmd komentar `#` nezna - `cmd /c "echo # & rd /s /q src"` rd spusti. Komentar ve skeneru nic
+            # nezahazuje a oddelovace v nem dal deli (_common.ps1, Get-CommentStart), takze `rd` je videt i tady.
             foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
         }
         '^(iex|invoke-expression)$' {
             # N33 (zuzeny, Ada 8. 9.): `iex` je treti tvar spusteni textu. Literal se
             # ROZEBERE jako u `bash -c '...'` (`iex 'git reset --hard'` -> deny,
-            # `iex 'git status'` -> nic), promenna spadne do `invoked` -> ask.
-            # Pozicni i `-Command` tvar; jine tvary (`"x" | iex`, `iex` bez argumentu)
-            # sem nedojdou a drzi je dal pas `askPatterns.invoke-expression`.
+            # `iex 'git status'` -> nic), promenna spadne do `invoked` (0.3.1: politika gate.opaque.invoked).
+            # Pozicni i `-Command` tvar. `iex` bez argumentu (text z roury, `"x" | iex`) drzi pas
+            # `auditPatterns.invoke-expression` (do 0.3.0 askPatterns).
+            # A179-O4 (Amber 2026-10-20): do 0.3.1 se sem prazdny vnitrek vracel BEZ listu, takze pas nikdy nestrilel a tvar
+            # prosel bez rozhodnuti i bez radku auditu (i v 0.3.0). Holy list ho pasu preda - ticho + audit, zadny deny.
             $skip = 0
             if ($rest.Count -gt 0 -and (Test-ParameterPrefix ($rest[0].ToLowerInvariant()) 'command')) { $skip = 1 }
             $inner = (Join-CommandString ($rest | Select-Object -Skip $skip))
-            if ($inner -eq '') { return $out }
+            if ($inner -eq '') {
+                [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @(); Raw = $raw; Text = $exe; GitConfig = @() })
+                # CR-Q9 + CR-R6/R10 (/code-review 0.3.1): text z roury muze byt literal v prikazu (`'git reset --hard' | iex`).
+                # Kazdy retezcovy literal prikazu se proto rozebere jako `iex '<literal>'` (Q5) - plny rozbor, ne hledani
+                # tokenu (`'rm -r -fo C:\x' | iex`), a jen literaly, ne zbytek prikazu (`git log --grep "reset --hard"`).
+                # Producent bez literalu (`irm url | iex`, `Get-Content x | iex`) zustava A179-O4: ticho + audit.
+                # CR-S1/S4/S8 (kolo 3): literaly se berou z textu, ktery se prave rozebira (vnoreny `pwsh -c "..."`, ne cely
+                # prikaz), tokenizerem PowerShellu (komentar `# don't` ani escape nepoplete par uvozovek) a JEDNOU - holy `iex`
+                # uvnitr rozebiraneho literalu (`'a | iex' | iex`) uz se znovu neprohledava (rozbor by rostl exponencialne
+                # a narazil na timeout hooku), je `depth` (A179-O1: deny). Text, ktery tokenizer neprecte, taky `depth`.
+                if ($script:IexLiteralScan) { [void]$out.Add((New-OpaqueLeaf $raw 'depth')); return $out }
+                $ctx = if ([string]$script:LineText -ne '') { [string]$script:LineText } else { [string]$script:FullCommand }
+                $perr = $null
+                $toks = [System.Management.Automation.PSParser]::Tokenize($ctx, [ref]$perr)
+                if (@($perr).Count -gt 0) { [void]$out.Add((New-OpaqueLeaf $raw 'depth')); return $out }
+                $script:IexLiteralScan = $true
+                try {
+                    foreach ($tk in @($toks)) {
+                        if ([string]$tk.Type -ne 'String') { continue }
+                        $lit = [string]$tk.Content
+                        if ($lit.Trim() -eq '') { continue }
+                        foreach ($l in (Get-InvokedLeaves $lit '' $Depth)) { [void]$out.Add($l) }
+                    }
+                } finally { $script:IexLiteralScan = $false }
+                return $out
+            }
             # TASK-106 bod 15 (0.2.0): rozbor v kontextu spusteni - `iex $cmd` zustava ask.
             foreach ($l in (Get-InvokedLeaves $inner '' $Depth)) { [void]$out.Add($l) }
             return $out
@@ -926,6 +1489,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     $text = ($exe + ' ' + ($args2 -join ' ')).Trim()
     [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @($args2); Raw = $raw; Text = $text
                       GitConfig = @($gitConfig) })
+    foreach ($l in $containerLeaves) { [void]$out.Add($l) }
     return $out
 }
 
@@ -986,110 +1550,208 @@ function Test-LocalHost([string]$HostName, $LocalHosts) {
     return $false
 }
 
-# H-f (Z117-Q19 = A, Tom 2026-10-08 = navrh `01-navrh-allow-list.md` par. 4): `allow` jen
-# pro prikaz, ktery jmeno serveru i databaze NESE SAM - konfigurace projektu se necte (soubor
-# muze nest tajemstvi a mezi kontrolou a behem se muze zmenit). Pokryte tvary:
-#   sqlcmd -S <server> -Q "[ALTER DATABASE [X] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;] DROP DATABASE [X]"
-#          (prepinace jen -S, -Q, -E, -b; jedno jmeno; nalez councilu Codex K5: `EXEC`, dynamicke
-#          SQL, `GO`, `USE`, komentare ani druhy prikaz nikdy allow)
-#   dotnet ef database drop --connection "<server>;<databaze>"   (EF Core 11+, T117-N11)
-# Server = prave jedna hodnota ze synonym, v PEVNE mistni mnozine (M17) i v `hosts` prepisu;
-# databaze = prave jedna hodnota (`Database` / `Initial Catalog`), shoda se vzorem `databases`
-# ukotvena na cele jmeno, bez ohledu na velikost pismen (M14). Dve hodnoty, promenna, roura,
-# presmerovani, prefix promenne prostredi, argument za `--` = nikdy allow (T117-N13, M13, M18).
-function Test-DbDestroyLocalAllowed($Leaf, $DbDestroyLocal) {
-    if ([string](Get-LeafField $Leaf 'Kind' '') -ne 'leaf') { return $false }
-    $raw = [string]$Leaf.Raw
-    if (Test-Unexpandable $raw) { return $false }
-    if ($raw -match '[|<>`]') { return $false }
-    if ($raw -match '^\s*[A-Za-z_][A-Za-z0-9_]*=') { return $false }
-    # List musi byt CELY statement nejvyssi urovne - ne clanek roury, telo bloku ani vnitrek
-    # `bash -c` (skener roury a obaly zplostuje, takze se to overuje nad celym prikazem).
-    $whole = $false
-    foreach ($st in @(Split-Statement $script:FullCommand)) {
-        if (([string]$st).Trim() -ceq $raw.Trim()) { $whole = $true; break }
+# CR-Q7 (/code-review 0.3.1): Test-LocalHost bere chybejiciho hostitele jako mistniho. To plati, jen kdyz hostitele
+# nenese promenna prostredi: prirazeni v drivejsim statementu (`$env:PGHOST=...; psql ...`, `export PGHOST=...`) list
+# nevidi a hodnotu z prostredi procesu (zdedi ji i spousteny prikaz) taky ne. Jmeno promenne v textu prikazu = hostitel
+# neznamy; v prostredi hooku rozhoduje hodnota (`PGSERVICE` vzdy - hostitele nese soubor sluzby).
+# (CR-R5, kolo 2: conninfo `service=` / `hostaddr=` konci deny uz dnes - retezec conninfo s mezerou je necitelne jmeno DB;
+# zmereno nad 002b863, hlidaji radky CR-R5.)
+# CR-U (kolo 5, konec "zaplatovani"): kola CR-R az CR-T hledala, ktere OSTATNI statementy prikazu a ktere hodnoty prostredi
+# hooku hostitele nemeni (vycty tvaru, mnozina neutralnich prikazu, explicitni hostitel prebijejici PGHOST, seznam PGHOST
+# se socketem ...) - a kazde kolo nasel dalsi obchvat. `allow` z gate.dbDestroyLocal proto plati jen pro JEDNODUCHY prikaz
+# (Test-DbAllowContext): jediny statement, jehoz vsechny listy jsou tentyz SQL klient (nebo telo heredocu pro nej), bez
+# jmena promenne hostitele v textu (i po odstraneni escapu a uvozovek) a s prazdnymi
+# PGHOST, PGHOSTADDR, PGSERVICE, PGSERVICEFILE, SQLCMDSERVER a PSQLRC v prostredi hooku. Cokoli jineho = deny (jako kazdy
+# jiny necitelny tvar). Mez: profil shellu a existujici ~/.psqlrc hook nevidi (README).
+# CR-V5 (kolo 6): i PGSYSCONFDIR (systemovy psqlrc a pg_service.conf z jineho adresare).
+$script:DbHostEnvNames = @('PGHOST', 'PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'SQLCMDSERVER', 'PSQLRC')
+# CR-W4 (kolo 7): vraci PRICINU (prazdny retezec = allow smi) - promenna v prostredi hooku ma vlastni hlasku, protoze
+# samostatny prikaz, ktery hlaska slozeneho tvaru doporucuje, by tam nepomohl.
+$script:DbPrefixAssignOk = @('PGPASSWORD', 'PGUSER', 'PGDATABASE', 'PGPORT', 'PGCONNECT_TIMEOUT', 'PGAPPNAME')
+function Test-DbAllowContext($Leaf, [string]$HostExe) {
+    # CR-X10 (kolo 8): nejdriv tvar prikazu, az pak prostredi hooku - hlaska prostredi u slozeneho tvaru by vedla dvakrat.
+    $why = Get-DbCompoundReason $Leaf $HostExe
+    if ($why -ne '') { return $why }
+    foreach ($n in $script:DbHostEnvNames) {
+        if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($n))) { return ('env:' + $n) }
     }
-    if (-not $whole) { return $false }
-    $hosts = @(Get-Field $DbDestroyLocal 'hosts' @())
-    $patterns = @(Get-Field $DbDestroyLocal 'databases' @())
-    if ($hosts.Count -eq 0 -or $patterns.Count -eq 0) { return $false }
+    return ''
+}
 
-    $exe = [string]$Leaf.Exe
-    $a = @(Get-LeafField $Leaf 'Args' @())
-    $server = $null
-    $db = $null
-    if ($exe -eq 'sqlcmd') {
-        $sql = $null
-        for ($i = 0; $i -lt $a.Count; $i++) {
-            $t = [string]$a[$i]
-            if ($t -ceq '-S' -or $t -ceq '-Q') {
-                if (($i + 1) -ge $a.Count) { return $false }
-                if ($t -ceq '-S') { if ($null -ne $server) { return $false }; $server = [string]$a[$i + 1] }
-                else { if ($null -ne $sql) { return $false }; $sql = [string]$a[$i + 1] }
-                $i++; continue
-            }
-            if ($t -ceq '-E' -or $t -ceq '-b') { continue }
-            return $false
-        }
-        if ($null -eq $server -or $null -eq $sql) { return $false }
-        $m = [regex]::Match($sql, '^\s*(?:ALTER\s+DATABASE\s+\[([A-Za-z0-9_]+)\]\s+SET\s+SINGLE_USER\s+WITH\s+ROLLBACK\s+IMMEDIATE\s*;\s*)?DROP\s+DATABASE\s+\[([A-Za-z0-9_]+)\]\s*;?\s*$', 'IgnoreCase')
-        if (-not $m.Success) { return $false }
-        if ($m.Groups[1].Success -and $m.Groups[1].Value -ne $m.Groups[2].Value) { return $false }
-        $db = $m.Groups[2].Value
-    } else {
-        $i = 0
-        if ($exe -eq 'dotnet') {
-            if ($a.Count -lt 3 -or [string]$a[0] -cne 'ef') { return $false }
-            $i = 1
-        } elseif ($exe -ne 'dotnet-ef') { return $false }
-        if (($i + 1) -ge $a.Count -or [string]$a[$i] -cne 'database' -or [string]$a[$i + 1] -cne 'drop') { return $false }
-        $i += 2
-        $cs = $null
-        $noValue = @('--force', '-f', '--no-build', '--verbose', '-v', '--no-color', '--prefix-output')
-        $withValue = @('--project', '-p', '--startup-project', '-s', '--context', '-c', '--configuration', '--framework')
-        for (; $i -lt $a.Count; $i++) {
-            $t = [string]$a[$i]
-            if ($t -ceq '--connection') {
-                if (($i + 1) -ge $a.Count -or $null -ne $cs) { return $false }
-                $cs = [string]$a[$i + 1]; $i++; continue
-            }
-            if ($t.StartsWith('--connection=')) {
-                if ($null -ne $cs) { return $false }
-                $cs = $t.Substring(13); continue
-            }
-            if ($noValue -ccontains $t) { continue }
-            if ($withValue -ccontains $t) { if (($i + 1) -ge $a.Count) { return $false }; $i++; continue }
-            return $false
-        }
-        if ([string]::IsNullOrWhiteSpace($cs)) { return $false }
-        if ($cs -match '["'']') { return $false }
-        $servers = New-Object System.Collections.ArrayList
-        $dbs = New-Object System.Collections.ArrayList
-        foreach ($part in $cs.Split(';')) {
-            if ($part.Trim() -eq '') { continue }
-            $eq = $part.IndexOf('=')
-            if ($eq -lt 1) { return $false }
-            $key = (($part.Substring(0, $eq).Trim()) -replace '\s+', ' ').ToLowerInvariant()
-            $val = $part.Substring($eq + 1).Trim()
-            if ($val -eq '') { return $false }
-            if ($script:DbServerKeys -contains $key) { [void]$servers.Add($val) }
-            elseif (@('database', 'initial catalog') -contains $key) { [void]$dbs.Add($val) }
-        }
-        if ($servers.Count -ne 1 -or $dbs.Count -ne 1) { return $false }
-        $server = [string]$servers[0]
-        $db = [string]$dbs[0]
-        if ($db -notmatch '^[A-Za-z0-9_]+$') { return $false }
+function Get-DbCompoundReason($Leaf, [string]$HostExe) {
+    if ([bool](Get-LeafField $Leaf 'FromAst' $false)) { return 'compound' }
+    $cmd = [string]$script:FullCommand
+    $rx = '(?i)(?<![A-Za-z0-9_])(' + ($script:DbHostEnvNames -join '|') + ')(?![A-Za-z0-9_])'
+    if ($cmd -match $rx -or ($cmd -replace '[\\`''"]', '') -match $rx) { return 'compound' }
+    # Jediny statement (telo heredocu se nepocita): drivejsi statement muze zmenit prostredi i bez listu (`$env:X = ...`,
+    # `[Environment]::SetEnvironmentVariable(...)`).
+    # CR-V4 (kolo 6): `&>soubor` je v Bashi presmerovani, ne oddelovac statementu (v cmd oddelovac je - list za nim pak
+    # neprojde kontrolou listu nize).
+    $rest = [regex]::Replace([string](Split-Heredoc $cmd).Rest, '&>>?\s*(?:"[^"]*"|''[^'']*''|[^\s;&|]+)', ' ')
+    $stmts = @(Split-Statement $rest)
+    if ($stmts.Count -ne 1) { return 'compound' }
+    # CR-X2 (kolo 8): statement ZACINA tim SQL klientem (pred nim jen obalova zavorka PowerShellu a prirazeni neskodnych
+    # promennych libpq) - obal (`sudo`, `env`, `bash -c`, `pwsh -c`, `cmd /c`) nacita startovni soubory (BASH_ENV, profil,
+    # AutoRun, `sudo -i`), ktere mohou nastavit PGHOST; `HOME=/x` presune ~/.psqlrc.
+    $head = ([string]$stmts[0]).Trim()
+    while ($head.StartsWith('(')) { $head = $head.Substring(1).TrimStart() }
+    # CR-Y6 (kolo 9): prirazeni se ctou z TOKENU (Split-Arguments; Get-AssignmentName jako Get-WrapperTail),
+    # ne vlastnim regexem - `PGPASSWORD=a"b c" psql ...` je jedno prirazeni.
+    # Bez `@()` kolem volani: Split-Arguments vraci `,@(...)` (N-H10).
+    $first = Split-Arguments $head
+    $k = 0
+    while ($k -lt $first.Count -and $null -ne ($an = Get-AssignmentName ([string]$first[$k]))) {
+        if ($script:DbPrefixAssignOk -cnotcontains $an) { return 'compound' }
+        $k++
     }
+    if ($k -ge $first.Count -or ([string](Get-ExecutableName ([string]$first[$k]))).ToLowerInvariant() -cne $HostExe) { return 'compound' }
+    # Kazdy list prikazu je tentyz SQL klient nebo telo heredocu pro nej - roura (`| cat`), substituce, zpetne apostrofy
+    # i komentar (vlastni segment) pridavaji jiny list. CR-V2 + CR-W6: prikaz uvnitr vyrazu PowerShellu
+    # (`[Environment]::X(...) + (psql ...)`) dohleda parser jako list `FromAst` - ten allow nema (vyse).
+    $found = $false
+    foreach ($l in @($script:AllLeaves)) {
+        if ([object]::ReferenceEquals($l, $Leaf)) { $found = $true; continue }
+        $kind = [string](Get-LeafField $l 'Kind' '')
+        $e = if ($kind -eq 'heredoc') { [string](Get-LeafField $l 'OuterExe' '') } else { [string](Get-LeafField $l 'Exe' '') }
+        if ($e.ToLowerInvariant() -cne $HostExe) { return 'compound' }
+    }
+    if (-not $found) { return 'compound' }
+    return ''
+}
 
-    if (-not (Test-FixedLocalDbHost $server)) { return $false }
-    $hostOk = $false
-    foreach ($h in $hosts) { if ($server.ToLowerInvariant() -eq ([string]$h).ToLowerInvariant()) { $hostOk = $true; break } }
-    if (-not $hostOk) { return $false }
-    foreach ($pat in $patterns) {
-        $rx = '^' + ([regex]::Escape([string]$pat)).Replace('\*', '.*').Replace('\?', '.') + '$'
-        if ([regex]::IsMatch($db, $rx, 'IgnoreCase')) { return $true }
+# CR-S6 (kolo 3): psql a dropdb ctou dlouhe volby pres getopt_long, ktery bere i jednoznacnou ZKRATKU (`--fil=x` = `--file`,
+# `--ho=prod` = `--host`). Zkratka volby, ktera nese hostitele, jmeno DB, soubor nebo SQL, = argumenty necitelne -> bez `allow`.
+function Test-AbbreviatedDbOption($Leaf, [string]$HostExe) {
+    if (@('psql', 'dropdb') -cnotcontains $HostExe) { return $false }
+    foreach ($m in [regex]::Matches(([string]$Leaf.Raw + ' ' + [string](Get-LeafField $Leaf 'Outer' '')), '(?:^|\s)--([A-Za-z][A-Za-z-]*)')) {
+        $name = $m.Groups[1].Value.ToLowerInvariant()
+        foreach ($full in @('host', 'port', 'dbname', 'file', 'command', 'maintenance-db')) {
+            if ($name.Length -lt $full.Length -and $full.StartsWith($name)) { return $true }
+        }
     }
     return $false
+}
+
+# ZOPT-Q102 + A179-O3 (Q10), 0.3.1: jmena databazi, kterych se destruktivni operace nad MISTNIM hostitelem tyka. Do 0.3.0
+# konila `ask` (H-f povoloval jen uzkou sadu tvaru). Od 0.3.1: VSECHNA jmena precitelna a ve vzorech
+# `gate.dbDestroyLocal.databases` (`*_test_*`, `*_test`, `*_dev` - napr. GSD; lokalni DB HRMS `Hrms...Test` na vzory
+# nesedi, A179-O6) -> hook mlci + audit; jinak deny. Cte se doslova
+# z textu prikazu - konfigurace projektu ani prostredi procesu ne (soubor muze nest tajemstvi a mezi kontrolou a behem se
+# muze zmenit; H-f). Vraci $null = jmeno nejde precist.
+#   pripojena DB: `-d x` / `-dx` (psql, pgcli, sqlcmd; velikost pismen rozhoduje), `--dbname[=| ]x`, `dbname=x`,
+#                 URI `postgres://.../x`, `Database=x` / `Initial Catalog=x`, `PGDATABASE=x`, prvni pozicni argument psql/pgcli
+#   rusena DB:    `DROP DATABASE [IF EXISTS] x`, pozicni argument `dropdb`, `Database=` u `dotnet ef database drop`
+# U `DROP DATABASE` / `dropdb` / `ef database drop` rozhoduje RUSENA DB (pripojena byva udrzbova, `postgres`); jine
+# destruktivni SQL meni PRIPOJENOU DB - ta musi byt precitelna a ve vzoru taky. Kazde nalezene jmeno musi sedet (navnada
+# `-d gsd_test_x` vedle jineho jmena nepomuze). Necitelne: zadne jmeno; jmeno s promennou, substituci nebo zastupnym
+# znakem; SQL s `USE`, meta-prikazem psql (`\c`, `\!`), dynamickym SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`;
+# nalez councilu Codex K5) nebo trojdilnym jmenem objektu (`db.schema.t`); pgcli s DSN.
+$script:PsqlValueFlags = '^(-c|-d|-f|-h|-p|-U|-v|-o|-L|-T|-F|-R|-P|-D|--command|--dbname|--file|--host|--port|--username|--set|--variable|--output|--log-file|--table-attr|--field-separator|--record-separator|--pset|--dsn)$'
+$script:DropdbValueFlags = '^(-h|-p|-U|--host|--port|--username|--maintenance-db)$'
+function Get-DbTargetNames($Leaf, [string]$SqlVisible, [string]$NameText, [string]$HostExe) {
+    if ($SqlVisible -match '(?i)\bUSE\b|\bEXEC(UTE)?\b|\bsp_executesql\b|\bdblink') { return $null }
+    # Meta-prikaz (`\c`, `\!`) zna jen psql/pgcli - u sqlcmd by `\` v hodnote `-S "(localdb)\X"` (Get-SqlText bere i ji) cetl jako meta.
+    if (@('psql', 'pgcli') -ccontains $HostExe -and $SqlVisible -match '\\[A-Za-z!]') { return $null }
+    # CR-Q4 (/code-review 0.3.1): prikazy sqlcmd (`:connect` prepne server, `:r` vlozi soubor, `!!` spusti shell).
+    if ($SqlVisible -match '(?i)(?:^|[\s"''])(?::(?:connect|r|setvar|on|out|error|reset|ed|list|listvar|perftrace|serverlist|xml|exit|quit)\b|!!)') { return $null }
+    # CR-R1/R2 (/code-review 0.3.1, kolo 2): komentar SQL (`/**/`, `--`) muze stat mezi jmenem a carkou seznamu
+    # i mezi castmi jmena - SQL s komentarem = necitelne.
+    # CR-S9 (kolo 3): escape `]]` / `""` uvnitr jmena (`[prod]]x].[dbo].[t]`, `DROP DATABASE [x_test]]y]`) vzory jmen nectou.
+    if ($SqlVisible -match '/\*|--|\]\]|""') { return $null }
+    # CR-Q2 + CR-R2 (/code-review 0.3.1): i jmena v hranatych zavorkach nebo uvozovkach (i s mezerou, `[prod].[my schema].[t]`)
+    # a mezery kolem tecek. Vedlejsi ucinek: tecky v textu (`'A. B. C'`, `-S "127.0.0.1"`) = necitelne - smer deny.
+    $part = '(?:\[[^\]]*\]|"[^"]*"|\w+)'
+    if ($SqlVisible -match ($part + '\s*\.\s*(?:' + $part + ')?\s*\.\s*' + $part)) { return $null }
+    $q = '(?:"([^"]*)"|''([^'']*)''|([^\s"'';|&]+))'
+    $conn = New-Object System.Collections.ArrayList
+    $targets = New-Object System.Collections.ArrayList
+    $rx = @(
+        @(('(?:^|\s)-d(?:\s+|(?=["'']))' + $q), 'None'),
+        @('(?:^|\s)-d([^\s"'';|&\-][^\s"'';|&]*)', 'None'),
+        @(('--dbname(?:=|\s+)' + $q), 'IgnoreCase'),
+        @('(?:^|[\s;"''])dbname\s*=\s*([^\s"'';|&]+)', 'IgnoreCase'),
+        @('postgres(?:ql)?://[^/\s"''?]*/([^?\s"''/;|&]+)', 'IgnoreCase'),
+        @('(?:^|[;\s"''])(?:database|initial\s+catalog)\s*=\s*([^;"''\s|&]+)', 'IgnoreCase'),
+        @(('(?:^|[\s;&|(:])PGDATABASE\s*=\s*' + $q), 'IgnoreCase')
+    )
+    foreach ($p in $rx) {
+        foreach ($m in [regex]::Matches($NameText, [string]$p[0], [string]$p[1])) {
+            for ($g = 1; $g -lt $m.Groups.Count; $g++) {
+                if ($m.Groups[$g].Success) { [void]$conn.Add($m.Groups[$g].Value.Trim()); break }
+            }
+        }
+    }
+
+    # ARGV klienta: list nese Exe + Args; telo heredocu a roury nese uvozujici prikaz v `Outer`.
+    $argv = @()
+    if ([string](Get-LeafField $Leaf 'Kind' '') -eq 'leaf') {
+        $argv = @([string]$Leaf.Exe) + @(Get-LeafField $Leaf 'Args' @())
+    } else {
+        $argv = @(Split-Arguments ([string](Get-LeafField $Leaf 'Outer' '')))
+    }
+    $ci = -1
+    for ($i = 0; $i -lt $argv.Count; $i++) {
+        if ((Get-ExecutableName ([string]$argv[$i])) -eq $HostExe) { $ci = $i; break }
+    }
+    if ($ci -ge 0 -and @('psql', 'pgcli', 'dropdb') -ccontains $HostExe) {
+        $flags = if ($HostExe -eq 'dropdb') { $script:DropdbValueFlags } else { $script:PsqlValueFlags }
+        $pos = New-Object System.Collections.ArrayList
+        for ($i = $ci + 1; $i -lt $argv.Count; $i++) {
+            $t = [string]$argv[$i]
+            if ($HostExe -eq 'pgcli' -and $t -cmatch '^(-D|--dsn)(=|$)') { return $null }
+            # CR-T7 (kolo 4): presmerovani (`2>&1`, `> out.txt`, `< in`) neni pozicni argument klienta.
+            if ($t -match '^[0-9*&]?[<>]') { if ($t -match '^[0-9*&]?[<>]+&?$') { $i++ }; continue }
+            if ($t -cmatch $flags) { $i++; continue }
+            if ($t.StartsWith('-')) { continue }
+            [void]$pos.Add($t)
+        }
+        if ($HostExe -eq 'dropdb') {
+            if ($pos.Count -ne 1) { return $null }
+            [void]$targets.Add([string]$pos[0])
+        } elseif ($pos.Count -gt 0) {
+            # psql [OPTION]... [DBNAME [USERNAME]] - prvni pozicni argument je databaze.
+            [void]$conn.Add([string]$pos[0])
+        }
+    }
+
+    $dropDbRx = 'DROP' + $script:SqlGap + 'DATABASE(?:' + $script:SqlGap + 'IF' + $script:SqlGap + 'EXISTS)?' + $script:SqlGap + '(\[[^\]]+\]|"[^"]+"|[^\s;,()]+)'
+    foreach ($m in [regex]::Matches($SqlVisible, $dropDbRx, 'IgnoreCase')) {
+        # CR-Q1b (/code-review 0.3.1): `DROP DATABASE a, b` rusi i dalsi jmena - seznam = necitelne.
+        if ($SqlVisible.Substring($m.Index + $m.Length) -match '^\s*,') { return $null }
+        [void]$targets.Add($m.Groups[1].Value.Trim('[', ']', '"'))
+    }
+    $efDrop = [regex]::IsMatch([string]$Leaf.Raw + ' ' + [string](Get-LeafField $Leaf 'Outer' ''),
+                               ('\bdotnet[- ]ef' + $script:SqlGap + 'database' + $script:SqlGap + 'drop\b'), 'IgnoreCase')
+    if ($efDrop) {
+        if ($conn.Count -eq 0) { return $null }
+        foreach ($c in $conn) { [void]$targets.Add($c) }
+    }
+
+    $names = New-Object System.Collections.ArrayList
+    $rest = [regex]::Replace($SqlVisible, $dropDbRx, ' ', 'IgnoreCase')
+    if ($rest.Trim() -ne '' -and (Test-DestructiveSql $rest)) {
+        if ($conn.Count -eq 0) { return $null }
+        foreach ($c in $conn) { [void]$names.Add($c) }
+    }
+    foreach ($t in $targets) { [void]$names.Add($t) }
+    if ($names.Count -eq 0) { return $null }
+    foreach ($n in $names) {
+        if ([string]::IsNullOrWhiteSpace([string]$n) -or [string]$n -match '[\$%`{}()*?\s]') { return $null }
+    }
+    return ,@($names)
+}
+
+# Vzor `databases` je glob (`*`, `?`) ukotveny na cele jmeno, bez ohledu na velikost pismen (M14).
+function Test-DbNamesAllowed($Names, $Patterns) {
+    foreach ($n in @($Names)) {
+        $ok = $false
+        foreach ($pat in @($Patterns)) {
+            $rx = '^' + ([regex]::Escape([string]$pat)).Replace('\*', '.*').Replace('\?', '.') + '$'
+            if ([regex]::IsMatch([string]$n, $rx, 'IgnoreCase')) { $ok = $true; break }
+        }
+        if (-not $ok) { return $false }
+    }
+    return $true
 }
 
 function Get-ShortFlagLetter($Tokens) {
@@ -1141,6 +1803,7 @@ function Test-GitPushRule($Leaf, $Config) {
     $plusForce = $false
     $deletesRef = $false
     $wildcardTarget = $false
+    $unknownTarget = $false
     foreach ($r in $refspecs) {
         $spec = $r
         if ($spec.StartsWith('+')) { $plusForce = $true; $spec = $spec.Substring(1) }
@@ -1153,6 +1816,10 @@ function Test-GitPushRule($Leaf, $Config) {
         $target = $target -replace '^refs/heads/', ''
         # Nalez Metis 15: `+refs/heads/*:refs/heads/*` cil `*` chranenou vetev OBSAHUJE.
         if ($target -match '[\*\?]') { $wildcardTarget = $true }
+        # A179-O15 (Amber 2026-10-22): cil, ktery neni doslovne jmeno vetve (promenna, substituce, `HEAD`, `@`), muze byt
+        # chranena vetev - porovnani s `protectedBranches` o nem nic nerekne. `$env:BR` / `${env:BR}` nese dvojtecku promenne,
+        # ne refspecu (cil by vysel `BR`) - takovy refspec je necitelny cely (Bash `$SRC:vetev` tim plati cenu deny).
+        if ($target -eq '' -or $target -match '[$`%]' -or $target -eq 'HEAD' -or $target -eq '@' -or $spec -match '\$\{?\w+:') { $unknownTarget = $true }
         foreach ($p in $protected) {
             if ($target.ToLowerInvariant() -eq ([string]$p).ToLowerInvariant()) { $hitsProtected = $true }
         }
@@ -1168,14 +1835,21 @@ function Test-GitPushRule($Leaf, $Config) {
     if ($plusForce -and $hitsProtected) {
         return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
     }
+    # A179-O15: force push (prepinac i `+` v refspecu) s necitelnym cilem = `forcePushUnknown` jako force push bez cile.
+    # Do 0.3.0 `ask`, v 0.3.1 do O15 `forcePushOther` (ticho); `+` bez prepinace nehlidala ani 0.3.0.
+    if (($force -or $plusForce) -and $unknownTarget) {
+        return (New-PolicyVerdict (Get-Field $Config 'gate') 'forcePushUnknown' ([string](Get-Field $shapes 'forcePushUnknown' 'force push')))
+    }
     if (-not $force) { return $null }
     if ($hitsProtected) {
         return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
     }
+    # ZOPT-Q102 / A179-O3 (Q1, Q2): bez cile muze force push mirit na main -> deny; na nechranenou vetev -> audit.
+    $gate = Get-Field $Config 'gate'
     if ($refspecs.Count -eq 0) {
-        return @{ Id = 'forcePushUnknown'; Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushUnknown' 'force push') }
+        return (New-PolicyVerdict $gate 'forcePushUnknown' ([string](Get-Field $shapes 'forcePushUnknown' 'force push')))
     }
-    return @{ Id = 'forcePushOther'; Decision = 'ask'; Shape = (Get-Field $shapes 'forcePushOther' 'force push') }
+    return (New-PolicyVerdict $gate 'forcePushOther' ([string](Get-Field $shapes 'forcePushOther' 'force push')))
 }
 
 function Test-GitCleanRule($Leaf, $Config) {
@@ -1225,9 +1899,9 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
     # Nalez Amber A1: `[IO.Directory]::Delete($p, $true)` - cil je PROMENNA, regex nad
     # literalem v uvozovkach ji nenajde a bez teto vetve by cely tvar skoncil jako
     # allow. Zadani par. 2.3: obal s promennou -> ask. Cil nezname, tak se pta.
+    # ZOPT-Q102 / A179-O3 (Q4): cil nejde dolozit -> politika `netDeleteVariable` (vychozi deny).
     if ($Leaf.Exe -eq 'net-delete' -and $targets.Count -eq 0) {
-        return @{ Id = 'netDeleteVariable'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})')).Replace('{text}', [string]($Leaf.Text))) }
+        return (New-PolicyVerdict $gate 'netDeleteVariable' (([string](Get-Field $shapes 'netDeleteVariable' 'mazani .NET volanim s promennou v ceste ({text})')).Replace('{text}', [string]($Leaf.Text))))
     }
 
     if (-not $recursive) {
@@ -1259,8 +1933,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         # videt. Rozhodnuti `ask` se nemeni, meni se veta; tvar `deleteFromPipeline` zustava
         # tomu, co roura opravdu je (kontrolni skupina: Metis 8).
         if ($targets.Count -eq 0 -and $shortAbsolute.Count -gt 0) {
-            return @{ Id = 'shortAbsolutePath'; Decision = 'ask'
-                      Shape = (([string](Get-Field $shapes 'shortAbsolutePath' 'mazani s kratkou absolutni cestou ({target})')).Replace('{target}', [string]([string]$shortAbsolute[0]))) }
+            return (New-PolicyVerdict $gate 'shortAbsolutePath' (([string](Get-Field $shapes 'shortAbsolutePath' 'mazani s kratkou absolutni cestou ({target})')).Replace('{target}', [string]([string]$shortAbsolute[0]))))
         }
 
         # Nalez Metis 8: `Get-ChildItem src -Recurse -File | Remove-Item -Force` -
@@ -1269,7 +1942,7 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
         # plati Z3 (nerozebratelne -> ask). Mazani konkretniho souboru bez -Recurse
         # zustava bezna prace (`Remove-Item -LiteralPath x -Force` ve skriptech GSD).
         if ($targets.Count -eq 0) {
-            return @{ Id = 'deleteFromPipeline'; Decision = 'ask'; Shape = (Get-Field $shapes 'deleteFromPipeline' 'mazani z roury') }
+            return (New-PolicyVerdict $gate 'deleteFromPipeline' ([string](Get-Field $shapes 'deleteFromPipeline' 'mazani z roury')))
         }
         if (-not $recursive) { return $null }
     }
@@ -1313,24 +1986,26 @@ function Test-RecursiveDeleteRule($Leaf, $Config) {
             if ($first -eq ([string]$root).ToLowerInvariant()) { $allowed = $true }
         }
 
+        # ZOPT-Q102 / A179-O3 (Q4): promenna v cili (mimo povoleny koren i v nem) a `..` = cil nejde dolozit -> politika
+        # `recursiveDeleteVariable` / `recursiveDeleteDotDot` (vychozi deny); hvezdicka UVNITR povoleneho korene -> `recursiveDeleteWildcard`
+        # (vychozi audit). Deny kterehokoli cile rozhoduje hned, audit se drzi jako nejhorsi dosavadni.
+        $v = $null
         if (-not $allowed) {
-            if ($hasVar) {
-                if ($null -eq $worst) {
-                    $worst = @{ Id = 'recursiveDeleteWildcard'; Decision = 'ask'
-                                Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
-                }
-                continue
+            if (-not $hasVar) {
+                return @{ Id = 'recursiveDelete'; Decision = 'deny'
+                          Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
             }
-            return @{ Id = 'recursiveDelete'; Decision = 'deny'
-                      Shape = (([string](Get-Field $shapes 'recursiveDelete' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
+            $v = New-PolicyVerdict $gate 'recursiveDeleteVariable' (([string](Get-Field $shapes 'recursiveDeleteVariable' 'rm -rf {target}')).Replace('{target}', [string]($t)))
+        } elseif ($hasVar) {
+            $v = New-PolicyVerdict $gate 'recursiveDeleteVariable' (([string](Get-Field $shapes 'recursiveDeleteVariable' 'rm -rf {target}')).Replace('{target}', [string]($t)))
+        } elseif ($hasDotDot) {
+            $v = New-PolicyVerdict $gate 'recursiveDeleteDotDot' (([string](Get-Field $shapes 'recursiveDeleteDotDot' 'rm -rf {target}')).Replace('{target}', [string]($t)))
+        } elseif ($hasStar) {
+            $v = New-PolicyVerdict $gate 'recursiveDeleteWildcard' (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t)))
         }
-
-        if ($hasStar -or $hasDotDot -or $hasVar) {
-            if ($null -eq $worst) {
-                $worst = @{ Id = 'recursiveDeleteWildcard'; Decision = 'ask'
-                            Shape = (([string](Get-Field $shapes 'recursiveDeleteWildcard' 'rm -rf {target}')).Replace('{target}', [string]($t))) }
-            }
-        }
+        if ($null -eq $v) { continue }
+        if ($v.Decision -eq 'deny') { return $v }
+        if ($null -eq $worst) { $worst = $v }
     }
     return $worst
 }
@@ -1360,6 +2035,37 @@ function Test-UpdateWithoutWhere([string]$Sql) {
         if (-not [regex]::IsMatch($stmt, '\bupdate\s+(?:only\s+)?\S+(?:\s+as\s+\S+)?\s+set\b', 'IgnoreCase')) { continue }
         if (-not [regex]::IsMatch($stmt, '\bwhere\b', 'IgnoreCase')) { return $true }
     }
+    return $false
+}
+
+# Destruktivni mnozina SQL pravidla (AOPT-O24 = mnozina Test-DatabaseRule na 245a0fe): DROP TABLE|DATABASE|SCHEMA, TRUNCATE,
+# DELETE a UPDATE bez WHERE. Od 0.3.1 jedna funkce - vola ji Test-DatabaseRule i Test-ContainerLeaf (TASK-179).
+# `(?:\s|/\*.*?\*/)+` misto `\s+`: nalez Metis 17 - SQL bere blokovy komentar jako bily znak. Od 0.3.1 jedna promenna
+# pro Test-DestructiveSql, Test-DbDestructiveText i Test-DatabaseRule (CR-8 kola 1 /code-review).
+$script:SqlGap = '(?:\s|/\*.*?\*/)+'
+function Test-DestructiveSql([string]$Sql) {
+    if ([string]::IsNullOrWhiteSpace($Sql)) { return $false }
+    return ([regex]::IsMatch($Sql, ('\bdrop' + $script:SqlGap + '(table|database|schema)\b'), 'IgnoreCase')) -or
+           ([regex]::IsMatch($Sql, '\btruncate\b', 'IgnoreCase')) -or
+           (Test-DeleteWithoutWhere $Sql) -or
+           (Test-UpdateWithoutWhere $Sql)
+}
+
+# TASK-179 (clen tridy M-d): text uvnitr kontejneru, ktery nejde rozebrat (promenna v hlave `sh -c "$PSQL -c '...'"`),
+# ale destruktivni DB literal v nem VIDET JE. Na hostiteli by takovy tvar skoncil `invoked` = ask; uvnitr kontejneru
+# plati jen DB pravidlo (AOPT-O25), takze se pta jen tehdy, kdyz text nese celou destruktivni DB mnozinu - SQL i jmena
+# programu (`dropdb`, `dotnet ef database drop`, `sqllocaldb delete`).
+function Test-DbDestructiveText([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    # CR-7 (kolo 1 /code-review): prikaz coreutils `truncate -s 0 log` neni SQL - tady jde o text SHELLU, ne o SQL z klienta,
+    # takze se jeho volani s prepinacem (kratkym nebo dlouhym z man truncate) vyjme. SQL `TRUNCATE -- komentar` zustava.
+    $Text = [regex]::Replace($Text, '(?i)\btruncate(?=\s+(?:-[a-z]|--(?:size|reference|no-create|io-blocks)\b))', ' ')
+    # K4-7 (kolo 4): souborove API (`os.truncate(...)`, `f.truncate()`) neni SQL - SQL TRUNCATE nikdy nestoji pred zavorkou.
+    $Text = [regex]::Replace($Text, '(?i)\btruncate(?=\s*\()', ' ')
+    if (Test-DestructiveSql $Text) { return $true }
+    if ([regex]::IsMatch($Text, '(?:^|[\s;|&(''"/\\])dropdb(?:\.exe)?(?:\s|$|[''";|&)])', 'IgnoreCase')) { return $true }
+    if ([regex]::IsMatch($Text, ('\bdotnet[- ]ef' + $script:SqlGap + 'database' + $script:SqlGap + 'drop\b'), 'IgnoreCase')) { return $true }
+    if ([regex]::IsMatch($Text, '\bsqllocaldb(?:\.exe)?\s+(?:delete|d)\b', 'IgnoreCase')) { return $true }
     return $false
 }
 
@@ -1439,8 +2145,18 @@ function Get-SqlText($Leaf, $SqlClients) {
         # `-f x.sql` (psql) a `-i x.sql` (sqlcmd) davaji SQL ze SOUBORU - obsah v prikazu
         # videt neni, takze plati Z3. Signalizuje se zvlastnim tokenem, ktery Test-DatabaseRule
         # cte jako "neznamy rozsah".
-        if ($args2[$i] -cmatch '^(-f|-i)$' -and ($i + 1) -lt $args2.Count) {
-            [void]$parts.Add('__SQL_ZE_SOUBORU__'); $i++
+        # CR-R3 (/code-review 0.3.1, kolo 2): i `--file=x`, `--file x`, slepene `-fx.sql` / `-ix.sql`, skupina `-Xf x`
+        # a `--input-file`. CR-R4: jen u klienta, kde prepinac SQL soubor znamena - u `dropdb` je `-f` --force
+        # a `-i` --interactive (`dropdb -f gsd_test_1` je bezne ruseni testovaci DB).
+        $exeL = $exe.ToLowerInvariant()
+        $fileFlag = $null
+        # CR-S7 (kolo 3): ve skupine jen volby psql BEZ hodnoty pred `f` - `-Ufred`, `-dfoo_test`, `-hfoo` soubor nejsou.
+        if (@('psql', 'pgcli') -ccontains $exeL) { $fileFlag = '^(-[aAbeEHlnqsStxXz01wW]*f|--file(=|$))' }
+        elseif ($exeL -eq 'sqlcmd') { $fileFlag = '^(-i|--input-file(=|$))' }
+        elseif ($exeL -ne 'dropdb') { $fileFlag = '^(-f|-i)$' }
+        if ($null -ne $fileFlag -and $args2[$i] -cmatch $fileFlag) {
+            [void]$parts.Add('__SQL_ZE_SOUBORU__')
+            if ($args2[$i] -cmatch '^(-[aAbeEHlnqsStxXz01wW]*f|-i|--file|--input-file)$' -and ($i + 1) -lt $args2.Count) { $i++ }
         }
     }
 
@@ -1528,14 +2244,15 @@ function Test-DatabaseRule($Leaf, $Config) {
     $raw = $Leaf.Raw
 
     # Hostitel se cte i z UVOZUJICIHO prikazu - u tela heredocu stoji jen tam (A4).
-    $hostText = [string]$raw + ' ' + [string](Get-LeafField $Leaf 'Outer' '')
+    # TASK-179: u vnitrniho prikazu kontejneru i z promennych prostredi, ktere mu obal predava (`-e PGHOST=...`, AOPT-O26).
+    $hostText = [string]$raw + ' ' + [string](Get-LeafField $Leaf 'Outer' '') + ' ' + [string](Get-LeafField $Leaf 'ContainerEnv' '')
 
     $sql = Get-SqlText $Leaf $sqlClients
 
     # `(?:\s|/\*.*?\*/)+` misto `\s+`: nalez Metis 17 - SQL bere blokovy komentar jako
     # bily znak, takze `DROP/**/TABLE` je platny prikaz, ktery `\s+` nikdy nepotka.
     # `dotnet[- ]ef`: nalez Metis 10 - primo nainstalovany nastroj se jmenuje `dotnet-ef`.
-    $gap = '(?:\s|/\*.*?\*/)+'
+    $gap = $script:SqlGap
 
     # !! Nalez Ada N28 (0.1.11): marker "SQL ze souboru" je PRIZNAK, ne text SQL.
     # Get-SqlText ho pridava VEDLE viditelneho SQL z `-c`/uvozovek, takze do 0.1.10
@@ -1554,12 +2271,7 @@ function Test-DatabaseRule($Leaf, $Config) {
     $sqlVisible = ($sql -replace '__SQL_ZE_SOUBORU__', ' ').Trim()
 
     $sqlDestructive = $false
-    if ($sqlVisible -ne '') {
-        $sqlDestructive = ([regex]::IsMatch($sqlVisible, ('\bdrop' + $gap + '(table|database|schema)\b'), 'IgnoreCase')) -or
-                          ([regex]::IsMatch($sqlVisible, '\btruncate\b', 'IgnoreCase')) -or
-                          (Test-DeleteWithoutWhere $sqlVisible) -or
-                          (Test-UpdateWithoutWhere $sqlVisible)
-    }
+    if ($sqlVisible -ne '') { $sqlDestructive = Test-DestructiveSql $sqlVisible }
 
     # !! Nalez Amber A-1 (kolo 1 nad 01afb82): prvni oprava N28 zavrela bypass jen pro
     # SQL v TEXTU. Destruktivnost ale nese jeste DVA zdroje, ktere s textem nemaji nic
@@ -1621,22 +2333,42 @@ function Test-DatabaseRule($Leaf, $Config) {
             return @{ Id = 'dbDestroyRemote'; Decision = 'deny'
                       Shape = (([string](Get-Field $shapes 'dbDestroyRemote' 'DB {host}')).Replace('{host}', [string]($dbHost))) }
         }
-        # H-f (Z117-Q13 = A, tvar Z117-Q19 = A): rozhodnuti o LOKALNI destruktivni operaci je
-        # nastavitelne projektovym prepisem `gate.dbDestroyLocal`; vychozi `ask` = 0.2.0.
-        # Obsah prepisu uz zkontrolovalo H-c (neplatny klic = vychozi hodnota, nikdy allow).
+        # H-f (Z117-Q13 = A) + ZOPT-Q102 / A179-O3 (Q10), 0.3.1: rozhodnuti o LOKALNI destruktivni operaci nese
+        # `gate.dbDestroyLocal` - `deny` zakaze vse, vychozi `allow` pusti jen databaze ve vzorech `databases`
+        # (Get-DbTargetNames); cokoli jineho je deny. Obsah prepisu uz zkontrolovalo H-c (neplatny klic = vychozi hodnota).
         $dl = Get-Field $gate 'dbDestroyLocal'
-        $dlDecision = [string](Get-Field $dl 'decision' 'ask')
-        if ($dlDecision -eq 'deny') {
-            return @{ Id = 'dbDestroyLocalDenied'; Decision = 'deny'
-                      Shape = (Get-Field $shapes 'dbDestroyLocalDenied' 'DB (gate.dbDestroyLocal = deny)') }
+        if ((Get-DbDestroyLocalDecision $dl) -eq 'deny') { return (New-DbDestroyLocalDenied $shapes) }
+        # TASK-179 (AOPT-O26): tvar uvnitr kontejneru nikdy `allow` - ani kdyz jeho vnitrni text je doslova povoleny statement.
+        # K3-2 (kolo 3): totez pro tvar v kontejneru, ktery rozbalil starsi pruchod (`docker exec -i c sh <<EOF`) - NoAllow.
+        if ([bool](Get-LeafField $Leaf 'Container' $false) -or [bool](Get-LeafField $Leaf 'NoAllow' $false)) {
+            return @{ Id = 'dbDestroyContainer'; Decision = 'deny'; Shape = (Get-Field $shapes 'dbDestroyContainer' 'DB') }
         }
-        if ($dlDecision -eq 'allow' -and -not $localDbDelete -and (Test-DbDestroyLocalAllowed $Leaf $dl)) {
-            # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
-            # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
-            Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
-            return $null
+        # Z117-Q20 + A179-O3 (Q10): `sqllocaldb delete` smaze instanci se VSEMI databazemi - nikdy allow.
+        # CR-Q3 (/code-review 0.3.1): SQL ze souboru nebo stdin (`-f`, `-i`, `<`) vedle viditelneho nevidime - jmeno DB,
+        # ke ktere se pripoji (`\c`, `:connect`), nejde precist. CR-Q7 + CR-U: jen jednoduchy prikaz s cistym prostredim
+        # (Test-DbAllowContext) - jinak "bez hostitele = mistni" neplati.
+        $hostExeL = $hostExe.ToLowerInvariant()
+        if (-not $localDbDelete -and -not $sqlFromFile -and -not (Test-AbbreviatedDbOption $Leaf $hostExeL)) {
+            $names = Get-DbTargetNames $Leaf $sqlVisible $hostText $hostExeL
+            if ($null -ne $names -and (Test-DbNamesAllowed $names @(Get-Field $dl 'databases' @()))) {
+                $why = Test-DbAllowContext $Leaf $hostExeL
+                if ($why -eq '') {
+                    # "allow" = hook MLCI + radek auditu (bez jmena DB, serveru i textu prikazu) - NE
+                    # `permissionDecision: allow`; vrstva opravneni Claude Code rozhoduje dal.
+                    Write-GateAudit $script:ToolName 'gate:dbDestroyLocal' 'allow' $Config
+                    return $null
+                }
+                # CR-W4: promenna hostitele v prostredi hooku - hlaska jmenuje promennou (jmeno, ne hodnotu).
+                if ($why.StartsWith('env:')) {
+                    return @{ Id = 'dbDestroyLocalEnv'; Decision = 'deny'
+                              Shape = (([string](Get-Field $shapes 'dbDestroyLocalEnv' 'DB {name}')).Replace('{name}', $why.Substring(4))) }
+                }
+                # A179-O7 (Amber 2026-10-21): jmena sedi, ale prikaz neni jednoduchy - hlaska jmenuje povoleny tvar.
+                return @{ Id = 'dbDestroyLocalCompound'; Decision = 'deny'
+                          Shape = (Get-Field $shapes 'dbDestroyLocalCompound' 'DB') }
+            }
         }
-        return @{ Id = 'dbDestroyLocal'; Decision = 'ask'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }
+        return @{ Id = 'dbDestroyLocal'; Decision = 'deny'; Shape = (Get-Field $shapes 'dbDestroyLocal' 'DB') }
     }
 
     if ($update -and -not $isLocal) {
@@ -1662,20 +2394,190 @@ function Test-ConfiguredPattern($Leaf, $Patterns) {
 # `ssh -i key.pem host` vypadalo jako "host + prikaz" -> ask, a v bypassu deny.
 # Falesny blok na uplne bezne praci; tabulka je proto stejna jako u obalu
 # (Get-WrapperTail) - jediny zpusob, jak se to nerozejde.
-$script:SshValueFlags = '^(-p|-i|-o|-l|-F|-J|-L|-R|-D|-b|-c|-e|-m|-w|-E|-I|-Q|-S|-W)$'
+# CR-AL2 (TASK-179, /code-review nad 1eee799): od A179-O18 je `remoteShell` deny, takze neuplna tabulka = falesny zakaz
+# interaktivni relace (`ssh -O exit host`, `ssh -vp 2222 host`, `plink -P 2222 host`). ssh: volby s hodnotou podle
+# ssh(1) (OpenSSH 9/10), kratke volby, a shluk (`-vp 2222`, `-p2222`); plink: viceznakove volby s hodnotou podle `plink -help` (PuTTY 0.8x).
+$script:SshValueLetters = 'BbcDEeFIiJLlmOoPpQRSWw'
+# CR-AM8 (/code-review nad c54a843): `-cert` (PuTTY 0.78+).
+$script:PlinkValueFlags = '^-(P|l|pw|pwfile|i|cert|m|L|R|D|hostkey|proxycmd|sercfg|sessionlog|sshlog|sshrawlog|load|nc|loghost)$'
 
-function Get-RemoteShellPositional($Argv) {
-    $out = New-Object System.Collections.ArrayList
+# CR-AN1 (/code-review nad 824775e): Leaf.Args uz uvozovky nenese - `ssh host '2>/dev/null rm -rf x'` vypadalo jako
+# presmerovani a prikaz pro cizi stroj zmizel. Presmerovani je jen slovo, ktere stoji MIMO uvozovky: znaky `<`, `>`, `&`
+# v uvozovkach a za escape se maskuji (`_`), deleni na slova je tymz Split-Arguments.
+# CR-AO5 (/code-review nad 54dc970): posuzuje se PUVODNI text prikazu ($script:FullCommand), ne Raw listu - obal
+# (`nohup`, `timeout`, `sudo`) Raw vnitrniho listu sklada znovu a uvozovky slova bez mezery ztrati. Zavorky substituce,
+# `;`, `|` (a v Bashi zpetny apostrof) jsou tu oddelovac slov, aby `x=$(ssh host 2>/dev/null)` dalo slovo `2>/dev/null`.
+# CR-AP1: -InQuotes vraci naopak slova s `<>` V UVOZOVKACH (maskuje se to, co je mimo ne).
+function Get-UnquotedRedirectWords([string]$Text, [switch]$InQuotes) {
+    $esc = Get-ScannerEscape
+    $sb = New-Object System.Text.StringBuilder
+    $inSingle = $false
+    $inDouble = $false
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $c = $Text[$i]
+        $quoted = ($inSingle -or $inDouble)
+        if ($inSingle) { if ($c -eq "'") { $inSingle = $false; $quoted = $false } }
+        elseif ($c -eq $esc -and $i + 1 -lt $Text.Length) {
+            [void]$sb.Append($c); $i++; $c = $Text[$i]; $quoted = $true
+        }
+        elseif ($inDouble) { if ($c -eq '"') { $inDouble = $false; $quoted = $false } }
+        elseif ($c -eq "'") { $inSingle = $true }
+        elseif ($c -eq '"') { $inDouble = $true }
+        elseif ('();|'.IndexOf($c) -ge 0 -or ($c -eq '`' -and $esc -ne '`')) { $c = ' ' }
+        if (($quoted -xor [bool]$InQuotes) -and '<>&'.IndexOf($c) -ge 0) { $c = '_' }
+        [void]$sb.Append($c)
+    }
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($w in (Split-Arguments $sb.ToString())) { if ([string]$w -match '[<>]') { $out.Add([string]$w) } }
+    return ,$out
+}
+
+# Slovo s presmerovanim: `<x`, `2>/dev/null`, `*>log` (PowerShell, CR-AN5), slepene za slovem `host<cmds.sh` (CR-AN2).
+$script:RedirectWordPattern = '^(.*?)(<>|<|>>|>\||>|&>>|&>)(.*)$'
+# Vraci $null nebo @{ Before; Fd; Op; Target }. CR-AO3: cislo deskriptoru jen tehdy, kdyz pred operatorem nic jineho
+# neni (`web1<x` = slovo `web1` + vstup, ne deskriptor 1); CR-AO4: `*` (vsechny proudy) jen v PowerShellu - v Bashi je
+# `*>x` glob `*` a presmerovani.
+function Get-RedirectWord([string]$Word) {
+    $m = [regex]::Match($Word, $script:RedirectWordPattern)
+    if (-not $m.Success) { return $null }
+    $before = $m.Groups[1].Value
+    $fd = ''
+    if ($before -match '^\d+$' -or ($before -eq '*' -and (Get-ScannerEscape) -eq '`')) { $fd = $before; $before = '' }
+    return @{ Before = $before; Fd = $fd; Op = $m.Groups[2].Value; Target = $m.Groups[3].Value }
+}
+
+# CR-AM10: JEDEN rozbor argumentu ssh / plink - pozicni argumenty i volby s hodnotou (dve kopie by se rozesly).
+# Vraci @{ Positional = [string[]]; Options = [@{ Name; Value }]; StdinFile } (ssh: Name = pismeno volby; plink: jmeno bez `-`).
+function Get-RemoteShellArgs($Argv, [string]$Exe = 'ssh', [string]$Raw = '') {
+    $pos = New-Object System.Collections.ArrayList
+    $opts = New-Object System.Collections.ArrayList
+    $stdinFile = $false
+    $plink = ($Exe -ieq 'plink')
+    $source = if ([string]$script:FullCommand -ne '') { [string]$script:FullCommand } else { $Raw }
+    $unquoted = Get-UnquotedRedirectWords $source
+    # CR-AP1 (/code-review nad 5c43cf2): cely prikaz nese slova VSECH prikazu - `echo x >/a; ssh host '>/a'` dalo slovo
+    # `>/a` mimo uvozovky a quoted argument ssh se s nim zamenil (ticho). Text, ktery v prikazu stoji i v uvozovkach,
+    # je nejasny -> presmerovanim neni (fail-closed; cena: `ssh a 2>/dev/null; ssh b '2>/dev/null'` = deny i pro `a`).
+    # CR-AQ2 (/code-review nad 5c43cf2..01de4a3): vnoreny shell (`echo x >/a; bash -c "ssh host '>/a'"`) da v uvozovkach
+    # jedno slovo s celym vnitrnim prikazem - nejasne je proto slovo, ktere je CASTI textu v uvozovkach (0.3.0 ask, ticho;
+    # cena: `ssh a 2>/dev/null; bash -c "x 2>/dev/null"` = deny i pro `a`).
+    # CR-AQ1: vstup ze souboru se hleda ve slovech PRED odebranim nejasnych - odebrane slovo pred prikazem nebo slepene
+    # s hostem (`< cmds.sh ssh host; echo '<'`) pozicnim argumentem nebylo a vstup ze souboru by zmizel (ticho).
+    $stdinWords = New-Object System.Collections.Generic.List[string] (,$unquoted)
+    $inQuotes = Get-UnquotedRedirectWords $source -InQuotes
+    $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($u in $unquoted) {
+        $amb = $false
+        foreach ($q in $inQuotes) { if ($q.Contains($u)) { $amb = $true; break } }
+        if (-not $amb) { $kept.Add($u) }
+    }
+    $unquoted = $kept
+    # CR-AM7: vstup ze souboru (ne `/dev/null`, `nul`, `$null`) nese prikazy pro vzdaleny shell. CR-AN2: hleda se v celem
+    # Raw listu - i slepeny (`ssh host<cmds.sh`) a pred prikazem (`< cmds.sh ssh host`).
+    $pool = New-Object System.Collections.Generic.List[string] (,$stdinWords)
+    $rawWords = Split-Arguments $Raw
+    for ($w = 0; $w -lt $rawWords.Count; $w++) {
+        $rw = [string]$rawWords[$w]
+        $at = if ($rw -match '[<>]') { $pool.IndexOf($rw) } else { -1 }
+        if ($at -lt 0) { continue }
+        $pool.RemoveAt($at)
+        $rd = Get-RedirectWord $rw
+        $target = $rd.Target
+        if ($target -eq '' -and $w + 1 -lt $rawWords.Count) { $target = [string]$rawWords[$w + 1] }
+        if ($rd.Op.StartsWith('<') -and ($rd.Fd -eq '' -or $rd.Fd -eq '0') -and
+            $target -notmatch '^(/dev/null|nul|\$null)$' -and -not $target.StartsWith('&')) { $stdinFile = $true }
+    }
+    # CR-AM7: presmerovani neni pozicni argument (`ssh host < /dev/null` = host, ne "host + prikaz") - ale jen slovo
+    # mimo uvozovky (CR-AN1), a jen slovo, ktere neni ani casti textu v uvozovkach (CR-AP1, CR-AQ2 vyse - do CR-AQ tu
+    # stalo "multimnozina - tentyz text muze stat jednou v uvozovkach a jednou mimo"). CR-AO1: slovo pred
+    # slepenym presmerovanim (`-oProxyCommand=x>/dev/null`, `host<cmds.sh`) jde dal rozborem voleb.
+    $pool = New-Object System.Collections.Generic.List[string] (,$unquoted)
+    $clean = New-Object System.Collections.Generic.List[string]
+    for ($k = 0; $k -lt $Argv.Count; $k++) {
+        $t = [string]$Argv[$k]
+        $at = if ($t -match '[<>]') { $pool.IndexOf($t) } else { -1 }
+        if ($at -lt 0) { $clean.Add($t); continue }
+        $pool.RemoveAt($at)
+        $rd = Get-RedirectWord $t
+        if ($rd.Before -ne '') { $clean.Add($rd.Before) }
+        if ($rd.Target -eq '') { $k++ }
+    }
+    $Argv = @($clean)
     $i = 0
     while ($i -lt $Argv.Count) {
         $t = [string]$Argv[$i]
-        if ($t -cmatch $script:SshValueFlags) { $i += 2; continue }
-        if ($t.StartsWith('-')) { $i++; continue }
-        [void]$out.Add($t)
+        if ($plink) {
+            if ($t -cmatch $script:PlinkValueFlags) {
+                $val = if ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }
+                [void]$opts.Add(@{ Name = $t.Substring(1); Value = $val })
+                $i += 2; continue
+            }
+            if ($t.StartsWith('-')) { $i++; continue }
+        } elseif ($t.Length -gt 1 -and $t.StartsWith('-') -and -not $t.StartsWith('--')) {
+            # Shluk kratkych voleb: prvni volba s hodnotou ukonci shluk - zbytek tokenu je jeji hodnota, jinak dalsi token.
+            $skip = 1
+            for ($k = 1; $k -lt $t.Length; $k++) {
+                if ($script:SshValueLetters.IndexOf($t[$k]) -ge 0) {
+                    $val = if ($k -lt $t.Length - 1) { $t.Substring($k + 1) } elseif ($i + 1 -lt $Argv.Count) { [string]$Argv[$i + 1] } else { '' }
+                    [void]$opts.Add(@{ Name = [string]$t[$k]; Value = $val })
+                    if ($k -eq $t.Length - 1) { $skip = 2 }
+                    break
+                }
+            }
+            $i += $skip
+            continue
+        } elseif ($t.StartsWith('-')) { $i++; continue }
+        [void]$pos.Add($t)
         $i++
     }
-    return $out
+    return @{ Positional = @($pos); Options = @($opts); StdinFile = $stdinFile }
 }
+
+# A179-O20 / CR-AL3 (Amber 2026-10-23): prikaz nemusi byt pozicni argument - volbou ho nese `ssh -o RemoteCommand=...`
+# (i `-oRemoteCommand=`, ve shluku `-To ...`; klic ssh nerozlisuje velikost pismen) a `plink -m <soubor>` (na cizim
+# stroji), CR-AM2: `ssh -o ProxyCommand|LocalCommand|KnownHostsCommand=...` a `plink -proxycmd` ho spusti na TOMTO
+# stroji mimo vsechna pravidla brany. Do teto opravy ticho bez auditu (dira 0.3.0). Hodnota `none` prikaz nenese.
+# `-F <konfigurace>` a `~/.ssh/config` ho nest mohou taky, ale soubor hook necte - README mez 28.
+# CR-AN10 (/code-review nad 824775e): `-o PKCS11Provider|SecurityKeyProvider=<knihovna>` a `-I <knihovna>` nactou do ssh
+# cizi kod na TOMTO stroji - tataz trida jako ProxyCommand.
+# A179-O23 / N1 (delta review Amber nad fc426ee): `plink -load <relace>` - host muze nest ulozena relace, pak je
+# PRVNI pozicni argument uz prikaz (manual PuTTY, kap. 7). Od CR-AL2 tabulka voleb jmeno relace spotrebuje a zbyl
+# jeden pozicni -> ticho (0.3.0 ask). Fail-closed: s `-load` jeden pozicni = prikaz (cena: `plink -load relace host`
+# s relaci bez hosta = deny).
+function Test-RemoteShellOptionCommand($Parsed, [string]$Exe = 'ssh') {
+    foreach ($o in @($Parsed.Options)) {
+        if ($Exe -ieq 'plink') {
+            if ([string]$o.Name -ceq 'm' -or [string]$o.Name -ceq 'proxycmd') { return $true }
+            if ([string]$o.Name -ceq 'load' -and @($Parsed.Positional).Count -ge 1) { return $true }
+        } elseif ([string]$o.Name -ceq 'I') {
+            return $true
+        } elseif ([string]$o.Name -ceq 'o' -and [string]$o.Value -match '(?i)^\s*(RemoteCommand|ProxyCommand|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider)\s*(=\s*|\s+)(?!none\s*$)(\S.*)$') {
+            # CR-AO9: `internal` je vestavena hodnota jen u SecurityKeyProvider - jinde je to jmeno programu.
+            if ($Matches[1] -ieq 'SecurityKeyProvider' -and $Matches[3] -match '^(?i)internal\s*$') { continue }
+            return $true
+        }
+    }
+    return $false
+}
+
+# CR-AO10 (/code-review nad 54dc970): tataz trida promennou prostredi pred prikazem - `SSH_ASKPASS=<program>` (spusti ho
+# ssh na TOMTO stroji) a `SSH_SK_PROVIDER=<knihovna>` (jako `-o SecurityKeyProvider`). Promenna nastavena drive
+# (`export`, `$env:`) se nevidi - README mez 28. Hleda se v Raw i v celem prikazu: obal `env` prirazeni z Raw
+# vnitrniho listu odstrani.
+function Test-RemoteShellEnvCommand([string]$Raw) {
+    # Split-Arguments vraci `,@(...)` - bez dalsiho `@()` (viz Split-UnquotedCore).
+    $a = Split-Arguments $Raw
+    $b = Split-Arguments ([string]$script:FullCommand)
+    foreach ($w in ($a + $b)) {
+        # CR-AP3: `internal` je vestavena hodnota jen u SSH_SK_PROVIDER - u SSH_ASKPASS je to jmeno programu (jako CR-AO9).
+        if ([string]$w -match '^(SSH_ASKPASS=\S|SSH_SK_PROVIDER=(?!internal$)\S)') { return $true }
+    }
+    return $false
+}
+
+# CR-AM7: prikazy pro cizi stroj na standardnim vstupu (`ssh host < cmds.sh`) - ssh bez prikazu je posle vzdalenemu
+# shellu (`StdinFile` z Get-RemoteShellArgs; heredoc `<<` resi vetev heredocu). Roura do ssh (`cat cmds | ssh host`)
+# list nevidi - README mez 28, oprava s tokenizerem 0.4.1 (GSD TASK-190).
 
 # Write-GateAudit zije od 0.2.0 v _common.ps1 - secrets.ps1 audituje taky (TASK-106 bod 11,
 # vyrok 7: trida chranena jmenem u globu). Volani tady zustavaji beze zmeny.
@@ -1687,25 +2589,58 @@ function Get-RemoteShellPositional($Argv) {
 # pravidla `permissions.*`), kdezto ticho ji necha rozhodnout. Plugin timhle prestava
 # byt POSLEDNI instanci parseru a stava se prvni - viz README "Tri rozhodnuti, ne dve".
 #
-# Neznama hodnota politiky konci `ask`, ne vyjimkou: fail-closed je strop, ne prvni
-# omezujici hodnota, a preklep v projektovem override nesmi branu tise otevrit.
+# Neznama hodnota politiky konci `deny` (do 0.3.0 `ask`), ne vyjimkou: preklep v projektovem
+# override nesmi branu tise otevrit.
+# 1C: kod interpretu se nerozebira, ale JMENO destruktivniho volani v nem videt je.
+# Je to test na TOKEN, ne parser jazyka - `python -c "print(1)"` musi projit,
+# `python -c "shutil.rmtree('x')"` ne. Porovnani je case-SENSITIVNI (`Remove-Item`
+# ano, `remove-item` ne bylo by falesne siroke pres bezna anglicka slova).
+# K7-5 (TASK-179, kolo 7): samostatna funkce - zavora K6-5 (interpret v kontejneru s DB literalem) se pta nejdriv na ni,
+# aby tvar 0.3.0 nesl dal svuj Id `interpreterDestructive`.
+# ZOPT-Q102 / A179-O3 (Q6), 0.3.1: DB token (`gate.interpreterDbTokens`) = zniceni databaze, jejiz jmeno nepreteme ->
+# politika `interpreterDestructiveDb` (vychozi deny); ostatni tokeny -> `interpreterDestructive` (vychozi audit).
+# DB tokeny se zkousi prvni, aby je obecny token tehoz tela (`subprocess`) neprebil auditem.
+function Get-InterpreterDestructiveVerdict([string]$Body, $Config) {
+    if ($Body -eq '') { return $null }
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+    foreach ($t in @(Get-Field $gate 'interpreterDbTokens' @())) {
+        $token = [string]$t
+        if ($token -eq '') { continue }
+        if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+            return (New-PolicyVerdict $gate 'interpreterDestructiveDb' (([string](Get-Field $shapes 'interpreterDestructiveDb' 'kod interpretu rusi databazi ({token})')).Replace('{token}', [string]($token))))
+        }
+    }
+    foreach ($t in @(Get-Field $gate 'interpreterDestructiveTokens' @())) {
+        $token = [string]$t
+        if ($token -eq '') { continue }
+        if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+            return (New-PolicyVerdict $gate 'interpreterDestructive' (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))))
+        }
+    }
+    return $null
+}
+
+function Get-RawDestructiveVerdict([string]$Raw, $Config) {
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+    foreach ($t in @(Get-Field $gate 'rawDestructiveTokens' @())) {
+        $token = [string]$t
+        if ($token -eq '') { continue }
+        if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
+            return (New-PolicyVerdict $gate 'opaqueDestructive' (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))))
+        }
+    }
+    return $null
+}
+
 function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
 
-    # 1C: kod interpretu se nerozebira, ale JMENO destruktivniho volani v nem videt je.
-    # Je to test na TOKEN, ne parser jazyka - `python -c "print(1)"` musi projit,
-    # `python -c "shutil.rmtree('x')"` ne. Porovnani je case-SENSITIVNI (`Remove-Item`
-    # ano, `remove-item` ne bylo by falesne siroke pres bezna anglicka slova).
-    if ($Why -eq 'interpreter' -and $Body -ne '') {
-        foreach ($t in @(Get-Field $gate 'interpreterDestructiveTokens' @())) {
-            $token = [string]$t
-            if ($token -eq '') { continue }
-            if ($Body.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-                return @{ Id = 'interpreterDestructive'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'interpreterDestructive' 'kod interpretu s destruktivnim volanim ({token})')).Replace('{token}', [string]($token))) }
-            }
-        }
+    if ($Why -eq 'interpreter') {
+        $id = Get-InterpreterDestructiveVerdict $Body $Config
+        if ($null -ne $id) { return $id }
     }
 
     # !! Nalez Ada N35 (0.1.11), sourozenec N28: klasifikace PRED pohledem na text.
@@ -1714,36 +2649,156 @@ function Resolve-OpaqueDecision([string]$Why, [string]$Raw, [string]$Body, $Conf
     # 0.1.10 auditem, prestoze destruktivni LITERAL je v nich VIDET. Neni to nutna cena:
     # 1C uz presne tenhle token-test dela nad telem interpretu - tady se dela nad `Raw`.
     #
-    # `ask`, ne `deny`: kontext nezname (hlavu rozebrat neumime), takze se pta clovek.
-    # Porovnani je stejne jako u `interpreterDestructiveTokens` - IndexOf, Ordinal,
+    # Do 0.3.0 `ask` (kontext nezname); od 0.3.1 politika `gate.decisions.opaqueDestructive` (ZOPT-Q102 / A179-O3 Q5:
+    # vychozi deny - literaly jsou jen z deny trid). Porovnani je stejne jako u `interpreterDestructiveTokens` - IndexOf, Ordinal,
     # zadny parser. N50: `DELETE FROM` v tomhle seznamu JE (o tvaru nevime nic jineho,
     # ask je levny), v `interpreterDestructiveTokens` NENI (telo interpretu bezne nese
     # SQL retezce s WHERE, ktere overit nejde).
-    if (@('variable', 'heredocUnterminated', 'depth') -ccontains $Why -and $Raw -ne '') {
-        foreach ($t in @(Get-Field $gate 'rawDestructiveTokens' @())) {
-            $token = [string]$t
-            if ($token -eq '') { continue }
-            if ($Raw.IndexOf($token, [System.StringComparison]::Ordinal) -ge 0) {
-                return @{ Id = 'opaqueDestructive'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'opaqueDestructive' 'nerozebratelny tvar s destruktivnim literalem ({token})')).Replace('{token}', [string]($token))) }
-            }
-        }
+    # ZOPT-Q102 (0.3.1): `invoked` sem patri taky - do 0.3.0 koncil `ask` sam, od 0.3.1 je jeho politika `audit`, takze by
+    # `$x = 'a'; ${x} = 'git'; & $x reset --hard` (hlava nerozbalena, literal videt) prosel tichem (A179-O3 Q5: deny).
+    if (@('variable', 'heredocUnterminated', 'depth', 'invoked') -ccontains $Why -and $Raw -ne '') {
+        $dv = Get-RawDestructiveVerdict $Raw $Config
+        if ($null -ne $dv) { return $dv }
     }
 
-    if (([string](Get-Field (Get-Field $gate 'opaque') $Why 'ask')) -eq 'audit') {
+    # ZOPT-Q102 / A179-O3 (0.3.1): politika `gate.opaque.<pricina>` je `audit` nebo `deny`; neznama hodnota nebo pricina
+    # (`unknown`, Q8) = deny. `audit` zapise radek `opaque:<pricina>` jako dosud.
+    if (([string](Get-Field (Get-Field $gate 'opaque') $Why 'deny')) -ceq 'audit') {
         Write-GateAudit $script:ToolName ('opaque:' + $Why) 'allow' $Config
         return $null
     }
 
     $text = [string]$Raw
     if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-    return @{ Id = ('opaque:' + $Why); Decision = 'ask'
-              Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
+    # A179-O9: `shellWord` ma vlastni hlasku, ktera jmenuje nahradu (agent nesmi narazit do tiche zdi, D-GSD-14).
+    $shapeKey = if ($Why -ceq 'shellWord') { 'opaqueShellWord' } else { 'opaque' }
+    return @{ Id = ('opaque:' + $Why); Decision = 'deny'
+              Shape = (([string](Get-Field $shapes $shapeKey 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
+}
+
+# TASK-179 (0.3.1, AOPT-O25): list VNITRNIHO prikazu kontejneroveho obalu posuzuje JEN DB pravidlo. Cesty a git v obrazu
+# zustavaji README omezenim 11 (TASK-106 bod 3) - list obalu samotny jde dal beznou cestou s dnesnim verdiktem.
+# K5-8 (kolo 5): jedno misto pro pripojeni promennych obalu k listu (K4-2: pripojit, neprepsat - vnoreny obal uvnitr tela)
+# a jedno pro nejhorsi verdikt vnitrnich listu tela.
+function Add-LeafContainerEnv($Leaf, [string]$EnvText) {
+    $Leaf['ContainerEnv'] = ([string](Get-LeafField $Leaf 'ContainerEnv' '') + ' ' + $EnvText).Trim()
+}
+
+# K6-6/K7-3/K7-4 (kola 6 a 7): skupina a cteni listu (New-ReadingGroup) plati pro jeho audit (Write-GateAudit,
+# $script:AuditReading) - i pro listy, ktere z nej vzniknou rozborem tela az tady (ty skupinu nemaji a dedi ji).
+# Audit se pise hluboko v pravidlech sdilenych se secrets.ps1, proto kontext behu a ne parametr.
+$script:AuditReading = $null
+function Invoke-LeafVerdict($Leaf, $Config, [bool]$InContainer) {
+    $prevReading = $script:AuditReading
+    $grp = [string](Get-LeafField $Leaf 'ReadingGroup' '')
+    if ($grp -ne '') {
+        # K8-1 (kolo 8): cteni listu z tela, ktere se rozebralo pri verdiktu vnejsiho cteni, se pocita pod cestou toho cteni
+        # (`0/1`) - stejna udalost v jinem vnejsim cteni je jine cteni tehoz klice skupiny, ne dalsi vyskyt.
+        $rd = [string][int](Get-LeafField $Leaf 'Reading' 0)
+        if ($null -ne $prevReading) { $rd = [string]$prevReading.R + '/' + $rd }
+        $script:AuditReading = @{ G = $grp; R = $rd }
+    }
+    try {
+        if ($InContainer) { return (Test-ContainerLeaf $Leaf $Config) }
+        return (Test-Leaf $Leaf $Config)
+    } finally {
+        $script:AuditReading = $prevReading
+    }
+}
+
+# K6-10 (kolo 6): jeden tvar "nerozebratelne v kontejneru s DB textem". ZOPT-Q102 / A179-O3 (Q10), 0.3.1: jmeno DB
+# nejde precist a v kontejneru se nepovoluje nikdy (AOPT-O26) -> deny (do 0.3.0 ask).
+function New-ContainerOpaqueDenied($Shapes) {
+    return @{ Id = 'dbDestroyContainerOpaque'; Decision = 'deny'
+              Shape = (Get-Field $Shapes 'dbDestroyContainerOpaque' 'DB v kontejneru') }
+}
+
+# K8-2 (kolo 8): jeden tvar `deny` z prepisu gate.dbDestroyLocal (Test-DatabaseRule a zaloha po stropu prace substituci).
+function New-DbDestroyLocalDenied($Shapes) {
+    return @{ Id = 'dbDestroyLocalDenied'; Decision = 'deny'
+              Shape = (Get-Field $Shapes 'dbDestroyLocalDenied' 'DB (gate.dbDestroyLocal = deny)') }
+}
+
+# K9-5 (kolo 9): rozhodnuti prepisu gate.dbDestroyLocal cte jedno misto (Test-DatabaseRule i zaloha po stropu prace).
+# K10-7 (kolo 10): bere uz nacteny objekt prepisu - Test-DatabaseRule z nej cte i seznamy pro `allow`.
+function Get-DbDestroyLocalDecision($DbDestroyLocal) {
+    # ZOPT-Q102 (0.3.1): chybejici rozhodnuti = deny (fail-closed); `ask` uz neni hodnota.
+    if ([string](Get-Field $DbDestroyLocal 'decision' 'deny') -ceq 'allow') { return 'allow' }
+    return 'deny'
+}
+
+# $InContainer = $true: vnitrni listy jsou v kontejneru (jen DB pravidlo, Test-ContainerLeaf). $false: telo tvaru 0.3.0
+# (Test-Leaf, vsechna pravidla) - v kontejneru (NoAllow) dedi zakaz `allow` a promenne obalu.
+function Get-WorstInnerVerdict($Inner, $Leaf, [bool]$InContainer, $Config) {
+    $envText = [string](Get-LeafField $Leaf 'ContainerEnv' '')
+    $noAllow = [bool](Get-LeafField $Leaf 'NoAllow' $false)
+    $worst = $null
+    foreach ($inner in $Inner) {
+        if ($InContainer) { $inner['Container'] = $true; Add-LeafContainerEnv $inner $envText }
+        elseif ($noAllow) { $inner['NoAllow'] = $true; Add-LeafContainerEnv $inner $envText }
+        $r = Invoke-LeafVerdict $inner $Config $InContainer
+        if ($null -eq $r) { continue }
+        if ($r.Decision -eq 'deny') { return $r }
+        if ($null -eq $worst) { $worst = $r }
+    }
+    return $worst
+}
+
+function Test-ContainerLeaf($Leaf, $Config) {
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+    $kind = [string](Get-LeafField $Leaf 'Kind' '')
+    if ($kind -eq 'leaf') { return (Test-DatabaseRule $Leaf $Config) }
+    if ($kind -eq 'heredoc') {
+        $oe = ([string](Get-LeafField $Leaf 'OuterExe' '')).ToLowerInvariant()
+        # K6-9 (kolo 6): tentyz seznam klientu jako Get-UnwrappedCommand ($script:SqlClients s vychozi hodnotou).
+        if (@($script:SqlClients) -ccontains $oe) { return (Test-DatabaseRule $Leaf $Config) }
+        if (@($script:ShellInterpreters) -ccontains $oe) {
+            $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
+            # Hostitelsky text tela = JEN promenne obalu (Get-UnwrappedCommand), ne argumenty shellu (K3-5: `bash -s -- --host=x`).
+            return (Get-WorstInnerVerdict (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0) $Leaf $true $Config)
+        }
+        # K4-3 (kolo 4): telo heredocu do interpretu v kontejneru (`docker compose exec -T db python3 <<EOF`) = kod, ktery
+        # rozebrat neumime - tataz zavora jako u `python -c` v kontejneru (clen M-d): viditelny destruktivni DB literal -> deny
+        # (0.3.1, ZOPT-Q102; do 0.3.0 ask).
+        if (@($script:CodeInterpreters) -ccontains $oe) {
+            if (Test-DbDestructiveText ([string]$Leaf.Raw)) { return (New-ContainerOpaqueDenied $shapes) }
+        }
+        return $null
+    }
+    if ($kind -eq 'sqlPipeOpaque') {
+        # Tataz udalost jako na hostiteli (T-10 A): SQL z roury nevidime -> audit a ticho.
+        Write-GateAudit $script:ToolName 'sqlFromPipe' 'allow' $Config
+        return $null
+    }
+    if ($kind -eq 'opaque') {
+        # K4-4 (kolo 4): `pwsh -EncodedCommand` uvnitr kontejneru - literal neni videt, ale text jde dekodovat (UTF-16LE base64,
+        # jako hook secrets, A117-N16). Dekodovany text se rozebere jako prikaz v kontejneru; nejde-li dekodovat, plati politika
+        # `gate.opaque.encoded` jako na hostiteli (0.3.1, ZOPT-Q102 / A179-O3: vychozi audit; do 0.3.0 ask).
+        if ([string](Get-LeafField $Leaf 'Why' '') -eq 'encoded') {
+            $argvE = Split-Arguments ([string]$Leaf.Raw)
+            $wb = $null
+            if ($argvE.Count -gt 0) {
+                $restE = @(if ($argvE.Count -gt 1) { $argvE[1..($argvE.Count - 1)] })
+                $wb = Get-ShellWrapperBody (Get-ExecutableName ([string]$argvE[0])) $restE
+            }
+            # K5-6 (kolo 5): totez dekodovani jako hook secrets (ConvertFrom-EncodedCommandText).
+            $decoded = if ($null -ne $wb) { ConvertFrom-EncodedCommandText ([string]$wb.Text) } else { '' }
+            if ($decoded -eq '') { return (Resolve-OpaqueDecision 'encoded' '' '' $Config) }
+            return (Get-WorstInnerVerdict (Get-NestedShellLeaf $decoded 'PowerShell' 0) $Leaf $true $Config)
+        }
+        if ((Test-DbDestructiveText ([string]$Leaf.Raw)) -or (Test-DbDestructiveText ([string](Get-LeafField $Leaf 'Body' '')))) {
+            return (New-ContainerOpaqueDenied $shapes)
+        }
+    }
+    return $null
 }
 
 function Test-Leaf($Leaf, $Config) {
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
+
+    if ([bool](Get-LeafField $Leaf 'Container' $false)) { return (Test-ContainerLeaf $Leaf $Config) }
 
     if ($Leaf.Kind -eq 'opaque') {
         # N39: chybejici `Why` NESMI tise dedit politiku `variable` (dnes `audit`) -
@@ -1765,12 +2820,13 @@ function Test-Leaf($Leaf, $Config) {
     if ($Leaf.Kind -eq 'leaf') {
         $remote = @(Get-Field $gate 'remoteShells' @('ssh', 'plink'))
         if ($remote -ccontains ([string]$Leaf.Exe).ToLowerInvariant()) {
-            $positional = @(Get-RemoteShellPositional (@(Get-LeafField $Leaf 'Args' @())))
-            if ($positional.Count -ge 2) {
+            $parsed = Get-RemoteShellArgs (@(Get-LeafField $Leaf 'Args' @())) ([string]$Leaf.Exe) ([string]$Leaf.Raw)
+            if (@($parsed.Positional).Count -ge 2 -or (Test-RemoteShellOptionCommand $parsed ([string]$Leaf.Exe)) -or
+                [bool]$parsed.StdinFile -or (Test-RemoteShellEnvCommand ([string]$Leaf.Raw))) {
                 $text = [string]$Leaf.Raw
                 if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-                return @{ Id = 'remoteShell'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
+                # ZOPT-Q102 / A179-O3, 0.3.1: politika `gate.decisions.remoteShell` (vychozi deny od A179-O18; do 0.3.0 ask).
+                return (New-PolicyVerdict $gate 'remoteShell' (([string](Get-Field $shapes 'remoteShell' 'prikaz na cizim stroji ({text})')).Replace('{text}', [string]($text))))
             }
         }
     }
@@ -1789,8 +2845,10 @@ function Test-Leaf($Leaf, $Config) {
     # nebezpecny / EOF` skoncilo deny - zapis poznamky o prikazu blokovan jako prikaz.
     # SQL pravidlo se dal uplatnuje, ale jen kdyz uvozujici prikaz JE SQL klient.
     if ($Leaf.Kind -eq 'heredoc') {
-        $clients = @(Get-Field $gate 'sqlClients' @())
-        $shells = @(Get-Field $gate 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
+        # K6-9 (kolo 6): tentyz seznam klientu jako Get-UnwrappedCommand. `sqlClients` je v defaults.json `superset`, takze
+        # konfigurace bez nej nevznikne - verdikt se nemeni, jen zmizel druhy zdroj seznamu.
+        $clients = @($script:SqlClients)
+        $shells = @($script:ShellInterpreters)
         $oe = ([string](Get-LeafField $Leaf 'OuterExe' '')).ToLowerInvariant()
 
         if ($clients -ccontains $oe) { return (Test-DatabaseRule $Leaf $Config) }
@@ -1804,14 +2862,8 @@ function Test-Leaf($Leaf, $Config) {
             # s bashovym escapem psany z PowerShellu (a naopak) na allow.
             # `cmd` zustava na escapu hostitele - to je zname omezeni (README).
             $shellTool = if ($oe -match '^(pwsh|powershell)$') { 'PowerShell' } else { 'Bash' }
-            $worst = $null
-            foreach ($inner in (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0)) {
-                $r = Test-Leaf $inner $Config
-                if ($null -eq $r) { continue }
-                if ($r.Decision -eq 'deny') { return $r }
-                if ($null -eq $worst) { $worst = $r }
-            }
-            return $worst
+            # K3-2/K3-3: telo shellu v kontejneru (tvar 0.3.0) - vsechna pravidla, ale bez `allow` a s promennymi obalu.
+            return (Get-WorstInnerVerdict (Get-NestedShellLeaf ([string]$Leaf.Raw) $shellTool 0) $Leaf $false $Config)
         }
 
         # Nalez Amber G8: telo se SPUSTI, ale rozebrat ho neumime - je to kod interpretu
@@ -1820,17 +2872,26 @@ function Test-Leaf($Leaf, $Config) {
         #
         # 0.1.10 ty dva pripady ROZDELUJE, prestoze do 0.1.9 sdilely jednu podminku:
         #   kod interpretu = tataz vec jako `python -c`, tedy pricina `interpreter`,
-        #   cizi stroj      = tataz vec jako `ssh host "cmd"` (nalez Ada N21), tedy ask
-        #                     BEZE ZMENY - pravidla nad cestami tam neplati a audit
-        #                     na nasem stroji o cizim stroji netvrdi nic.
-        if (@(Get-Field $gate 'codeInterpreters' @()) -ccontains $oe) {
+        #   cizi stroj      = tataz vec jako `ssh host "cmd"` (nalez Ada N21), tedy politika
+        #                     `gate.decisions.remoteShell` (do 0.3.0 ask, od A179-O18 deny) - pravidla nad
+        #                     cestami tam neplati a audit na nasem stroji o cizim stroji netvrdi nic.
+        if (@($script:CodeInterpreters) -ccontains $oe) {
+            # K5-1 (TASK-179, kolo 5): interpret v kontejneru rozbaleny starsim pruchodem (`docker exec -i app python3 <<EOF`)
+            # ma verdikt 0.3.0 a navic zavoru K4-3 - viditelny destruktivni DB literal v tele -> deny (0.3.1; do 0.3.0 ask).
+            # K6-5 (kolo 6): zavora PRED Resolve-OpaqueDecision - ta by pri `audit` zapsala allow radek k listu, ktery konci deny.
+            # K7-5 (kolo 7): destruktivni token interpretu ma prednost, je-li jeho politika deny (Id `interpreterDestructiveDb`);
+            # token s politikou audit (ZOPT-Q102) DB literal v kontejneru neprebije.
+            if ([bool](Get-LeafField $Leaf 'NoAllow' $false) -and (Test-DbDestructiveText ([string]$Leaf.Raw))) {
+                $id = Get-InterpreterDestructiveVerdict ([string]$Leaf.Raw) $Config
+                if ($null -ne $id -and $id.Decision -eq 'deny') { return $id }
+                return (New-ContainerOpaqueDenied $shapes)
+            }
             return (Resolve-OpaqueDecision 'interpreter' ([string]$Leaf.Raw) ([string]$Leaf.Raw) $Config)
         }
         if (@(Get-Field $gate 'remoteShells' @()) -ccontains $oe) {
             $text = [string]$Leaf.Raw
             if ($text.Length -gt 60) { $text = $text.Substring(0, 60) }
-            return @{ Id = 'remoteShell'; Decision = 'ask'
-                      Shape = (([string](Get-Field $shapes 'opaque' 'neznamy prikaz ({text})')).Replace('{text}', [string]($text))) }
+            return (New-PolicyVerdict $gate 'remoteShell' (([string](Get-Field $shapes 'remoteShell' 'prikaz na cizim stroji ({text})')).Replace('{text}', [string]($text))))
         }
 
         # Jinak je telo DATA (`cat > NOTES.md <<EOF`) a pravidla se na nej neuplatnuji.
@@ -1838,12 +2899,12 @@ function Test-Leaf($Leaf, $Config) {
     }
 
     # Nalez Metis 27: `git -c alias.bd='branch -D' bd x` schova destruktivni podprikaz
-    # do definice aliasu. Rozbalit to neumime, takze plati Z3: nerozebratelne -> ask.
+    # do definice aliasu. Rozbalit to neumime, takze plati Z3: nerozebratelne -> politika `gate.decisions.gitAlias`
+    # (0.3.1, ZOPT-Q102 / A179-O3 Q3: vychozi deny - alias spusti cokoli; do 0.3.0 ask).
     if ($Leaf.Exe -eq 'git') {
         foreach ($cfg in $Leaf.GitConfig) {
             if ($cfg -match '(?i)^alias\.') {
-                return @{ Id = 'gitAlias'; Decision = 'ask'
-                          Shape = (([string](Get-Field $shapes 'opaque' '{text}')).Replace('{text}', [string]($cfg))) }
+                return (New-PolicyVerdict $gate 'gitAlias' (([string](Get-Field $shapes 'gitAlias' '{text}')).Replace('{text}', [string]($cfg))))
             }
         }
     }
@@ -1851,16 +2912,18 @@ function Test-Leaf($Leaf, $Config) {
     $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'denyPatterns' @())
     if ($shape) { return @{ Id = $shape.Id; Decision = 'deny'; Shape = $shape.Shape } }
 
+    # Seda zona (`audit`) jednoho pravidla se drzi stranou - `deny` pozdejsiho pravidla tehoz listu ma prednost.
     foreach ($rule in @('Test-GitPushRule', 'Test-GitCleanRule', 'Test-GitRestoreRule', 'Test-RecursiveDeleteRule', 'Test-DatabaseRule')) {
         $r = & $rule $Leaf $Config
         if ($r -and $r.Decision -eq 'deny') { return $r }
-        if ($r -and $r.Decision -eq 'ask' -and -not $script:PendingAsk) { $script:PendingAsk = $r }
+        if ($r -and $r.Decision -eq 'audit' -and -not $script:PendingAudit) { $script:PendingAudit = $r }
     }
 
-    $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'askPatterns' @())
-    if ($shape) { return @{ Id = $shape.Id; Decision = 'ask'; Shape = $shape.Shape } }
+    # ZOPT-Q102 / A179-O3 (Q7), 0.3.1: do 0.3.0 `askPatterns`; shoda = seda zona (audit).
+    $shape = Test-ConfiguredPattern $Leaf @(Get-Field $gate 'auditPatterns' @())
+    if ($shape) { $script:PendingAudit = $null; return @{ Id = $shape.Id; Decision = 'audit'; Shape = $shape.Shape } }
 
-    if ($script:PendingAsk) { $r = $script:PendingAsk; $script:PendingAsk = $null; return $r }
+    if ($script:PendingAudit) { $r = $script:PendingAudit; $script:PendingAudit = $null; return $r }
     return $null
 }
 
@@ -1913,36 +2976,92 @@ if (-not (Test-HookEnabled $config 'gate')) { exit 0 }
 # H-c: odmitnuty klic prepisu je videt v auditu jednou za session (CR-P10) a v kanarku (jen jmeno klice).
 Write-OverrideRejectedAudit $toolName $config ([string](Get-Field $payload 'session_id' ''))
 
-$script:PendingAsk = $null
+$script:PendingAudit = $null
 $decision = $null
 
 # Nalez Ada N19: retez pruchodu (heredoc -> roura do SQL klienta -> prikazova radka)
 # zije v Get-CommandLineLeaves a volaji ho i vsechny rekurze. Drive stal rozepsany
 # tady a zanoreni znalo jen posledni clanek.
 $script:SqlClients = @(Get-Field (Get-Field $config 'gate') 'sqlClients' @('psql', 'pgcli', 'dropdb', 'sqlcmd'))
+# K3-8 (TASK-179, kolo 3 /code-review): jeden seznam shellu pro Test-Leaf, Test-ContainerLeaf i Get-UnwrappedCommand.
+$script:ShellInterpreters = @(Get-Field (Get-Field $config 'gate') 'shellInterpreters' @('bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell', 'cmd'))
+# K5-7 (kolo 5): totez pro interprety kodu (Test-Leaf, Test-ContainerLeaf, Get-UnwrappedCommand).
+$script:CodeInterpreters = @(Get-Field (Get-Field $config 'gate') 'codeInterpreters' @())
 # H-a (TASK-117): literalni prirazeni prikazu - jen PowerShell nastroj (viz Get-LiteralAssignment).
 $script:FullCommand = $command
 if ($toolName -eq 'PowerShell') { $script:LiteralAssign = Get-LiteralAssignment $command }
 $leaves = Get-CommandLineLeaves $command 0
+# CR-U (TASK-179, kolo 5): `allow` z gate.dbDestroyLocal posuzuje cely seznam listu (Test-DbAllowContext).
+$script:AllLeaves = @($leaves)
+# CR-U1: blokovy komentar s oddelovacem uvnitr nejde sestavit zpet - nerozebratelny tvar (`depth`, A179-O1: deny).
+if ($script:BlockCommentSplit) { $leaves = @($leaves) + @(New-OpaqueLeaf $command 'depth') }
 
 foreach ($leaf in $leaves) {
-    $r = Test-Leaf $leaf $config
+    $r = Invoke-LeafVerdict $leaf $config $false
     if ($null -eq $r) { continue }
     if ($r.Decision -eq 'deny') { $decision = $r; break }
     if ($null -eq $decision) { $decision = $r }
 }
 
-if ($null -eq $decision) { exit 0 }
-
-# H-b (TASK-117, Z117-Q8 = B): kazde `ask` a `deny` jde do auditu s ID tvaru, nikdy s textem prikazu.
-Write-GateAudit $toolName ('gate:' + [string](Get-LeafField $decision 'Id' 'unknown')) ([string]$decision.Decision) $config
-
-$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
-
-if ($decision.Decision -eq 'ask' -and $mode -eq 'bypassPermissions') {
-    $reason = $reason + (Get-Text $config 'bypassSuffix' ' bypass')
-    Write-DenyDecision $reason
+# CR-S8/CR-T/CR-U (kola 3 az 5): prikaz s `#` se rozebere jeste jednou BEZ komentare (cteni 0.3.0) - kde `#` komentarem
+# neni (cmd, `${...}`, zpetne apostrofy), muze cteni s komentarem videt mene. Z druheho cteni plati jen `deny` (bez auditu);
+# komentar tak rozbor jen rozsiri.
+# CR-W (kolo 7): protokol druheho cteni je v _common.ps1 (Invoke-PlainCommentReading), spolecny se secrets.ps1.
+if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
+    # CR-Y2 (kolo 9): druhe cteni narazilo na strop prace - nevime, co by nasel, takze nerozebratelne (depth, deny).
+    # CR-Z5 (kolo 10): narazilo-li na strop uz prvni cteni, druhe by substituce neslepilo a mlcelo - nespousti se a plati
+    # deny (nerozebratelne). Bez `#` plati dal zaloha K7-1 (jen DB literal) - pro druhe cteni neni zaloha za co.
+    # CR-AA4 (kolo 11): rozpocet se mezi ctenimi NEnuluje (strop prace jednoho behu hooku drzi timeout 10 s). Druhe cteni
+    # spany substituci uz rozdelene prvnim ctenim nepocita znovu (zmereno: 12 jednotek u 400 vnorenych zavorek).
+    $overflowBefore = $script:SubstOverflow
+    $pr = $null
+    if (-not $overflowBefore) {
+        $pr = Invoke-PlainCommentReading {
+            Set-ScannerEscape $toolName
+            $plainLeaves = @(Get-CommandLineLeaves $command 0)
+            $script:AllLeaves = $plainLeaves
+            foreach ($pleaf in $plainLeaves) {
+                $pv = Invoke-LeafVerdict $pleaf $config $false
+                if ($null -ne $pv -and $pv.Decision -eq 'deny') { return $pv }
+            }
+            return $null
+        }
+    }
+    if ($null -ne $pr) { $decision = $pr }
+    elseif ($script:SubstOverflow) { $decision = Invoke-LeafVerdict (New-OpaqueLeaf $command 'depth') $config $false }
 }
 
-if ($decision.Decision -eq 'deny') { Write-DenyDecision $reason }
-Write-AskDecision $reason
+# K7-1 (TASK-179, kolo 7): rozbor substituci v obalu kontejneru narazil na strop prace (_common.ps1, SubstWorkBudget) - cil
+# a vnitrni prikaz obalu nemusely byt prectene cele. Je-li v nekterem rozebiranem textu destruktivni DB literal, ptame se.
+# K8-2 (kolo 8): hostitel takoveho prikazu neni prectany = mistni (jako pruchozi `-e PGHOST` bez hodnoty, CR-3) - plati
+# `gate.dbDestroyLocal`: `deny` z prepisu zustava `deny`, jinak `ask` (`allow` v kontejneru nikdy, AOPT-O26).
+# K9-1 (kolo 9): zaloha bezi i po sede zone jineho listu - `deny` zalohy ji prebije.
+# ZOPT-Q102 / A179-O3 (Q10), 0.3.1: jmeno DB po prekroceni stropu nejde precist -> deny vzdy (do 0.3.0 ask; s prepisem
+# `gate.dbDestroyLocal = deny` tvar `dbDestroyLocalDenied`).
+if ($script:SubstOverflow -and ($null -eq $decision -or $decision.Decision -ne 'deny')) {
+    $ovGate = Get-Field $config 'gate'
+    foreach ($pt in @($script:ParsedTexts)) {
+        if (Test-DbDestructiveText ([string]$pt.Text)) {
+            $ovShapes = Get-Field $ovGate 'shapes'
+            if ((Get-DbDestroyLocalDecision (Get-Field $ovGate 'dbDestroyLocal')) -eq 'deny') {
+                $decision = New-DbDestroyLocalDenied $ovShapes
+            } else {
+                $decision = New-ContainerOpaqueDenied $ovShapes
+            }
+            break
+        }
+    }
+}
+
+if ($null -eq $decision) { exit 0 }
+
+# ZOPT-Q102 (0.3.1): seda zona (`audit`) = hook mlci a zapise radek auditu s ID tvaru; `ask` uz neexistuje.
+if ($decision.Decision -eq 'audit') {
+    Write-GateAudit $toolName ('gate:' + [string](Get-LeafField $decision 'Id' 'unknown')) 'allow' $config
+    exit 0
+}
+
+# H-b (TASK-117, Z117-Q8 = B): kazde `deny` jde do auditu s ID tvaru, nikdy s textem prikazu.
+Write-GateAudit $toolName ('gate:' + [string](Get-LeafField $decision 'Id' 'unknown')) 'deny' $config
+$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
+Write-DenyDecision $reason

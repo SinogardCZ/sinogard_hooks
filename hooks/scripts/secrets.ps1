@@ -1,10 +1,12 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  PreToolUse secrets guard: cteni, zapis i vypis souboru se secrets konci deny nebo ask.
+  PreToolUse secrets guard: cteni, zapis i vypis souboru se secrets konci deny; seda zona audit (hook mlci).
 
 .DESCRIPTION
   ASCII-ONLY zdroj (viz _common.ps1); lidske texty jsou v hooks/config/defaults.json.
+  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.1.
+  Do 0.4.0 (ZOPT-Q102) tu v SYNOPSIS stalo "konci deny nebo ask".
   Fail-closed stejne jako gate.ps1: vyjimka, vadny vstup i neznamy nastroj = exit 2.
 
   Nelogujeme obsah nastroju ani promptu - do rozhodnuti jde jen cesta nebo prikaz,
@@ -108,7 +110,7 @@ function ConvertTo-GlobRegex([string]$Glob) {
 # uvnitr jmena deterministicky nerozlisit; audit + pojmenovana mez se spoustecem.
 function Test-GlobAimsAtProtectedPath([string]$GlobNorm, $Sec) {
     if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'denyPathPatterns' @())) { return $true }
-    if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'askPathPatterns' @())) { return $true }
+    if (Test-AnyPattern $GlobNorm @(Get-Field $Sec 'auditPathPatterns' @())) { return $true }
     $globBase = Get-BaseName $GlobNorm
     if (Test-AnyPattern $globBase @(Get-Field (Get-Field $Sec 'envFile') 'denyNames' @())) { return $true }
     $literal = ($globBase -replace '[\*\?]', '')
@@ -164,12 +166,196 @@ function Test-CwdChange([string]$Command) {
 }
 $script:CwdUncertain = $false
 
-function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true) {
+# A179-O20 / CR-AL1 (Amber 2026-10-23): shell rozvine i `[...]` a v Bashi `{a,b}`, nejen `*` a `?` - `cat .en[v]`,
+# `cat ~/.aws/credential[s]`, `cat {.env,x}` do teto opravy prosly tichem (dira 0.3.0). Skupina se ROZVINE na doslovne
+# kandidaty (mnozina znaku, rozsah `a-z`, alternativy, ciselna a znakova rada `{1..3}`) a kazdy kandidat jde pravidlem cesty;
+# trefi-li nektery chraneny soubor, je cela cesta glob mirici na tajemstvi (`wildcardPath`, deny). Negace a tridy se
+# rozviji nad abecedou jmen souboru (CR-AN3). Co rozvinout nejde (`/` ve skupine, neznama trida, rada s krokem, nulami
+# doplnena rada) nebo by dalo vic nez $Limit kandidatu, = $null a volajici posoudi nadmnozinu (CR-AM5). Prevod skupin
+# na regex globu (bez vyctu) = verze 0.4.1 (GSD TASK-190).
+# Abeceda je mez: znak mimo ni (velke pismeno po normalizaci cesty neni, mezera, diakritika) negace nerozvine.
+$script:GlobAlphabet = 'abcdefghijklmnopqrstuvwxyz0123456789._-'
+$script:GlobClassChars = @{
+    alpha = 'abcdefghijklmnopqrstuvwxyz'; lower = 'abcdefghijklmnopqrstuvwxyz'; upper = 'abcdefghijklmnopqrstuvwxyz'
+    digit = '0123456789'; alnum = 'abcdefghijklmnopqrstuvwxyz0123456789'; xdigit = '0123456789abcdef'
+    punct = '._-'; print = 'abcdefghijklmnopqrstuvwxyz0123456789._-'; graph = 'abcdefghijklmnopqrstuvwxyz0123456789._-'
+    space = ''; blank = ''; cntrl = ''
+}
+function Expand-PathGlobGroups([string]$Path, [bool]$Braces, [int]$Limit = 64) {
+    $acc = New-Object System.Collections.Generic.List[string]
+    $acc.Add('')
+    $i = 0
+    while ($i -lt $Path.Length) {
+        $ch = $Path[$i]
+        $alts = $null
+        $next = $i + 1
+        if ($ch -eq '[') {
+            # CR-AN3 (/code-review nad 824775e): negace `[!x]` / `[^x]` a trida `[[:alpha:]]` se rozviji nad abecedou jmen
+            # souboru ($script:GlobAlphabet) - `cat deploy.pe[!x]` da kandidata `deploy.pem` (do teto opravy nadmnozina
+            # `deploy.pe*` = ticho). Prazdna mnozina = Bash necha token doslova (zadny kandidat).
+            # CR-AO2 (/code-review nad 54dc970): zastupne znaky PowerShellu negaci nemaji - `[!v]` je mnozina {!, v}.
+            $j = $i + 1
+            $neg = $false
+            if ($Braces -and $j -lt $Path.Length -and ($Path[$j] -eq '!' -or $Path[$j] -eq '^')) { $neg = $true; $j++ }
+            $set = New-Object System.Collections.Generic.List[string]
+            $close = -1
+            $k = $j
+            while ($k -lt $Path.Length) {
+                $c0 = $Path[$k]
+                if ($c0 -eq ']' -and $k -gt $j) { $close = $k; break }
+                if ($c0 -eq '/') { return $null }
+                # CR-AO6: tridu ekvivalence `[[=v=]]` a symbol razeni `[[.v.]]` Bash zna, my ne = nadmnozina.
+                if ($Braces -and $c0 -eq '[' -and $k + 1 -lt $Path.Length -and ($Path[$k + 1] -eq '=' -or $Path[$k + 1] -eq '.')) { return $null }
+                if ($Braces -and $c0 -eq '[' -and $k + 1 -lt $Path.Length -and $Path[$k + 1] -eq ':') {
+                    $ce = $Path.IndexOf(':]', $k + 2)
+                    if ($ce -lt 0) { return $null }
+                    $cls = $script:GlobClassChars[$Path.Substring($k + 2, $ce - $k - 2)]
+                    if ($null -eq $cls) { return $null }
+                    foreach ($x in $cls.ToCharArray()) { $s = [string]$x; if (-not $set.Contains($s)) { $set.Add($s) } }
+                    $k = $ce + 2
+                    continue
+                }
+                if ($k + 2 -lt $Path.Length -and $Path[$k + 1] -eq '-' -and $Path[$k + 2] -ne ']') {
+                    $a = [int]$c0; $b = [int]$Path[$k + 2]
+                    if ($b -lt $a -or ($b - $a) -gt $Limit) { return $null }
+                    for ($c = $a; $c -le $b; $c++) { $s = ([string][char]$c).ToLowerInvariant(); if (-not $set.Contains($s)) { $set.Add($s) } }
+                    $k += 3
+                    continue
+                }
+                $s = ([string]$c0).ToLowerInvariant(); if (-not $set.Contains($s)) { $set.Add($s) }
+                $k++
+            }
+            if ($close -gt 0) {
+                if ($neg) {
+                    $comp = New-Object System.Collections.Generic.List[string]
+                    foreach ($x in $script:GlobAlphabet.ToCharArray()) { if (-not $set.Contains([string]$x)) { $comp.Add([string]$x) } }
+                    $set = $comp
+                }
+                $alts = @($set)
+                $next = $close + 1
+            }
+        } elseif ($Braces -and $ch -eq '{') {
+            $depth = 0; $close = -1
+            $commas = New-Object System.Collections.Generic.List[int]
+            for ($k = $i; $k -lt $Path.Length; $k++) {
+                if ($Path[$k] -eq '{') { $depth++ }
+                elseif ($Path[$k] -eq '}') { $depth--; if ($depth -eq 0) { $close = $k; break } }
+                elseif ($Path[$k] -eq ',' -and $depth -eq 1) { $commas.Add($k) }
+            }
+            if ($close -gt $i) {
+                $body = $Path.Substring($i + 1, $close - $i - 1)
+                $list = New-Object System.Collections.Generic.List[string]
+                if ($commas.Count -gt 0) {
+                    $start = $i + 1
+                    $parts = New-Object System.Collections.Generic.List[string]
+                    foreach ($cp in $commas) { $parts.Add($Path.Substring($start, $cp - $start)); $start = $cp + 1 }
+                    $parts.Add($Path.Substring($start, $close - $start))
+                    foreach ($p in $parts) {
+                        $sub = Expand-PathGlobGroups $p $Braces $Limit
+                        if ($null -eq $sub) { return $null }
+                        foreach ($s in $sub) { $list.Add($s) }
+                    }
+                } elseif ($body -match '^(-?\d+)\.\.(-?\d+)$') {
+                    # CR-AM3: nulami doplnena rada (`{01..03}`) dava jine kandidaty - nerozvijet (nadmnozina).
+                    if ($Matches[1] -match '^-?0\d' -or $Matches[2] -match '^-?0\d') { return $null }
+                    $a = [int]$Matches[1]; $b = [int]$Matches[2]
+                    if ([Math]::Abs($b - $a) -gt $Limit) { return $null }
+                    $step = if ($b -ge $a) { 1 } else { -1 }
+                    for ($c = $a; $c -ne $b + $step; $c += $step) { $list.Add([string]$c) }
+                } elseif ($body -match '^([a-z])\.\.([a-z])$') {
+                    $a = [int][char]$Matches[1]; $b = [int][char]$Matches[2]
+                    $step = if ($b -ge $a) { 1 } else { -1 }
+                    for ($c = $a; $c -ne $b + $step; $c += $step) { $list.Add([string][char]$c) }
+                } elseif ($body -match '^(-?\d+\.\.-?\d+|[a-z]\.\.[a-z])\.\.-?\d+$') {
+                    # CR-AM3: rada s krokem (`{a..z..2}`) - Bash ji rozvine, my ne = nadmnozina (fail-closed).
+                    # CR-AN8: jiny text s `..` (`{..}`, `{a..}`, `{1..x}`) rada neni - Bash ho necha doslova.
+                    return $null
+                }
+                if ($list.Count -gt 0) { $alts = @($list); $next = $close + 1 }
+            }
+        }
+        if ($null -eq $alts) { $alts = @([string]$ch) }
+        $grown = New-Object System.Collections.Generic.List[string]
+        foreach ($p in $acc) {
+            foreach ($x in $alts) {
+                $grown.Add($p + $x)
+                if ($grown.Count -gt $Limit) { return $null }
+            }
+        }
+        $acc = $grown
+        $i = $next
+    }
+    return @($acc)
+}
+
+# CR-AM5: nadmnozina skupin - kazda `[...]` (a v Bashi `{...}`, i vnorena) = jeden `*` v ramci segmentu. `**` zadane
+# uzivatelem zustava. CR-AN4 (/code-review nad 824775e): skupina vedle `*` uzivatele se s nim slije do JEDNE `*`
+# (`deploy/[!_]*config` -> `deploy/*config`, ne `**`, ktera prekroci `/`). CR-AO8 (/code-review nad 54dc970): i dve
+# skupiny kolem `*` (`deploy/[a-z]*[a-z]` -> `deploy/*`) - `**` uzivatele se odlozi znackou [char]3, beh `*` se slije.
+# CR-AO6: trida ekvivalence `[[=v=]]` a symbol `[[.v.]]` jsou cast skupiny.
+function ConvertTo-GroupSupersetGlob([string]$Path, [bool]$Braces) {
+    $dbl = [string][char]3
+    $s = $Path.Replace('**', $dbl)
+    $s = [regex]::Replace($s, '\[[!^]?(\[[:=.][^\]]*[:=.]\]|[^\]/])*\]', '*')
+    if ($Braces) {
+        $prev = ''
+        while ($prev -ne $s) { $prev = $s; $s = [regex]::Replace($s, '\{[^{}]*\}', '*') }
+    }
+    $s = [regex]::Replace($s, '\*+', '*')
+    return $s.Replace($dbl, '**')
+}
+
+function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlob = $true, [bool]$ExpandGroups = $true) {
     $sec = Get-Field $Config 'secrets'
     $shapes = Get-Field $sec 'shapes'
     $norm = ConvertTo-NormalPath $Path
     if ($norm -eq '') { return $null }
     $base = Get-BaseName $norm
+
+    # A179-O20 / CR-AL1: skupina `[...]` (a v Bashi `{...}`) v neuvozenem tokenu PRIKAZU = glob; viz Expand-PathGlobGroups.
+    # CR-AM1: jen pro prikaz (Bash / PowerShell) - nastroje nad souborem (Read/Edit/Write) nesou doslovnou cestu
+    # (`src/app/[locale]/[slug]/page.tsx`). Kandidat na chraneny soubor (deny) = `wildcardPath`; kandidat sede zony
+    # (netrackovany `.env.dev`, cteni settings.local.json) = jeho vlastni verdikt jako u doslovne cesty (CR-AM4). Kdyz
+    # nic nesedi, posoudi se i doslovny text - Bash nesedici glob necha doslova (CR-AM1).
+    # CR-AM5: co rozvinout nejde, se posoudi jako NADMNOZINA (kazda skupina = `*`): miri-li na chranenou cestu NEBO sedne-li
+    # na chranene jmeno, deny (fail-closed i tam, kde `*` sam dava jen audit `wildcardName`); jinak ticho.
+    if ($AllowGlob -and $ExpandGroups -and ($script:ToolName -eq 'Bash' -or $script:ToolName -eq 'PowerShell') -and
+        ($norm.Contains('[') -or ($script:ToolName -eq 'Bash' -and $norm.Contains('{')))) {
+        $wp = (New-PolicyVerdict $sec 'wildcardPath' (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)))
+        $braces = ($script:ToolName -eq 'Bash')
+        $cands = Expand-PathGlobGroups $norm $braces
+        if ($null -eq $cands) {
+            $sup = ConvertTo-GroupSupersetGlob $norm $braces
+            if (Test-GlobAimsAtProtectedPath $sup $sec) { return $wp }
+            $supRegex = '^' + (ConvertTo-GlobRegex (Get-BaseName $sup)) + '$'
+            foreach ($known in @(Get-Field $sec 'protectedBaseNames' @())) {
+                if ([regex]::IsMatch([string]$known, $supRegex, 'IgnoreCase')) { return $wp }
+            }
+        } else {
+            $grey = $null
+            $envGrey = $false
+            $envDeny = @(Get-Field (Get-Field $sec 'envFile') 'denyNames' @())
+            foreach ($cand in $cands) {
+                # CR-AN6: po prvnim netrackovanem `.env.<x>` (verdikt `envFileUntracked`) dalsi `.env.<x>` bez `denyNames`
+                # nic noveho nerekne - bez `git ls-files` na kazdeho (`.env.{a..z}{0..1}` = 52 procesu git). CR-AO7: jen po
+                # verdiktu `envFileUntracked`, ne po jine sede zone (`settingsLocal`) - prepis muze `envFileUntracked` zprisnit.
+                $cb = Get-BaseName $cand
+                if ($envGrey -and $cb -match '^\.env($|\.)' -and -not (Test-AnyPattern $cb $envDeny)) { continue }
+                $v = Test-SecretPath $cand $IsWrite $Config $true $false
+                if ($null -eq $v) { continue }
+                if ($v.Decision -eq 'deny') {
+                    if ($IsWrite) { return $v }
+                    return $wp
+                }
+                if ($v.Id -eq 'envFileUntracked') { $envGrey = $true }
+                if ($null -eq $grey) { $grey = $v }
+            }
+            if ($null -ne $grey) { return $grey }
+        }
+        # CR-AN7: `{...}` Bash rozvine vzdy (i bez souboru) - doslovny text bez `[` neexistuje a posuzovat se nema
+        # (`cat .env.{example,sample}` = falesny audit `envFileUntracked`). Nesedici `[...]` Bash necha doslova (CR-AM1).
+        if (-not $norm.Contains('[')) { return $null }
+    }
 
     # Nalez Metis 21: `Get-Content .en?` shell rozvine na `.env`, ale kontrola vidi
     # `.en?`. Zastupny znak je neznamy cil -> Z3: ask. POZOR: ale NE u kazdeho globu:
@@ -188,7 +374,8 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # `head .github/workflows/*.yml` a `ls docs/technical/*.json` koncily dotazem (2 ze 3
     # dotazu `wildcardPath` ve vzorku faze 1; treti byl `echo **2` z doby pred N26).
     #   - trida chranena CESTOU (`denyPathPatterns` doslova nad textem globu, nebo glob, ktery
-    #     MIRI na kanonickou chranenou cestu z `protectedPaths`) -> `ask` jako dosud;
+    #     MIRI na kanonickou chranenou cestu z `protectedPaths`) -> politika `wildcardPath` (od A179-O18 deny, viz
+    #     nize; do review Amber B3 tu stalo "-> `ask` jako dosud" = stav do 0.3.0);
     #   - trida chranena JMENEM (`protectedBaseNames` sedne na posledni segment) -> AUDIT:
     #     hook mlci a zapise radek `secrets:wildcardName` (ne ticho bez stopy - bez zaznamu
     #     by se nikdy nezjistilo, jak casto k tomu doslo; ctenar auditu je od 0.2.0 kanarek
@@ -197,9 +384,10 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
     # tvar gitignore/pathspec, tedy tyz, jaky uz maji `denyPathPatterns`. Mez a spoustec
     # prehodnoceni (fixture adresar u invariantu) nese README.
     if ($AllowGlob -and $norm -match '[\*\?]') {
+        # A179-O18 (Amber 2026-10-23): trida chranena CESTOU = politika `secrets.decisions.wildcardPath`, vychozi deny
+        # (do 0.3.0 ask; vyvojova 0.3.1 audit) - obsah tajemstvi by vstoupil do kontextu modelu.
         if (Test-GlobAimsAtProtectedPath $norm $sec) {
-            return @{ Id = 'wildcardPath'; Decision = 'ask'
-                      Shape = (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)) }
+            return (New-PolicyVerdict $sec 'wildcardPath' (([string](Get-Field $shapes 'wildcardPath' '{path}')).Replace('{path}', [string]$Path)))
         }
         $globRegex = '^' + (ConvertTo-GlobRegex $base) + '$'
         foreach ($known in @(Get-Field $sec 'protectedBaseNames' @())) {
@@ -223,8 +411,7 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
         }
         $rel = Get-RelativeToCwd $norm (ConvertTo-NormalPath $script:Cwd)
         if (Test-GitTracked $script:Cwd $rel) { return $null }
-        return @{ Id = 'envFileUntracked'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'envFileUntracked' '{path}')).Replace('{path}', [string]($Path))) }
+        return (New-PolicyVerdict $sec 'envFileUntracked' (([string](Get-Field $shapes 'envFileUntracked' '{path}')).Replace('{path}', [string]($Path))))
     }
 
     # (2) tvrde zakazane tvary
@@ -247,14 +434,13 @@ function Test-SecretPath([string]$Path, [bool]$IsWrite, $Config, [bool]$AllowGlo
                      $norm -match '(^|/)hooks/(hooks\.json|config/[^/]+)$')
     if ($IsWrite -and ($underRoot -or $relUncertain -or (Test-AnyPattern $norm @(Get-Field $sec 'selfProtectPathPatterns' @())) -or
                        (Test-AnyPattern $abs @(Get-Field $sec 'selfProtectPathPatterns' @())))) {
-        return @{ Id = 'selfProtect'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))) }
+        # A179-O3 (Q16): agent nesmi umet vypnout vlastni pojistku - politika `selfProtect` je `deny` a prepis ji uvolnit nesmi.
+        return (New-PolicyVerdict $sec 'selfProtect' (([string](Get-Field $shapes 'selfProtect' '{path}')).Replace('{path}', [string]($Path))))
     }
 
-    # (4) seda zona
-    if (Test-AnyPattern $norm @(Get-Field $sec 'askPathPatterns' @())) {
-        return @{ Id = 'settingsLocal'; Decision = 'ask'
-                  Shape = (([string](Get-Field $shapes 'settingsLocal' '{path}')).Replace('{path}', [string]($Path))) }
+    # (4) seda zona - od 0.3.1 (ZOPT-Q102) jen cteni; zapis chyta sebeochrana vyse
+    if (Test-AnyPattern $norm @(Get-Field $sec 'auditPathPatterns' @())) {
+        return (New-PolicyVerdict $sec 'settingsLocal' (([string](Get-Field $shapes 'settingsLocal' '{path}')).Replace('{path}', [string]($Path))))
     }
 
     return $null
@@ -1444,9 +1630,10 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
     }
 
     if (Test-EnvironmentDump $Command) {
-        if ($null -eq $worst) {
-            $worst = @{ Id = 'envDump'; Decision = 'ask'; Shape = (Get-Field $shapes 'envDump' 'env') }
-        }
+        # CR-Q6 (/code-review 0.3.1): politika `deny` (prepis smi zprisnit) prebije drivejsi audit.
+        $ev = New-PolicyVerdict $sec 'envDump' ([string](Get-Field $shapes 'envDump' 'env'))
+        if ($ev.Decision -eq 'deny') { return $ev }
+        if ($null -eq $worst) { $worst = $ev }
     }
 
     $namePattern = [string](Get-Field $sec 'envVarNamePattern' '(^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)S?(_|$)')
@@ -1464,10 +1651,9 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
         }
     }
     if ($name -ne '') {
-        if ($null -eq $worst) {
-            $worst = @{ Id = 'envVarRead'; Decision = 'ask'
-                        Shape = (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name))) }
-        }
+        $vv = New-PolicyVerdict $sec 'envVarRead' (([string](Get-Field $shapes 'envVarRead' '{name}')).Replace('{name}', [string]($name)))
+        if ($vv.Decision -eq 'deny') { return $vv }
+        if ($null -eq $worst) { $worst = $vv }
     }
 
     # Z117-Q27 = B (A117-N16): telo obalu (`bash -c 'cat .env'`, `pwsh -c "Get-Content .env"`) - do 0.3.0 mlcelo,
@@ -1478,10 +1664,11 @@ function Test-SecretCommand([string]$Command, $Config, [int]$Depth = 0) {
             if ($wb.Kind -eq 'encoded') {
                 # `-EncodedCommand <base64>` = UTF-16LE text skriptu; kdyz se dekodovat neda (promenna, vadny base64),
                 # obsah neni videt -> ask (fail-closed).
-                $decoded = ''
-                try { $decoded = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($inner.Trim().Trim("'").Trim('"'))) } catch { $decoded = '' }
-                if ([string]::IsNullOrWhiteSpace($decoded)) {
-                    if ($null -eq $worst) { $worst = @{ Id = 'wrapperEncoded'; Decision = 'ask'; Shape = (Get-Field $shapes 'wrapperEncoded' 'pwsh -EncodedCommand') } }
+                $decoded = ConvertFrom-EncodedCommandText $inner
+                if ($decoded -eq '') {
+                    $wv = New-PolicyVerdict $sec 'wrapperEncoded' ([string](Get-Field $shapes 'wrapperEncoded' 'pwsh -EncodedCommand'))
+                    if ($wv.Decision -eq 'deny') { return $wv }
+                    if ($null -eq $worst) { $worst = $wv }
                     continue
                 }
                 $inner = $decoded
@@ -1535,6 +1722,13 @@ if ($script:CmdTools -contains $toolName) {
     $command = [string](Get-Field $toolInput 'command' '')
     if ([string]::IsNullOrWhiteSpace($command)) { Write-HookStderr $script:InternalMessage; exit 2 }
     $decision = Test-SecretCommand $command $config
+    # CR-U (TASK-179, kola 5 a 6): prikaz s `#` jeste jednou BEZ komentare (cteni 0.3.0) - kde `#` komentarem neni, muze
+    # cteni s komentarem videt mene. Z druheho cteni plati jen `deny` (audit ztlumen).
+    # CR-W8 (kolo 7): spolecny protokol s gate.ps1 (_common.ps1, Invoke-PlainCommentReading).
+    if (($null -eq $decision -or $decision.Decision -ne 'deny') -and (Test-NeedsPlainReading $command)) {
+        $pr = Invoke-PlainCommentReading { Test-SecretCommand $command $config }
+        if ($null -ne $pr -and $pr.Decision -eq 'deny') { $decision = $pr }
+    }
 } else {
     $path = [string](Get-Field $toolInput 'file_path' '')
     if ($path -eq '') { $path = [string](Get-Field $toolInput 'notebook_path' '') }
@@ -1545,14 +1739,13 @@ if ($script:CmdTools -contains $toolName) {
 
 if ($null -eq $decision) { exit 0 }
 
-# H-b (TASK-117): kazde `ask` a `deny` jde do auditu s ID tvaru - nikdy s cestou ani jmenem.
-Write-GateAudit $toolName ('secrets:' + [string]$decision.Id) ([string]$decision.Decision) $config
-
-$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
-
-if ($decision.Decision -eq 'ask' -and $mode -eq 'bypassPermissions') {
-    $reason = $reason + (Get-Text $config 'bypassSuffix' ' bypass')
-    Write-DenyDecision $reason
+# ZOPT-Q102 (0.3.1): seda zona (`audit`) = hook mlci a zapise radek auditu s ID tvaru; `ask` uz neexistuje.
+if ($decision.Decision -eq 'audit') {
+    Write-GateAudit $toolName ('secrets:' + [string]$decision.Id) 'allow' $config
+    exit 0
 }
-if ($decision.Decision -eq 'deny') { Write-DenyDecision $reason }
-Write-AskDecision $reason
+
+# H-b (TASK-117): kazde `deny` jde do auditu s ID tvaru - nikdy s cestou ani jmenem.
+Write-GateAudit $toolName ('secrets:' + [string]$decision.Id) 'deny' $config
+$reason = ([string](Get-Text $config 'gateReason' 'Brana par. 6: {shape}')).Replace('{shape}', [string]$decision.Shape)
+Write-DenyDecision $reason

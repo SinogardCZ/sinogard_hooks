@@ -19,23 +19,27 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 
 | Hook | Událost | Co dělá |
 |---|---|---|
-| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**. Šedá zóna → **ask**. Tvar, který nejde rozebrat, → **audit** (viz níže). |
-| `secrets.ps1` | `PreToolUse` nad `Read`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit`/`Bash`/`PowerShell` | Čtení, zápis i výpis souborů se secrets → **deny**. Výpis prostředí, čtení citlivé proměnné a zápis do souborů, kterými se brána vypíná → **ask**. |
+| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**; od 0.4.0 i příkaz na cizím stroji (`ssh host "…"`). Šedá zóna → **audit** nebo **deny** podle politiky (od 0.4.0 žádné `ask`, viz níže). |
+| `secrets.ps1` | `PreToolUse` nad `Read`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit`/`Bash`/`PowerShell` | Čtení, zápis i výpis souborů se secrets, zástupný znak mířící na ně (`cat ~/.ssh/*`, `cat *.env`; od 0.4.0) a zápis do souborů, kterými se brána vypíná → **deny**. Výpis prostředí a čtení citlivé proměnné → **audit**. |
 | `resume-cost.ps1` | `SessionStart` (`startup`/`resume`/`fork`) | Při startu **kanárek** („plugin běží, tyhle čtyři hooky jsou živé"). Při obnovení session hlásí cenu a zapisuje řádek do JSONL. Od 0.2.0 na každém startu hlásí **přírůstek řádků auditu** od minulého startu (výrok 6, TASK-106). Nic neblokuje. |
 | `notify.ps1` | `Notification` | Upozorní, že se čeká na člověka. Nic neblokuje. |
 
-### Tři rozhodnutí, ne dvě
+### Dvě rozhodnutí — od 0.4.0 žádné `ask` (`ZOPT-Q102`)
 
 - **deny** — nástroj se neprovede vůbec; důvod se vrátí modelu. Platí **i v režimu
   `bypassPermissions`** a s `--dangerously-skip-permissions`.
-- **ask** — zobrazí se běžný dotaz na oprávnění. Tohle je vynucený souhlas člověka:
-  rozhoduje ten, kdo sedí u terminálu, ne model.
-- **žádné rozhodnutí** — hook mlčí a platí normální tok oprávnění.
+- **žádné rozhodnutí** — hook mlčí a platí normální tok oprávnění. Šedá zóna (**audit**)
+  navíc zapíše řádek auditu s id tvaru.
 
-V režimu `bypassPermissions` se **`ask` vydává jako `deny`**: v bypassu by se dotaz
-nezobrazil, takže šedá zóna by tiše propadla. Důvod to říká nahlas.
+Do 0.3.0 existovalo třetí rozhodnutí, **ask** (dotaz na oprávnění; v `bypassPermissions` se
+vydával jako `deny`). Od 0.4.0 (rozhodnutí Toma `ZOPT-Q102` 2026-10-20, mapa Amber `A179-O3`, `A179-O17`, `A179-O18`;
+vyvíjeno jako 0.3.1, číslo verze podle `A179-O19`) hook **na člověka nečeká nikdy**: každé bývalé `ask` má politiku
+`audit` nebo `deny` (`gate.decisions`, `secrets.decisions`, `gate.opaque`, `gate.dbDestroyLocal`). Úplná mapa je
+v [CHANGELOG 0.4.0](CHANGELOG.md). Tabulky níže jsou **historie** — `ask` v nich je verdikt
+té verze. Strukturní test sady (`Assert-NoAskVerdict`) hlídá, že žádný běh hooku `ask`
+nevydá a že zdroj ani výchozí konfigurace `ask` neznají.
 
-### Třídy `ask` — a jak se měnily od 0.1.8
+### Třídy `ask` — a jak se měnily od 0.1.8 (historie do 0.3.0)
 
 Rozsah brány je **rozhodnutí zadavatele**, ne technická nutnost. Po prvních ostrých
 sessions se spočítalo, co se doopravdy ptalo, a nad těmi čísly padla rozhodnutí
@@ -187,13 +191,18 @@ Projekt je může přepsat souborem `.claude/sinogard-hooks.json` ve své složc
 - je-li hodnota na obou stranách **objekt**, sloučí se **o jednu úroveň** (klíč po klíči),
 - **pole a skaláry se nahrazují CELÉ**.
 
-Takže `{"gate":{"opaque":{"variable":"ask"}}}` přepíše `gate.opaque` a **nechá být**
+Takže `{"gate":{"opaque":{"variable":"deny"}}}` přepíše `gate.opaque` a **nechá být**
 `denyPatterns`, `allowedRemoveRoots` i `shapes`; `{"gate":{"denyPatterns":[]}}` by naopak
 ten seznam vyprázdnil celý — **od 0.3.0 ho ale odmítne kontrola obsahu (níže)**. Důvod
 původního mělkého slučování tím drží — položku seznamu pořád nejde jen odebrat — jen kvůli
 jednomu klíči už nemizí zbytek objektu. Hlouběji než o jednu úroveň se **vědomě nejde**.
 
-### Přepis smí bránu jen ZPŘÍSNIT — s pojmenovanými výjimkami `opaque` a `dbDestroyLocal` (od 0.3.0, H-c)
+### Přepis smí bránu jen ZPŘÍSNIT (od 0.3.0, H-c; od 0.4.0 bez výjimek)
+
+ℹ️ **Od 0.4.0 výjimky `opaque` a `dbDestroyLocal` neplatí** (review Amber A6): `gate.opaque` je pravidlo `policy`
+(jen `audit` → `deny`) a `gate.dbDestroyLocal.databases` smí výchozí vzory jen **zúžit** (`subset`). Projekt proto
+nemůže povolit vlastní jména — přepis `Hrms*` (žádost HRMS, `Z117-Q13`/`Q19`) se odmítne. Do 0.3.0 tu stálo
+*„s pojmenovanými výjimkami `opaque` a `dbDestroyLocal`"*.
 
 Do 0.2.0 se obsah přepisu nekontroloval: `{"gate":{"denyPatterns":[]}}` vypnulo
 `git reset --hard` a `localDbHosts` s `db.firma.cz` udělalo ze vzdáleného serveru „lokální".
@@ -202,10 +211,10 @@ konfiguraci — čtou se před sloučením, takže je přepis sám změnit nemů
 
 | klíč přepisu | přijat, když |
 |---|---|
-| seznamy, jejichž přidání zpřísňuje (`gate.denyPatterns`, `askPatterns`, `rawDestructiveTokens`, `interpreterDestructiveTokens`, `sqlClients`, `shellInterpreters`, `codeInterpreters`, `remoteShells`, `protectedBranches`; `secrets.denyPathPatterns`, `askPathPatterns`, `selfProtectPathPatterns`, `protectedBaseNames`, `protectedPaths`, `pathCommands`, `writeCommands`) | obsahuje **všechny** výchozí položky |
+| seznamy, jejichž přidání zpřísňuje (`gate.denyPatterns`, `auditPatterns`, `rawDestructiveTokens`, `interpreterDestructiveTokens`, `interpreterDbTokens`, `sqlClients`, `shellInterpreters`, `codeInterpreters`, `remoteShells`, `protectedBranches`; `secrets.denyPathPatterns`, `auditPathPatterns`, `selfProtectPathPatterns`, `protectedBaseNames`, `protectedPaths`, `pathCommands`, `writeCommands`) | obsahuje **všechny** výchozí položky |
 | seznamy, jejichž přidání povoluje (`gate.allowedRemoveRoots`, `secrets.dataHeredocHosts`) | jen **vybírá** z výchozích |
 | `gate.localDbHosts` | jen jména z pevné místní množiny v kódu: `localhost`, `127.0.0.1`, `::1`, `(local)`, `.`, `(localdb)\<instance>` |
-| `gate.opaque` | hodnoty `audit` / `ask`; `encoded` jen `ask` |
+| `gate.opaque`, `gate.decisions`, `secrets.decisions` (od 0.4.0, pravidlo `policy`) | hodnoty `audit` / `deny`; klíč s výchozím `deny` zůstává `deny`; neznámý klíč se odmítne |
 | `secrets.envFile` | `denyNames` nadmnožina, `allowNames` podmnožina, `otherPolicy` beze změny |
 | `gate.dbDestroyLocal` | schéma níže |
 | `hooks`, `texts`, `notify`, `resumeCost`, klíče začínající `_` | beze změny |
@@ -217,13 +226,43 @@ i session, která má přepis opravit. Odmítnutí je vidět: kanárek vypíše
 `· přepis: odmítnuto N klíčů (gate.denyPatterns, …)` a každé volání brány, které odmítnutý
 klíč potkalo, zapíše audit `config:overrideRejected:<klíč>` (jen jméno, nikdy hodnota).
 
-### Lokální destruktivní operace nad DB per projekt (`gate.dbDestroyLocal`, od 0.3.0, H-f)
+### Lokální destruktivní operace nad DB per projekt (`gate.dbDestroyLocal`, od 0.3.0, H-f; od 0.4.0 `ZOPT-Q102`)
 
 ```jsonc
-{ "gate": { "dbDestroyLocal": { "decision": "allow", "databases": ["Hrms*"], "hosts": ["(localdb)\\MSSQLLocalDB"] } } }
+{ "gate": { "dbDestroyLocal": { "decision": "allow", "databases": ["*_test_*"] } } }
 ```
 
-Výchozí `{"decision":"ask","databases":[],"hosts":[]}` = chování 0.2.0. `deny` → lokální
+**Od 0.4.0** (`ZOPT-Q102`, `A179-O3` Q10): výchozí `{"decision":"allow","databases":["*_test_*","*_test","*_dev"]}`.
+⚠️ **HRMS (`A179-O6`):** lokální databáze HRMS (`Hrms`, `Hrms…Test`, `Hrms…Migration`; změřeno 2026-10-21, 31 z 31) na
+výchozí vzory **nesedí** a přepisem je povolit nejde — agentem psané `DROP DATABASE` / `ef database drop` / `sqllocaldb
+delete` je v HRMS vždy `deny` (do 0.3.0 `ask` nebo `deny`). Testy (`dotnet test`) a skripty hook nevidí, ty se nemění.
+Destruktivní operace na **místním** hostiteli nad databází, jejíž jméno příkaz **nese** a které sedí na vzor → hook mlčí
+a zapíše audit `gate:dbDestroyLocal`; cokoli jiného → `deny`. Jména se čtou doslova z příkazu: `-d`/`--dbname`,
+`dbname=`, URI, `Database=`/`Initial Catalog=`, `PGDATABASE=`, první poziční argument `psql`, cíl `dropdb`, jméno
+v `DROP DATABASE` (u `DROP DATABASE`/`dropdb`/`ef database drop` rozhoduje **rušená** databáze, ne údržbová, ke které se
+klient připojí). Každé nalezené jméno musí sedět. Nečitelné (`deny`): žádné jméno, proměnná, `USE`, meta-příkaz psql,
+dynamické SQL (`EXEC`, `EXECUTE`, `sp_executesql`, `dblink`), SQL s komentářem (`/**/`, `--`), trojdílné jméno objektu
+(i `[a].[my schema].[c]`; vedlejší účinek: tečky v textu SQL jako `'A. B. C'`), seznam jmen v `DROP DATABASE a, b`, příkaz
+`sqlcmd` (`:connect`, `:r`, `!!` …), SQL ze souboru nebo stdin vedle viditelného (`-f`, `--file`, `-fx`, `-i`, `-ix`,
+`--input-file`, `<`; u `dropdb` jsou `-f`/`-i` volby `--force`/`--interactive`), zkratka dlouhé volby psql/dropdb
+(`--fil=`, `--ho=`), escape `]]` / `""` ve jménu, pgcli s DSN, `sqllocaldb delete`, tvar uvnitř kontejneru (`AOPT-O26`).
+**`allow` jen pro JEDNODUCHÝ příkaz (CR-U, TASK-179):** jediný statement, jehož všechny listy jsou tentýž SQL klient
+(nebo tělo heredocu pro něj) — žádný další příkaz (`cd x; …`, `dropdb x && createdb x`, `$env:PGPASSWORD = …; …`),
+roura (`| cat`, i SQL rourou `echo … | psql`), komentář, substituce ani výraz kolem příkazu (`X + (psql …)`); v textu
+příkazu žádné jméno `PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `SQLCMDSERVER`, `PSQLRC`
+(ani se escapem `PGHO\ST`) a v prostředí hooku jsou všechny prázdné. `2>&1`, `&>/dev/null` (Bash) a prefix
+`PGPASSWORD=x psql …` (Bash) jednoduchost neruší. Cokoli jiného → `deny`; se jménem ve vzoru jako tvar
+`gate:dbDestroyLocalCompound`, jehož hláška jmenuje povolený tvar (`psql -d <db> -c "…"` / `dropdb <db>`; `A179-O7`);
+s proměnnou hostitele v prostředí hooku jako `gate:dbDestroyLocalEnv` (hláška jmenuje proměnnou). Statement musí
+**začínat** tím SQL klientem: obal (`sudo`, `env`, `bash -c`, `pwsh -c`, `cmd /c`) načítá startovní soubory, které
+`PGHOST` nastavit mohou, a před klientem smí stát jen přiřazení `PGPASSWORD`, `PGUSER`, `PGDATABASE`, `PGPORT`,
+`PGCONNECT_TIMEOUT`, `PGAPPNAME` (Bash) nebo obalová závorka PowerShellu (`(psql …)`).
+**Mez:** proměnnou nastavenou profilem shellu (`~/.bashrc`), který načte jen nástroj Bash a ne proces hooku, ani
+existující `~/.psqlrc` s `\c` na jiný server hook nevidí — „bez hostitele = místní" pak neplatí; kdo má v profilu `PGHOST` na vzdálený server nebo `~/.psqlrc` s `\c`, ať v projektu nastaví
+`gate.dbDestroyLocal` na `deny`. Přepis smí `databases` jen **zúžit** (s `decision: deny` se vzory nečtou); `decision`
+`allow` | `deny`; `hosts` se nečte.
+
+ℹ️ **Do 0.3.0** platilo: výchozí `{"decision":"ask","databases":[],"hosts":[]}` = chování 0.2.0. `deny` → lokální
 destruktivní operace `deny`. **`allow` = hook MLČÍ a zapíše audit `gate:dbDestroyLocal`**
 (bez jména DB, serveru i textu příkazu) — ne `permissionDecision: allow`; v headless běhu
 (`claude -p`) proto projekt potřebuje i vlastní pravidlo `permissions.allow`. `allow` platí
@@ -305,6 +344,10 @@ na nastavení oznámení Windows.
 Tohle nejsou nedodělky, ale hranice, které plugin **nemá jak** překročit. Patří sem,
 aby si je nikdo nemusel objevit sám.
 
+ℹ️ **Od 0.4.0 (`ZOPT-Q102`) hook `ask` nevydává.** Kde omezení níže říká „končí `ask`",
+platí politika toho místa podle tabulky v [CHANGELOG 0.4.0](CHANGELOG.md) — ticho + audit,
+nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
+
 1. **Skript volaný souborem je pro hook neprůhledný.** Hook vidí jen příkaz, který
    nástroj spouští — `./cleanup.sh` nebo `pwsh -File deploy.ps1` propustí, i kdyby
    uvnitř byl `git reset --hard`. Obal s literálem (`bash -c "…"`) se rozebere,
@@ -314,7 +357,9 @@ aby si je nikdo nemusel objevit sám.
    v hooku `secrets` mlčel. `Start-Process git -ArgumentList 'reset','--hard'` (pole bez závorek, druhý poziční argument,
    zkratky `-f` / `-a`, `-Verb RunAs` před programem) gate od 0.3.0 složí (`A117-N18`).
    ⚠️ **Mez 0.3.0 — rozbor obalu NENÍ úplný** (`Z117-Q29 = A`, Tom 2026-10-09: vydat bez dalších oprav, zbytek po jednom
-   nálezu ve verzi 0.3.1; review `2026-10-09-review-amber-117-delta-05.md`). Výčet výše jmenuje tvary, které se rozeberou;
+   nálezu ve verzi 0.4.1 — ℹ️ do 0.3.1 tu stálo „0.3.1", pak „0.3.2"; vývojovou verzi 0.3.1 (vydanou jako 0.4.0,
+   `A179-O19`) převzala oprava kontejneru, omezení 11, GSD TASK-179;
+   review `2026-10-09-review-amber-117-delta-05.md`). Výčet výše jmenuje tvary, které se rozeberou;
    neplatí „každý obal": část zápisů obalu, které shell skutečně spustí, sdílená funkce nerozpozná a oba hooky mlčí
    (`A117-N29`); hook `secrets` nerozebírá literál předaný příkazům, které text spouštějí — gate ano (`A117-N30`); nad
    stropem zanoření se tělo obalu nerozhoduje a nic se neptá (`A117-N31`).
@@ -388,7 +433,10 @@ aby si je nikdo nemusel objevit sám.
 7. **Timeout hooku propouští.** Když handler nestihne `timeout` z `hooks/hooks.json`,
    Claude Code ho na `PreToolUse` **neblokuje** — příkaz projde. Timeouty jsou proto
    nastavené vysoko nad naměřený studený start a hook nedělá nic, co by mohlo čekat
-   na síť nebo na člověka.
+   na síť nebo na člověka. Doba ale roste s délkou příkazu: skript PowerShellu o 150
+   řádcích s bloky `{ }` trvá gate ~6,2 s (0.3.0 ~5,5 s), bez bloků ~3,6 s (0.3.0 ~2,5 s;
+   změřeno 2026-10-22, TASK-179). Výrazně delší skript v jednom volání může timeout 10 s
+   překročit a projít bez verdiktu.
 8. **Proměnná v pozici příkazu končí auditem, i když jde o výraz.** `[Math]::Truncate($x)`
    se nerozebere. Do 0.1.9 z toho byl `ask`; od 0.1.10 je to příčina `variable`, tedy
    audit. Přiřazení `$x = <příkaz>` je výjimka: rozebere se jeho pravá strana, takže
@@ -484,15 +532,61 @@ aby si je nikdo nemusel objevit sám.
     i **jméno programu** (`dropdb`) a `dotnet ef database drop`, a první oprava
     podmínila audit jen tím textem. *„Vyhodnotit výjimku až po pravidle" nestačí —
     musí se vyhodnotit po **celém** pravidle.*
-11. **Příkaz uvnitř kontejneru se nerozebírá.** `docker exec` a `docker run` se odloupnou
-    jen kvůli jménu klienta (`docker exec -i db psql …` je pořád `psql`), ale to, co se
-    spustí *uvnitř* kontejneru, se pravidly nad cestami neposuzuje. Důvod je věcný:
-    `/tmp` v obrazu není pracovní strom Toma, takže by pravidlo „mazání mimo povolené
-    složky" blokovalo běžnou práci — a brána, která blokuje běžnou práci, se do týdne
-    vypne. Vědomé rozhodnutí kola 4, ne opomenutí.
-    ⚠️ **Co ale kryté JE:** destrukce databáze se pozná podle `-h <host>` v příkazu,
-    takže `docker exec -i db psql -h prod -c "DROP TABLE x"` končí `deny` jako každý
-    jiný `psql`. Nekryté jsou **jen cesty uvnitř obrazu**.
+11. **Příkaz uvnitř kontejneru se pravidly nad cestami a gitem neposuzuje — DB pravidlem ano.**
+    To, co se spustí *uvnitř* kontejneru (`docker|podman exec|run`), se pravidly nad cestami
+    a gitem neposuzuje. Důvod je věcný: `/tmp` v obrazu není pracovní strom Toma, takže by
+    pravidlo „mazání mimo povolené složky" blokovalo běžnou práci — a brána, která blokuje
+    běžnou práci, se do týdne vypne. Vědomé rozhodnutí kola 4, ne opomenutí.
+    🔴 **Do 0.3.1 tu stálo, že destrukce databáze v kontejneru je krytá** (*„`docker exec -i db psql -h prod -c "DROP TABLE x"`
+    končí `deny` jako každý jiný `psql`"*). **Nebyla:** platilo to jen pro tělo heredocu a rouru do klienta; s `-c` i `dropdb`
+    0.3.0 **mlčela** — i proti vzdálenému hostiteli (měření Amber 2026-10-15, GSD TASK-179, případy 17–24).
+    ✔️ **Od 0.4.0 (GSD TASK-179, `AOPT-O24`–`O27`):** vnitřní příkaz kontejnerového obalu posuzuje **DB pravidlo** — tatáž
+    destruktivní množina jako na hostiteli (SQL `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE`, `DELETE` / `UPDATE` bez `WHERE`;
+    `dropdb`, `dotnet ef database drop`, `sqllocaldb delete`) → **`deny` vždy**, místní i vzdálený hostitel (`AOPT-O26` +
+    `ZOPT-Q102`: v kontejneru se `allow` z `gate.dbDestroyLocal` nikdy nepoužije; review Amber A3 — do této opravy tu stálo
+    *„místní = `ask` podle `gate.dbDestroyLocal`"*, verdikt vývojové verze před `ZOPT-Q102`).
+    Rozbor zná `docker`, `podman` i `podman-remote`, `exec` i `run` (i `--entrypoint`), management podpříkaz `container exec|run`, compose (`docker compose`,
+    `podman compose`, `docker-compose`, `podman-compose`), globální volby před podpříkazem i za ním (podman), `podman exec
+    --latest|--cidfile`, vnořený `bash -c`, heredoc a rouru do klienta a obal za `sudo` / `env` / `timeout`. Volbu s hodnotou
+    bere z dokumentace CLI (docker/cli v29.9.0, docker/compose v5.6.0, podman v6.1.3, podman-compose 1.6.0); volbu, kterou
+    nezná, čte **oběma způsoby** (s hodnotou i bez), takže budoucí volba nic neschová; tělo heredocu a roury se posoudí pro
+    každé čtení obalu a platí nejpřísnější verdikt. Hostitel se bere z **vnitřního**
+    příkazu a z proměnných prostředí, které mu obal předává (`-e PGHOST=…`; průchozí `-e PGHOST` bere hodnotu z téhož
+    příkazu — prefix `PGHOST=…`, `export`, `$env:PGHOST = …`, i v dekódovaném `-EncodedCommand`; `--env-file` a hodnotu ze
+    session hook nevidí → v kontejneru stejně `deny`),
+    **nikdy z voleb obalu** (`-H` enginu, `run -h` = jméno kontejneru) — s jednou výjimkou z 0.3.0: `dotnet ef database
+    drop|update` se jako dřív posuzuje i nad **celým** příkazem obalu, takže tam volba obalu `-h` / `--host` může vyjít jako
+    vzdálený hostitel a dát `deny` (přísněji, ne tišeji; uvolnění by měnilo verdikt 0.3.0). Jiná CLI, která spouštějí
+    příkaz v kontejneru (`kubectl exec`, `oc`, `nerdctl`) nebo jinde (`podman machine ssh`, `podman unshare`), rozbor nezná — mimo třídu 0.4.0 (kandidát na další vydání, GSD TASK-161). Stejně jako
+    na hostiteli se nerozebírají obaly `su -c`, `gosu`, `runuser` (další obalové programy, `A117-N33`, TASK-161) — `docker exec db
+    su postgres -c "dropdb x"` proto dál mlčí. Proměnné `PGHOSTADDR` / `SQLCMDSERVER` (i `PGHOST`, `PGSERVICE`,
+    `PGSERVICEFILE`, `PGSYSCONFDIR`, `PSQLRC`) čte od 0.4.0 rozhodnutí `allow` na hostiteli: jméno v textu příkazu nebo
+    neprázdná hodnota v prostředí hooku = `deny` (CR-Q7, CR-R8; do 0.3.0 se nečetly — review Amber A3).
+    ✔️ **Mez hostitele z 0.3.0 zavřena v 0.4.0:** přiřazení proměnné prostředí, jejíž hodnota je substituce příkazu, před
+    SQL klientem (`PGHOST=$(…) psql …`) rozbor prefixu rozdělil a destruktivní příkaz mlčel. Od 0.4.0 hodnota přiřazení
+    s `$(` není prosté slovo → `deny` (`opaque:shellWord`; CR-AA1, `A179-O9`, omezení 27). Obaly `su -c` / `gosu` /
+    `runuser` zůstávají GSD TASK-161 (`AOPT-O29`).
+    Heredoc do shellu v kontejneru (`docker compose exec -T db bash <<EOF`) se rozebere **jen DB pravidlem**; tvar, který
+    starší průchod obaly rozbalil už v 0.3.0 (`docker exec -i c sh <<EOF`), má dál všechna pravidla jako v 0.3.0 — ale i tam
+    platí zákaz `allow` z `gate.dbDestroyLocal` a hostitel z `-e` obalu. Cíl kontejneru zapsaný substitucí (`$(docker ps -q)`,
+    zpětné apostrofy, závorka PowerShellu) se čte jako jeden token (slepuje se jen uzavřená substituce z textu, který
+    hook rozebírá — hlavní příkaz, tělo vnořeného shellu i dekódované `-EncodedCommand`, každý svými pravidly escapu;
+    závorky se párují bez ohledu na uvozovky i s nimi; kvotovaná závorka v hodnotě volby cíl nespolkne; rozbor substitucí má
+    strop práce na jeden běh hooku — po jeho překročení cíl nemusí být přečtený celý a příkaz s destruktivním DB literálem
+    dostane `deny` (jméno DB nejde přečíst; do 0.3.0 `ask`); zkratky dlouhých voleb `podman-compose` (argparse,
+    `--entry` = `--entrypoint`) se rozvinou, je-li zkratka jednoznačná. Tvar v kontejneru **nikdy** nedostane `allow` z `gate.dbDestroyLocal` (ani s výčtem DB a hostitelů).
+    Text pod nerozebratelnou hlavou uvnitř kontejneru (`sh -c "$PSQL -c '…'"`) s destruktivním DB literálem = `deny`
+    (`dbDestroyContainerOpaque`).
+    Heredoc do interpretu (`python`, `node` …) v kontejneru s destruktivním DB literálem = `deny` (volání `truncate(` není SQL;
+    tvar, který rozbalovala už 0.3.0 — `docker exec -i app python3 <<EOF` — má navíc dál verdikt 0.3.0);
+    `-EncodedCommand` v kontejneru se dekóduje a tělo jde DB pravidlem; nedekódovatelné = politika `gate.opaque.encoded`
+    jako na hostiteli (výchozí ticho + audit).
+    ℹ️ Do této opravy (review Amber A3) tu u čtyř posledních tvarů stálo `ask` — verdikt vývojové verze před `ZOPT-Q102`.
+    ⚠️ **Mez — dvě tabulky obalu:** starší průchod obaly (`Get-WrapperTail`, sdílený s hookem `secrets`) zůstal beze změny,
+    aby se nezměnil žádný verdikt 0.3.0 (`AOPT-O25`). Proto: hook `secrets` uvnitř kontejneru za globální volbou nebo
+    management podpříkazem dál mlčí (kontrolní řádky `tests/fixtures/task179-secrets.json`), a obal za prefixem
+    (`sudo docker exec …`) posuzuje vnitřní příkaz **všemi** pravidly gate jako v 0.3.0 — kontrolní řádek „sudo před exec".
+    Sjednocení obou tabulek je kandidát na další vydání (poznámka v GSD TASK-161).
     ➕ **Rozhodnuto 2026-09-12 (TASK-106 bod 3, výrok 3 Amber v mandátu Toma): přiznat
     jako omezení, neopravovat.** Doslova:
     > 🔴 *Spouštěč přehodnocení: první session, která uvnitř kontejneru sahá na adresář
@@ -662,12 +756,95 @@ aby si je nikdo nemusel objevit sám.
     ⚠️ **Mez, která zůstává:** skládání příkazů — `ls cfg/* | xargs cp -t .claude`, `find … -exec cp {} .claude/ \;`
     (`A117-N25`; mimo `Z117-Q27`, rozhodla Amber `A117-O11`); cíl celý v proměnné bez chráněného jména (`cp x.json $T`);
     `[IO.File]::…($p, …)` s cestou jen v proměnné.
-    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.3.1** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`):
+    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.4.1** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`;
+    ℹ️ do 0.3.1 tu stálo „0.3.1", pak „0.3.2" — vývojovou verzi 0.3.1, vydanou jako 0.4.0 (`A179-O19`), převzala oprava
+    kontejneru, omezení 11, GSD TASK-179):
     odkaz nebo junction vytvořený **na místě** chráněného adresáře, kopie metodou souborového objektu a složená cesta
     (`Join-Path`) u jiných zápisových příkazů než rodiny kopie (`A117-N32`); zápis chráněného souboru stahovacím,
     rozbalovacím nebo verzovacím příkazem, shell, který čte příkazy ze vstupu, další obalové programy, alias gitu, který
     spouští shell, a nepřímý zápis přes dříve založený odkaz (`A117-N33`); skládání příkazů výše (`A117-N25`) a pevný
     seznam sondovaných jmen (`A117-N27`).
+26. **Cíl enginu kontejneru hook nezná — destruktivní DB příkaz v kontejneru je proto `deny` vždy** (0.4.0, GSD
+    TASK-179, `AOPT-O26` + `ZOPT-Q102`). CLI kontejneru lze namířit na jiný stroj volbou (`docker -H|--host|-c|--context|--config`,
+    `podman -c|--connection|--url|-r|--remote|--identity`) nebo proměnnou prostředí (`DOCKER_HOST`, `DOCKER_CONTEXT`,
+    `DOCKER_CONFIG`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINER_SSHKEY`, `CONTAINERS_CONF`). Jméno spojení
+    (`--connection gsd-root`) ani kontext neříká, jestli jde o místní VM, nebo cizí server, takže hostitel se bere — jako
+    všude v pluginu — **z vnitřního příkazu**; `psql` bez `-h` uvnitř kontejneru na vzdáleném enginu je „místní". Protože
+    se v kontejneru `allow` z `gate.dbDestroyLocal` nikdy nepoužije, končí i tak **`deny`** — i u testovací DB a i
+    s přijatým projektovým přepisem (`@narrow`). Řádky skupiny `O26` v `tests/fixtures/task179-gate.json` to přibíjejí
+    (kontrola: tentýž příkaz na hostiteli s přepisem mlčí). Cena: destrukci DB v kontejneru provádí Tom, nebo skript.
+    ℹ️ Do této opravy (review Amber A3) tu stálo *„… je pak `ask`, ne `deny` … končí `ask` (s `gate.dbDestroyLocal = deny`
+    `deny`), nikdy ticho"* — verdikt vývojové verze před `ZOPT-Q102`.
+27. **Slovo Bashe čtou dvě ruční gramatiky; v hlavě příkazu a před ní platí místo gramatiky fail-closed pravidlo** (0.4.0,
+    GSD TASK-179, `A179-O9`–`O11`). Hlava příkazu i všechno před ní musí být prosté slovo. Před hlavou může stát hodnota
+    přiřazení, cíl přesměrování, slovo a vzor `case` nebo přiřazení za obalem (`env`, `sudo` …). Prosté slovo nemá `$`,
+    zpětný apostrof, závorku, escape ani uvozovku uprostřed; prostý je i celý řetězec v apostrofech či uvozovkách.
+    Nekvotovaná hlava navíc nesmí mít `*`, `?` ani `[`. Hodnota přiřazení smí nést prostý odkaz na proměnnou (`$NAME`,
+    `${NAME}`, `$1`, `$@`, i v uvozovkách; ne operátor `${A:-…}`). Výjimky hlavy bez prefixu: holá proměnná (`$X`, `${X}`,
+    `$1`, `$@`, `"$X"` → `opaque:variable`, ticho + audit), začátek bloku, subshellu a aritmetiky, definice funkce
+    a komentář. Jinak
+    hook vrátí `deny` (`opaque:shellWord`) a hláška jmenuje náhradu: hlavu jako doslovnou cestu, hodnotu jako prosté
+    slovo, substituci v argumentu příkazu, nebo výsledek spočítaný samostatným příkazem.
+    - **Cena:** `deny` i u běžných tvarů:
+      - proměnná nebo substituce v hlavě (`NODE_ENV=test ${HOME}/bin/tool`, `$(which python) x.py`, `"$(pwd)/bin/x"`),
+        i uvnitř obalu (`bash -c "$(cat cmd.txt)"`);
+      - substituce nebo uvozovka uprostřed v hodnotě přiřazení (`X=$(echo a b) git status`, `X=a"b c" git status`);
+      - samostatné přiřazení se substitucí (`n=$(basename "$f" .md)`, `A179-O10`).
+    - **Co pravidlo nezavírá:** slova v **argumentech** příkazu čte vlastní smyčka `Split-Arguments`. Ta zná uvozovky,
+      escape, `$( … )`, `${ … }` (do první `}`) a zpětné apostrofy, ale ne ANSI-C `$'…'`, uvozovky uvnitř `${ … }`
+      a zpětných apostrofů v uvozovkách ani vnořené `${ … }`. Špatně určená hranice slova posune argumenty, takže pravidlo
+      nad argumenty může minout cíl (nálezy `/code-review` kol 12–13 CR-AB2 a CR-AC4–AC5 mimo prefix). Změřeno
+      2026-10-22: ze 32 sond recenzentů kol 12–13 projdou tichem 4, všechny s `${ … }` v argumentu.
+    - **Rozdělený subshell projde tichem — stejně jako v 0.3.0** (`A179-O13`, `A179-O14`). `Split-CommandLine` nepočítá
+      hloubku holé `(`, takže `( a; b )` dělí na úlomky `(a` a `b)`. První příkaz nese `(`, poslední `)`, a pravidla nad
+      tokeny `(rm` nebo `--hard)` nesednou. **`(cd x && git reset --hard)`** i **`(rm -rf src; ls)`** proto projdou tichem.
+      Heuristiky, které úlomky ořezávaly (kola 15–17), byly vráceny, protože každé další kolo `/code-review` v nich našlo
+      regresi. Celý subshell v jednom úlomku (`(git reset --hard)`, `( … ) > log`, i se slepeným `(git reset --hard)>/dev/null`)
+      se rozebere. Patří sem i **`)` slepená s přesměrováním bez mezery** na posledním příkazu rozděleného subshellu
+      (`(cd x && git reset --hard)>/dev/null`, CR-AF2, díra 0.3.0, odloženo `A179-O13`). Oprava je hloubka `( )` ve
+      skeneru (CR-AF5) ve verzi 0.4.1 (GSD TASK-190), s vysokou prioritou. Do té doby piš příkazy bez subshellu (`cd x && git status`).
+      Starou cestou 0.3.0 jde i celý subshell, jehož konec `Find-CloseParen` nenajde: ANSI-C `$'…'` uvnitř, vnořený
+      subshell `((…) )` podobný aritmetice, uvozovky vnořené v `$( … )` (CR-AJ5, CR-AK1, CR-AK2).
+    - **Přesměrování celého subshellu se do vnitřního příkazu nepřenáší** (jako v 0.3.0): `(psql) < drop.sql` rozebere
+      `psql` bez `< drop.sql`, takže projde tichem bez řádku auditu `sqlFromFile`. Rozhodnutí je stejné jako u
+      `psql < drop.sql` (ticho), chybí jen řádek auditu. Oprava s tokenizérem ve verzi 0.4.1.
+    - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.4.1 (GSD TASK-190; do
+      `A179-O19` značeno 0.3.2). Kola `/code-review`
+      10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
+28. **Příkaz na cizím stroji a mazání větve — co pravidla 0.4.0 vidí a co ne** (GSD TASK-179, `A179-O17`, `A179-O18`,
+    `A179-O20`). `ssh` / `plink` s příkazem (pozičním, `-o RemoteCommand=…`, `plink -m soubor`, heredoc, here-string,
+    vstup ze souboru `< cmds.sh` i slepený `host<cmds.sh` nebo před příkazem) i s místním příkazem nebo knihovnou ve volbě
+    (`-o ProxyCommand|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider=…`, `-I`, `plink -proxycmd`)
+    = `deny`; `ssh host`, `ssh -T`, volby s hodnotou (`-p`, `-O exit`, shluk `-vp 2222`, `-J`, `-o ProxyJump=`)
+    a přesměrování výstupu (i PowerShell `*>`) mlčí. `SSH_ASKPASS=<program>` / `SSH_SK_PROVIDER=<knihovna>` před příkazem
+    = `deny`. Přesměrování je jen slovo, které v původním textu příkazu stojí mimo uvozovky — `ssh host '2>/dev/null rm
+    -rf x'` je příkaz; **cena:** u ssh uvnitř vnořeného shellu (`bash -c "ssh host 2>/dev/null"`) je přesměrování
+    v uvozovkách, takže `deny`; tentýž text v uvozovkách i mimo ně kdekoli v příkazu je nejasný a přesměrováním není
+    (`ssh a 2>/dev/null; ssh b '2>/dev/null'` = `deny` i pro `a`), stejně tak text, který je jen částí textu v uvozovkách
+    (`ssh a 2>/dev/null; bash -c "echo 2>/dev/null"` = `deny` pro `a`); přesměrování slepené s `&` / `&&`
+    (`ssh host 2>/dev/null&`) je příkaz (`deny`, 0.3.0 `ask`). **Mez:** proměnná nastavená dřív (`export SSH_ASKPASS=…`,
+    `$env:SSH_ASKPASS = …`) ani přiřazení ve vnořeném shellu (`bash -c "env SSH_ASKPASS=… ssh host"`) se nevidí;
+    **cena:** slovo `SSH_ASKPASS=…` kdekoli v příkazu, i u jiného příkazu nebo jako text, dá `deny` každému ssh;
+    `SSH_SK_PROVIDER=internal` se znakem za hodnotou (`SSH_SK_PROVIDER=internal; ssh host`) vestavěnou hodnotou není
+    (`deny`). `plink -load <relace>` s dalším argumentem = `deny` (relace může nést host, argument je pak příkaz; **cena:**
+    `plink -load relace host` s relací bez hosta). **Meze:** uložená relace PuTTY může nést i vzdálený příkaz — `plink -load
+    relace` bez dalšího argumentu mlčí (registr hook nečte); vstup ze souboru před ssh uvnitř vnořeného shellu
+    (`bash -c "< cmds.sh ssh host"`) se nevidí (0.3.0 také). `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
+    `RemoteCommand` nebo `ProxyCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s příkazem
+    v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci); **roura do ssh bez příkazu** (`cat cmds.sh | ssh
+    host`) mlčí — list ssh o rouře nic neví, oprava s tokenizérem 0.4.1 (GSD TASK-190). Mazání větve (`git branch -d|-D`,
+    `--delete` i zkratky `--d…`) = `deny`. **Cena** vzoru z 0.3.0: pomlčkové slovo s `d` kdekoli za `git branch`, i jako
+    hodnota volby (`git branch --sort -committerdate`), je `deny` — náhrada `--sort=-committerdate`.
+    Zástupná skupina v cestě příkazu (`[…]`, v Bashi `{a,b}`) se u hooku `secrets` rozvine na kandidáty (nástroje nad
+    souborem — Read, Edit, Write — nesou doslovnou cestu a nerozvíjí se). Negace `[!x]` a třídy `[[:digit:]]` se v Bashi
+    rozvinou nad abecedou jmen souborů (`a–z`, `0–9`, `.`, `_`, `-`; znak mimo ni negace nerozvine); PowerShell negaci
+    nezná, `[!v]` je množina `{!, v}`. Co rozvinout nejde (řada
+    s krokem, nulami doplněná řada, víc než 64 kandidátů), se posoudí jako nadmnožina (skupina = `*`): míří-li na chráněnou
+    cestu nebo sedne na chráněné jméno, `deny`; jinak ticho. **Cena:** nadmnožina sedící na chráněné jméno je `deny`, i když
+    stejný vzor s `*` dává jen audit `wildcardName` (`cat docs/[a-z][a-z]*.toml` ~ `secrets.toml`). **Meze:** nadmnožina
+    nevidí příponu klíče uvnitř jména — `cat key.p[a-z][a-z]` (676 kandidátů) mlčí stejně jako `cat key.p??` (mez 9);
+    třída `[[:alpha:]]` se k pravidlu cesty nedostane (příčina v rozboru tokenu nezjištěna) a mlčí. Převod skupin na regex
+    globu = 0.4.1 (GSD TASK-190).
 
 ---
 
@@ -729,7 +906,8 @@ Od 0.3.0 dostává každý běh hooku v sadě **prázdný projekt** (`CLAUDE_PRO
 audit** (`CLAUDE_PLUGIN_DATA`), pokud si případ obojí neurčí sám. Do 0.2.0 bral hook projekt
 z `cwd` šablony, takže na stroji s repem GSD sada měřila jeho skutečný přepis místo výchozího
 chování. Případy TASK-117 žijí v `tests/fixtures/task117-{secrets,gate}.json` (řádek nese
-`expect`, volitelně přepis, režim a tvrzení o řádku auditu).
+`expect`, volitelně přepis, režim a tvrzení o řádku auditu), případy TASK-179 (0.4.0, kontejner, `ZOPT-Q102`, slovo Bashe) ve stejném formátu
+v `tests/fixtures/task179-{gate,secrets}.json`.
 
 ### Konvence: kontrolní skupina je fixtura, ne věta
 
@@ -756,8 +934,8 @@ odchází jen s citovaným rozhodnutím.
 
 **`allow` v invariantu znamená, že hook MLČÍ** — prázdný stdout a `exit 0`, tedy platí
 normální tok oprávnění Claude Code. Není to `permissionDecision: allow`; ten by tu
-vrstvu přeskočil. Plugin žádný allow writer nemá (`_common.ps1` umí jen
-`Write-DenyDecision` a `Write-AskDecision`), takže **každý řádek `allow` je tvrzení
+vrstvu přeskočil. Plugin žádný allow writer nemá (`_common.ps1` umí od 0.4.0 jen
+`Write-DenyDecision`; `Write-AskDecision` zmizel s `ZOPT-Q102`), takže **každý řádek `allow` je tvrzení
 o tichu**. Rozdíl drží `Get-Decision` v `tests/_harness.ps1`: uvidí-li
 `permissionDecision: allow`, vrátí `DECISION-ALLOW` — a to se nerovná žádnému očekávání
 v žádné fixtuře, takže takový hook zčervená na **každém** řádku. (0.1.11, nález Ada N46.
