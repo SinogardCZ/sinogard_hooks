@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   ASCII-ONLY zdroj (viz _common.ps1); lidske texty jsou v hooks/config/defaults.json.
-  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.1.
+  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.2 (do GSD TASK-195 tu stalo 0.4.1; vydani 0.4.1 nese jen git branch -d, AOPT-O29).
   Do 0.4.0 (ZOPT-Q102) tu v SYNOPSIS stalo "konci deny nebo ask".
   Fail-closed stejne jako gate.ps1: vyjimka, vadny vstup i neznamy nastroj = exit 2.
 
@@ -172,7 +172,7 @@ $script:CwdUncertain = $false
 # trefi-li nektery chraneny soubor, je cela cesta glob mirici na tajemstvi (`wildcardPath`, deny). Negace a tridy se
 # rozviji nad abecedou jmen souboru (CR-AN3). Co rozvinout nejde (`/` ve skupine, neznama trida, rada s krokem, nulami
 # doplnena rada) nebo by dalo vic nez $Limit kandidatu, = $null a volajici posoudi nadmnozinu (CR-AM5). Prevod skupin
-# na regex globu (bez vyctu) = verze 0.4.1 (GSD TASK-190).
+# na regex globu (bez vyctu) = verze 0.4.2 (GSD TASK-190).
 # Abeceda je mez: znak mimo ni (velke pismeno po normalizaci cesty neni, mezera, diakritika) negace nerozvine.
 $script:GlobAlphabet = 'abcdefghijklmnopqrstuvwxyz0123456789._-'
 $script:GlobClassChars = @{

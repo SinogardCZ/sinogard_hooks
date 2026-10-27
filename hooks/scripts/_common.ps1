@@ -9,7 +9,7 @@
   non-ASCII znak ve zdroji by se rozsypal. Vsechny lidske texty (ceske) proto zijou
   v hooks/config/defaults.json a ctou se explicitne jako UTF-8.
 
-  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.1.
+  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.2 (do GSD TASK-195 tu stalo 0.4.1; vydani 0.4.1 nese jen git branch -d, AOPT-O29).
 
   Tenhle soubor si NENASTAVUJE rezim (StrictMode, ErrorActionPreference) - dot-source
   vklada kod do scope volajiciho a rezim patri vstupnimu bodu. Vse nize je proto

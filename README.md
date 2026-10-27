@@ -19,7 +19,7 @@ je navíc tokenizér, ne shell, takže **hook čte text příkazu, ne to, co z n
 
 | Hook | Událost | Co dělá |
 |---|---|---|
-| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**; od 0.4.0 i příkaz na cizím stroji (`ssh host "…"`). Šedá zóna → **audit** nebo **deny** podle politiky (od 0.4.0 žádné `ask`, viz níže). |
+| `gate.ps1` | `PreToolUse` nad `Bash`/`PowerShell` | Destruktivní git (force push na chráněnou větev, `reset --hard`, vynucené a vzdálené mazání větví, `clean -f`, přepis historie), rekurzivní mazání mimo povolené složky (včetně `[IO.Directory]::Delete` a `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory`) a destruktivní DB operace → **deny**; od 0.4.0 i příkaz na cizím stroji (`ssh host "…"`). Od 0.4.1 mlčí nevynucené smazání lokální větve (`git branch -d <větev>`, audit `gitBranchDeleteMerged`; omezení 29). Šedá zóna → **audit** nebo **deny** podle politiky (od 0.4.0 žádné `ask`, viz níže). |
 | `secrets.ps1` | `PreToolUse` nad `Read`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit`/`Bash`/`PowerShell` | Čtení, zápis i výpis souborů se secrets, zástupný znak mířící na ně (`cat ~/.ssh/*`, `cat *.env`; od 0.4.0) a zápis do souborů, kterými se brána vypíná → **deny**. Výpis prostředí a čtení citlivé proměnné → **audit**. |
 | `resume-cost.ps1` | `SessionStart` (`startup`/`resume`/`fork`) | Při startu **kanárek** („plugin běží, tyhle čtyři hooky jsou živé"). Při obnovení session hlásí cenu a zapisuje řádek do JSONL. Od 0.2.0 na každém startu hlásí **přírůstek řádků auditu** od minulého startu (výrok 6, TASK-106). Nic neblokuje. |
 | `notify.ps1` | `Notification` | Upozorní, že se čeká na člověka. Nic neblokuje. |
@@ -357,7 +357,8 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
    v hooku `secrets` mlčel. `Start-Process git -ArgumentList 'reset','--hard'` (pole bez závorek, druhý poziční argument,
    zkratky `-f` / `-a`, `-Verb RunAs` před programem) gate od 0.3.0 složí (`A117-N18`).
    ⚠️ **Mez 0.3.0 — rozbor obalu NENÍ úplný** (`Z117-Q29 = A`, Tom 2026-10-09: vydat bez dalších oprav, zbytek po jednom
-   nálezu ve verzi 0.4.1 — ℹ️ do 0.3.1 tu stálo „0.3.1", pak „0.3.2"; vývojovou verzi 0.3.1 (vydanou jako 0.4.0,
+   nálezu ve verzi 0.4.2 (GSD TASK-161) — ℹ️ do 0.3.1 tu stálo „0.3.1", pak „0.3.2", do 0.4.1 „0.4.1" (vydání 0.4.1 nese jen
+   `git branch -d`, GSD TASK-195, `AOPT-O29`); vývojovou verzi 0.3.1 (vydanou jako 0.4.0,
    `A179-O19`) převzala oprava kontejneru, omezení 11, GSD TASK-179;
    review `2026-10-09-review-amber-117-delta-05.md`). Výčet výše jmenuje tvary, které se rozeberou;
    neplatí „každý obal": část zápisů obalu, které shell skutečně spustí, sdílená funkce nerozpozná a oba hooky mlčí
@@ -756,8 +757,8 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     ⚠️ **Mez, která zůstává:** skládání příkazů — `ls cfg/* | xargs cp -t .claude`, `find … -exec cp {} .claude/ \;`
     (`A117-N25`; mimo `Z117-Q27`, rozhodla Amber `A117-O11`); cíl celý v proměnné bez chráněného jména (`cp x.json $T`);
     `[IO.File]::…($p, …)` s cestou jen v proměnné.
-    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.4.1** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`;
-    ℹ️ do 0.3.1 tu stálo „0.3.1", pak „0.3.2" — vývojovou verzi 0.3.1, vydanou jako 0.4.0 (`A179-O19`), převzala oprava
+    ⚠️ **Meze 0.3.0 k opravě ve verzi 0.4.2** (`Z117-Q29 = A`, Tom 2026-10-09; review `2026-10-09-review-amber-117-delta-05.md`;
+    GSD TASK-161; ℹ️ do 0.3.1 tu stálo „0.3.1", pak „0.3.2", do 0.4.1 „0.4.1" — vývojovou verzi 0.3.1, vydanou jako 0.4.0 (`A179-O19`), převzala oprava
     kontejneru, omezení 11, GSD TASK-179):
     odkaz nebo junction vytvořený **na místě** chráněného adresáře, kopie metodou souborového objektu a složená cesta
     (`Join-Path`) u jiných zápisových příkazů než rodiny kopie (`A117-N32`); zápis chráněného souboru stahovacím,
@@ -802,14 +803,14 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       regresi. Celý subshell v jednom úlomku (`(git reset --hard)`, `( … ) > log`, i se slepeným `(git reset --hard)>/dev/null`)
       se rozebere. Patří sem i **`)` slepená s přesměrováním bez mezery** na posledním příkazu rozděleného subshellu
       (`(cd x && git reset --hard)>/dev/null`, CR-AF2, díra 0.3.0, odloženo `A179-O13`). Oprava je hloubka `( )` ve
-      skeneru (CR-AF5) ve verzi 0.4.1 (GSD TASK-190), s vysokou prioritou. Do té doby piš příkazy bez subshellu (`cd x && git status`).
+      skeneru (CR-AF5) ve verzi 0.4.2 (GSD TASK-190), s vysokou prioritou. Do té doby piš příkazy bez subshellu (`cd x && git status`).
       Starou cestou 0.3.0 jde i celý subshell, jehož konec `Find-CloseParen` nenajde: ANSI-C `$'…'` uvnitř, vnořený
       subshell `((…) )` podobný aritmetice, uvozovky vnořené v `$( … )` (CR-AJ5, CR-AK1, CR-AK2).
     - **Přesměrování celého subshellu se do vnitřního příkazu nepřenáší** (jako v 0.3.0): `(psql) < drop.sql` rozebere
       `psql` bez `< drop.sql`, takže projde tichem bez řádku auditu `sqlFromFile`. Rozhodnutí je stejné jako u
-      `psql < drop.sql` (ticho), chybí jen řádek auditu. Oprava s tokenizérem ve verzi 0.4.1.
-    - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.4.1 (GSD TASK-190; do
-      `A179-O19` značeno 0.3.2). Kola `/code-review`
+      `psql < drop.sql` (ticho), chybí jen řádek auditu. Oprava s tokenizérem ve verzi 0.4.2.
+    - **Oprava:** jeden tokenizér Bashe pro skener, prefix, `Split-Arguments` i obaly ve verzi 0.4.2 (GSD TASK-190; do
+      `A179-O19` značeno 0.3.2, do GSD TASK-195 0.4.1). Kola `/code-review`
       10–13 ukázala, že doplňování gramatiky po konstrukcích nekonverguje.
 28. **Příkaz na cizím stroji a mazání větve — co pravidla 0.4.0 vidí a co ne** (GSD TASK-179, `A179-O17`, `A179-O18`,
     `A179-O20`). `ssh` / `plink` s příkazem (pozičním, `-o RemoteCommand=…`, `plink -m soubor`, heredoc, here-string,
@@ -832,9 +833,10 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     (`bash -c "< cmds.sh ssh host"`) se nevidí (0.3.0 také). `ssh -F <konfigurace>` a `~/.ssh/config` mohou nést
     `RemoteCommand` nebo `ProxyCommand` — soubor hook nečte, takže `ssh -F ./cfg host` i `ssh alias` s příkazem
     v konfiguraci mlčí (`deny` každého `-F` by zakázal běžnou práci); **roura do ssh bez příkazu** (`cat cmds.sh | ssh
-    host`) mlčí — list ssh o rouře nic neví, oprava s tokenizérem 0.4.1 (GSD TASK-190). Mazání větve (`git branch -d|-D`,
-    `--delete` i zkratky `--d…`) = `deny`. **Cena** vzoru z 0.3.0: pomlčkové slovo s `d` kdekoli za `git branch`, i jako
-    hodnota volby (`git branch --sort -committerdate`), je `deny` — náhrada `--sort=-committerdate`.
+    host`) mlčí — list ssh o rouře nic neví, oprava s tokenizérem 0.4.2 (GSD TASK-190). Mazání větve: od 0.4.1 omezení 29.
+    ℹ️ Do 0.4.1 tu stálo *„Mazání větve (`git branch -d|-D`, `--delete` i zkratky `--d…`) = `deny`. **Cena** vzoru z 0.3.0:
+    pomlčkové slovo s `d` kdekoli za `git branch`, i jako hodnota volby (`git branch --sort -committerdate`), je `deny` —
+    náhrada `--sort=-committerdate`."*
     Zástupná skupina v cestě příkazu (`[…]`, v Bashi `{a,b}`) se u hooku `secrets` rozvine na kandidáty (nástroje nad
     souborem — Read, Edit, Write — nesou doslovnou cestu a nerozvíjí se). Negace `[!x]` a třídy `[[:digit:]]` se v Bashi
     rozvinou nad abecedou jmen souborů (`a–z`, `0–9`, `.`, `_`, `-`; znak mimo ni negace nerozvine); PowerShell negaci
@@ -844,7 +846,35 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     stejný vzor s `*` dává jen audit `wildcardName` (`cat docs/[a-z][a-z]*.toml` ~ `secrets.toml`). **Meze:** nadmnožina
     nevidí příponu klíče uvnitř jména — `cat key.p[a-z][a-z]` (676 kandidátů) mlčí stejně jako `cat key.p??` (mez 9);
     třída `[[:alpha:]]` se k pravidlu cesty nedostane (příčina v rozboru tokenu nezjištěna) a mlčí. Převod skupin na regex
-    globu = 0.4.1 (GSD TASK-190).
+    globu = 0.4.2 (GSD TASK-190).
+29. **Mazání větve — co pravidlo 0.4.1 povolí a co ne** (GSD TASK-195; Tom `Z179-Q1 = B` 2026-10-25, `ZOPT-Q108 = A`
+    2026-10-27). `git branch` se rozebírá po slovech (`Test-GitBranchRule` v `gate.ps1`, ne regex nad textem).
+    - **Mlčí + audit `gate:gitBranchDeleteMerged`** (politika `gate.decisions.gitBranchDeleteMerged`, výchozí `audit`,
+      přepis smí `deny`): každé slovo za `branch` je z uzavřené množiny `-d`, `--delete` a jeho zkratky `--d` až `--delet`,
+      `-q`, `--quiet`, `--` a doslovná jména větví (bez `$`, zpětného apostrofu, závorek, `@`, `*`, `?`, `[`, `]`, `%`, `\`,
+      `~`, `^`, `:`, čárky, mezery a bez úvodní pomlčky), a žádné jméno není chráněná větev (`gate.protectedBranches`,
+      bez ohledu na velikost písmen, i `refs/heads/…`). Platí i v obalu (`bash -c`, `pwsh -Command`, `env`) a za `git -C`.
+    - **Záruka „sloučená" je kontrola gitu, ne hooku:** `git branch -d` odmítne větev nesloučenou do svého upstreamu, a nemá-li
+      upstream, do `HEAD`. Hook nevidí, kam je větev sloučená — **nepovoluje „jen větev sloučenou do `main`"**.
+    - **`deny` (id `git-branch-delete`):** `-D` kdekoli (i za jménem), `-f` / `--force` a jeho zkratky, spojené přepínače
+      (`-df`, `-dq`, …), `-r` / `--remotes` (git s ním maže vynuceně), neznámá volba, hodnotová volba vedle `-d`, `--%`,
+      a slovo, které shell teprve rozvine — proměnná, substituce, splat, podvýraz, složené závorky, escape, `%X%`. **Nově
+      i bez viditelného `-d`** (`git branch $F x`, escape uvnitř přepínače): takové slovo může být `-D` a hook to neví.
+      **Cena:** `git branch -m stary $NOVY` a `git branch $JMENO` (proměnná kdekoli za `branch`) jsou `deny` — náhrada je
+      doslovné jméno. Chráněná větev = `deny` s id `gitBranchDeleteProtected`.
+    - **Hodnota volby není přepínač:** za `--sort`, `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`,
+      `--with`, `--without`, `--points-at`, `--set-upstream-to` a `-u` bere git další slovo jako hodnotu i s pomlčkou (změřeno
+      git 2.50), takže `git branch --sort -committerdate` od 0.4.1 mlčí. **Cena:** zkratka hodnotové volby (`--so
+      -committerdate`) se jako hodnotová nepozná → `deny`; náhrada celé jméno nebo `--sort=…`.
+    - **Mez:** `git branch -M`, `-C` a `-f <větev> <commit>` (přepis existující větve) pravidlo nekryje — verdikt beze změny
+      (ticho). Glob, který by shell rozvinul na soubor pojmenovaný jako přepínač, se bez viditelného `-d` nevidí (`*`, `?`, `[`
+      v prvním znaku slova mlčí kvůli `git branch --list "*x*"`). `git branch` uvnitř kontejneru (`docker exec … git branch`)
+      jde jako dřív cestou kontejneru (ticho).
+    - **Vzdálené mazání = `deny`** (id `pushDelete`, i dřívější `git-push-delete` a `pushDeleteRefspec`): `git push --delete`
+      / `-d` i zkratky `--de`–`--delet` (`--d` git odmítne jako nejednoznačné), `--prune` a zkratky `--pru`, `--prun`,
+      spojené krátké přepínače s `d` (`-qd`, `-ud`), refspec `:x` / `+:x`, `--mirror` i zkratky `--m`–`--mirro`,
+      `-c remote.<jméno>.push=…` a `-c remote.<jméno>.mirror` (i `--config-env`). **Mez:** konfigurace z prostředí
+      (`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_PARAMETERS`) a z konfiguračního souboru repa se nevidí.
 
 ---
 
