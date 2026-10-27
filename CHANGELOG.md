@@ -49,7 +49,10 @@ Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` 
   stejně odmítne (jméno reference ho nesmí nést).
 - **`git push` pod `xargs`** (N20, N21, CR3-7): xargs připojí refspec `:x` nebo `--delete` a hook je nevidí.
 - Kontroly bez změny verdiktu proti 0.4.0 (CR3-1, CR3-5, CR3-6): přesměrování (`2>$null`, `*>$null`) není slovo příkazu
-  (K27, K28; `git branch -d x 2>$null` = ticho + audit, B21); za `-u` u `git branch` a za `-o` u `git push` je zbytek
+  (K27, K28; `git branch -d x 2>$null` = ticho + audit, B21) — **jen slovo, které v původním příkazu stojí mimo uvozovky
+  a není částí textu v uvozovkách** (review Amber `S041-A1`: slovo `'2>'` v uvozovkách je pro git obyčejný argument
+  a s ním by zmizelo i následující `-D`; R1–R11, fail-closed jako u ssh, cena: tentýž text v uvozovkách jinde v příkazu
+  = `deny`); za `-u` u `git branch` a za `-o` u `git push` je zbytek
   slova hodnota (`-uorigin/develop`, `-odeploy`; K33, Q10).
 - Beze změny `deny` (skupiny `B-force`, `B-closed`, `B-prot`, `P-del`): `-D` kdekoli, force v každé podobě, `-r`
   s `-d`, neznámá volba, nedoslovné jméno, chráněná větev (nové id `gitBranchDeleteProtected`), `git push --delete`,
@@ -79,14 +82,15 @@ u `deny` mazání větve).
 
 ### Testy
 
-`tests/fixtures/task195-gate.json` (179 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
+`tests/fixtures/task195-gate.json` (190 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
 `P-new`, `P-ctl`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
 jehož `was` se liší od `expect`. Řádky z `/code-review` prošly červenou fází zvlášť, vždy nad 0.4.0 (červené přesně
 řádky s `was` = `allow`) i nad předchozí hlavou: kolo 1 (C30–C33, H14, H15, N14–N18, Q9) 7 z 13 a 11 z 13, kolo 2
 (C34, C35, H16, H17, N19, K26) 2 ze 7 a 5 ze 7, kolo 3 (B21, K27–K33, H18–H20, N20, N21, Q10) 7 z 16 a 14 z 16.
-**Opravy kola 3 (posledního) skill `/code-review` nereviewoval.**
+**Opravy kola 3 (posledního) skill `/code-review` nereviewoval.** Delta review Amber nad nimi (`S041-A1`, R1–R11):
+nad 0.4.0 červený jen B21 (záměrná změna), nad `abd8d6a` R1–R6 a R11; oprava nad stropem tří kol, skillem nereviewovaná.
 Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají).
-Invariant 1850 → 2006 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
+Invariant 1850 → 2017 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
 
 ### Čísla verzí
 

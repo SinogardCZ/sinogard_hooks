@@ -864,7 +864,9 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       doslovné jméno. Totéž glob, který začíná pomlčkou (`-?`), a escape nebo složené závorky za pomlčkami (posuzuje se
       část slova před prvním `=`; hodnota `--format=…` mlčí). **`-d` bez doslovného jména** (jména ze stdin) a **každý
       `git branch` pod `xargs`** (připojí další jména i přepínač) = `deny`: slova hook nevidí a chráněnou větev by minul —
-      náhrada je výčet jmen v příkazu. Přesměrování (`2>$null`) slovem příkazu není; za `-u` je zbytek slova hodnota. **Mazání s `-c` / `--config-env`** = `deny`
+      náhrada je výčet jmen v příkazu. Přesměrování (`2>$null`) slovem příkazu není — jen
+      když v původním příkazu stojí mimo uvozovky a tentýž text není nikde v uvozovkách (jinak se čte jako slovo, fail-closed);
+      za `-u` je zbytek slova hodnota. **Mazání s `-c` / `--config-env`** = `deny`
       (`branch.<jméno>.remote` / `.merge` mění, do čeho git sloučenost kontroluje).
       Chráněná větev = `deny` s id `gitBranchDeleteProtected`.
     - **Hodnota volby není přepínač:** za `--sort`, `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`,

@@ -1937,13 +1937,25 @@ function Test-GitBranchRule($Leaf, $Config) {
 
     # CR3-1: presmerovani (`2>$null`, `*>log`, `> x`) neni slovo prikazu - cil `$null` by se cetl jako rozvinutelne slovo.
     # Operator bez cile (`2>` `x`) vezme i dalsi slovo.
+    # S041-A1 (review Amber nad abd8d6a): slova listu jsou uz bez uvozovek, takze `'2>'` (pro git obycejny argument) vypadalo
+    # jako operator a s nim zmizelo i nasledujici `-D`. Presmerovanim je jen slovo, ktere v puvodnim prikazu stoji MIMO
+    # uvozovky a neni casti zadneho textu v uvozovkach - totez fail-closed pravidlo jako u ssh (Get-RemoteShellArgs, CR-AP1,
+    # CR-AQ2). Cena: `git branch -d x 2>$null; echo '2>$null'` = deny.
+    $source = if ([string]$script:FullCommand -ne '') { [string]$script:FullCommand } else { [string]$Leaf.Raw }
+    $inQuotes = Get-UnquotedRedirectWords $source -InQuotes
+    $redirects = New-Object System.Collections.Generic.List[string]
+    foreach ($u in (Get-UnquotedRedirectWords $source)) {
+        $amb = $false
+        foreach ($q in $inQuotes) { if ($q.Contains($u)) { $amb = $true; break } }
+        if (-not $amb) { $redirects.Add($u) }
+    }
     $rest = New-Object System.Collections.ArrayList
     $skipTarget = $false
     foreach ($w in (Get-RestTokens $Leaf.Args)) {
         $w = [string]$w
         if ($skipTarget) { $skipTarget = $false; continue }
         $redirect = Get-RedirectWord $w
-        if ($null -ne $redirect -and $redirect.Before -eq '') { $skipTarget = ($redirect.Target -eq ''); continue }
+        if ($null -ne $redirect -and $redirect.Before -eq '' -and $redirects.Contains($w)) { $skipTarget = ($redirect.Target -eq ''); continue }
         [void]$rest.Add($w)
     }
 
