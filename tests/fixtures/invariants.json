@@ -12654,6 +12654,42 @@
       "cmd": "git push C:\\repos\\gsd feature/x",
       "expect": "allow",
       "since": "Q9 remote jako cesta se zpetnymi lomitky (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo main | xargs git branch -d feature/x",
+      "expect": "deny",
+      "since": "C34 xargs pripoji jmena i za doslovne jmeno (CR2-4) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c branch.x.remote=. -c branch.x.merge=refs/heads/x branch -d x",
+      "expect": "deny",
+      "since": "C35 -c branch.<n>.remote/merge meni, co git povazuje za sloucene (CR2-5) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --\\delete -f main",
+      "expect": "deny",
+      "since": "H16 escape uvnitr dlouhe volby (CR2-2, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --{delete,force} main",
+      "expect": "deny",
+      "since": "H17 slozene zavorky uvnitr volby (CR2-3, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --force origin `printf mai`n",
+      "expect": "deny",
+      "since": "N19 force s cilem ze substituce zpetnymi apostrofy (CR2-1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c core.quotepath=off branch -vv",
+      "expect": "allow",
+      "since": "K26 -c jiny klic u git branch bez mazani -> ticho"
     }
   ]
 }

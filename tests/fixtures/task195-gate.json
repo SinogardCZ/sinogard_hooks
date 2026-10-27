@@ -82,6 +82,8 @@
     { "group": "B-closed", "name": "C31 jmena z roury pres xargs (CR1-2) -> deny", "tool": "Bash", "cmd": "git branch --merged | xargs git branch -d", "expect": "deny", "was": "deny" },
     { "group": "B-closed", "name": "C32 chranena vetev z roury pres xargs (CR1-2) -> deny", "tool": "Bash", "cmd": "echo main | xargs git branch -d", "expect": "deny", "was": "deny" },
     { "group": "B-closed", "name": "C33 jen -q -d -- bez jmena (CR1-2, PowerShell) -> deny", "tool": "PowerShell", "cmd": "git branch -q -d --", "expect": "deny", "was": "deny" },
+    { "group": "B-closed", "name": "C34 xargs pripoji jmena i za doslovne jmeno (CR2-4) -> deny", "tool": "Bash", "cmd": "echo main | xargs git branch -d feature/x", "expect": "deny", "was": "deny" },
+    { "group": "B-closed", "name": "C35 -c branch.<n>.remote/merge meni, co git povazuje za sloucene (CR2-5) -> deny", "tool": "Bash", "cmd": "git -c branch.x.remote=. -c branch.x.merge=refs/heads/x branch -d x", "expect": "deny", "was": "deny" },
 
     { "group": "B-prot", "name": "P1 -d main -> deny", "tool": "Bash", "cmd": "git branch -d main", "expect": "deny", "was": "deny", "auditShape": "^gate:gitBranchDeleteProtected$", "auditDecision": "deny" },
     { "group": "B-prot", "name": "P2 -d main (PowerShell) -> deny", "tool": "PowerShell", "cmd": "git branch -d main", "expect": "deny", "was": "deny" },
@@ -104,6 +106,8 @@
     { "group": "B-hidden", "name": "H13 promenna jako hodnota volby (word splitting, Bash) -> deny", "tool": "Bash", "cmd": "git branch --sort $K feature/x", "expect": "deny", "was": "allow" },
     { "group": "B-hidden", "name": "H14 glob s pomlckou na zacatku (?) (CR1-6, Bash) -> deny", "tool": "Bash", "cmd": "git branch -? feature/x", "expect": "deny", "was": "allow" },
     { "group": "B-hidden", "name": "H15 glob s pomlckou na zacatku (*) (CR1-6, Bash) -> deny", "tool": "Bash", "cmd": "git branch -* feature/x", "expect": "deny", "was": "allow" },
+    { "group": "B-hidden", "name": "H16 escape uvnitr dlouhe volby (CR2-2, Bash) -> deny", "tool": "Bash", "cmd": "git branch --\\delete -f main", "expect": "deny", "was": "allow" },
+    { "group": "B-hidden", "name": "H17 slozene zavorky uvnitr volby (CR2-3, Bash) -> deny", "tool": "Bash", "cmd": "git branch --{delete,force} main", "expect": "deny", "was": "allow" },
 
     { "group": "B-ctl", "name": "K1 vypis -> ticho", "tool": "Bash", "cmd": "git branch", "expect": "allow", "was": "allow" },
     { "group": "B-ctl", "name": "K2 -a -> ticho", "tool": "Bash", "cmd": "git branch -a", "expect": "allow", "was": "allow" },
@@ -156,6 +160,7 @@
     { "group": "P-new", "name": "N16 escape v --delete (CR1-1, Bash) -> deny", "tool": "Bash", "cmd": "git push \\-\\-delete origin feature/x", "expect": "deny", "was": "allow" },
     { "group": "P-new", "name": "N17 escape v -d (CR1-1, PowerShell) -> deny", "tool": "PowerShell", "cmd": "git push origin `-d feature/x", "expect": "deny", "was": "allow" },
     { "group": "P-new", "name": "N18 escape v -f na main (CR1-1, Bash) -> deny", "tool": "Bash", "cmd": "git push \\-f origin main", "expect": "deny", "was": "allow" },
+    { "group": "P-new", "name": "N19 force s cilem ze substituce zpetnymi apostrofy (CR2-1, Bash) -> deny", "tool": "Bash", "cmd": "git push --force origin `printf mai`n", "expect": "deny", "was": "deny" },
 
     { "group": "P-ctl", "name": "Q1 push vetve -> ticho", "tool": "Bash", "cmd": "git push origin feature/x", "expect": "allow", "was": "allow" },
     { "group": "P-ctl", "name": "Q2 push -u -> ticho", "tool": "Bash", "cmd": "git push -u origin feature/x", "expect": "allow", "was": "allow" },
@@ -166,6 +171,7 @@
     { "group": "P-ctl", "name": "Q7 -c jiny klic remote (url) -> ticho", "tool": "Bash", "cmd": "git -c remote.origin.url=x push origin feature/x", "expect": "allow", "was": "allow" },
     { "group": "P-ctl", "name": "Q8 push vetve se jmenem s d -> ticho", "tool": "Bash", "cmd": "git push origin feature/d-nove", "expect": "allow", "was": "allow" },
     { "group": "P-ctl", "name": "Q9 remote jako cesta se zpetnymi lomitky (PowerShell) -> ticho", "tool": "PowerShell", "cmd": "git push C:\\repos\\gsd feature/x", "expect": "allow", "was": "allow" },
+    { "group": "B-ctl", "name": "K26 -c jiny klic u git branch bez mazani -> ticho", "tool": "Bash", "cmd": "git -c core.quotepath=off branch -vv", "expect": "allow", "was": "allow" },
 
     { "group": "O", "name": "O1 prepis kopirujici denyPatterns 0.4.0 -> -d zustava deny tise (N7)", "tool": "Bash", "cmd": "git branch -d feature/x", "override": "@040", "expect": "deny", "was": "deny", "auditShape": "^gate:git-branch-delete$", "auditDecision": "deny" },
     { "group": "O", "name": "O2 prepis gitBranchDeleteMerged = deny -> deny", "tool": "Bash", "cmd": "git branch -d feature/x", "override": "@deny", "expect": "deny", "was": "deny", "auditShape": "^gate:gitBranchDeleteMerged$", "auditDecision": "deny" },

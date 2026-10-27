@@ -861,8 +861,10 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       a slovo, které shell teprve rozvine — proměnná, substituce, splat, podvýraz, složené závorky, escape, `%X%`. **Nově
       i bez viditelného `-d`** (`git branch $F x`, escape uvnitř přepínače): takové slovo může být `-D` a hook to neví.
       **Cena:** `git branch -m stary $NOVY` a `git branch $JMENO` (proměnná kdekoli za `branch`) jsou `deny` — náhrada je
-      doslovné jméno. Totéž glob, který začíná pomlčkou (`-?`). **`-d` bez doslovného jména** (`… | xargs git branch -d`,
-      jména ze stdin) = `deny`: jména hook nevidí a chráněnou větev by minul — náhrada je výčet jmen v příkazu.
+      doslovné jméno. Totéž glob, který začíná pomlčkou (`-?`), a escape nebo složené závorky za pomlčkami. **`-d` bez
+      doslovného jména** (jména ze stdin) a **každé `-d` pod `xargs`** (připojí další jména) = `deny`: jména hook nevidí
+      a chráněnou větev by minul — náhrada je výčet jmen v příkazu. **Mazání s `-c` / `--config-env`** = `deny`
+      (`branch.<jméno>.remote` / `.merge` mění, do čeho git sloučenost kontroluje).
       Chráněná větev = `deny` s id `gitBranchDeleteProtected`.
     - **Hodnota volby není přepínač:** za `--sort`, `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`,
       `--with`, `--without`, `--points-at`, `--set-upstream-to` a `-u` bere git další slovo jako hodnotu i s pomlčkou (změřeno
@@ -876,9 +878,10 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
     - **Vzdálené mazání = `deny`** (id `pushDelete`, i dřívější `git-push-delete` a `pushDeleteRefspec`): `git push --delete`
       / `-d` i zkratky `--de`–`--delet` (`--d` git odmítne jako nejednoznačné), `--prune` a zkratky `--pru`, `--prun`,
       spojené krátké přepínače s `d` (`-qd`, `-ud`), refspec `:x` / `+:x`, `--mirror` i zkratky `--m`–`--mirro`,
-      `-c remote.<jméno>.push=…` a `-c remote.<jméno>.mirror` (i `--config-env` s `=` i s mezerou). Escape před znakem
-      (Bash `\`, PowerShell `` ` ``) se ve slovech `git push` čte jako by nebyl. **Mez:** konfigurace z prostředí
-      (`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_PARAMETERS`) a z konfiguračního souboru repa se nevidí;
+      `-c remote.<jméno>.push=…` a `-c remote.<jméno>.mirror` (i `--config-env` s `=` i s mezerou). Slova `git push`
+      se čtou dvakrát, doslova a bez escapu (Bash `\`, PowerShell `` ` ``); platí `deny` kteréhokoli čtení. **Mez:**
+      konfigurace z prostředí (`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_PARAMETERS`) a z konfiguračního
+      souboru repa (i `branch.<jméno>.merge` u `git branch -d`) se nevidí;
       proměnná ve slovech `git push` (`git push $F origin x`) se jako přepínač nečte (mez byla už v 0.4.0; kandidát
       pro 0.4.2, `/code-review` CR1-4).
 

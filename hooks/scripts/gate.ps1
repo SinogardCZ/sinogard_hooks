@@ -1444,7 +1444,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             #   tail je PRIKAZOVA RADKA (bash -c, cmd /c, eval, ...) -> Join-CommandString
             $inner = (Join-Argument ($rest | Select-Object -Skip $i))
             if ($inner -eq '') { return $out }
-            foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
+            # TASK-195 CR2-4: xargs pripoji argumenty ze vstupu - list nese, ze jeho slova nejsou cela (Test-GitBranchRule).
+            foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) {
+                if ($l -is [hashtable]) { $l['ArgsAppended'] = $true }
+                [void]$out.Add($l)
+            }
             return $out
         }
         '^(find)$' {
@@ -1481,7 +1485,9 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         # Hodnoty `-c klic=hodnota` se pri normalizaci zahazuji, ale nektere z nich
         # MENI VYZNAM podprikazu (nalezy Metis 26 a 27) - proto se schovaji na list.
         for ($i = 0; $i -lt $args2.Count; $i++) {
-            if ($args2[$i] -eq '-c' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
+            # TASK-195 CR2-5: `-ceq` - `-eq` bral i `git -C <cesta>` a cesta se tu tvarila jako konfigurace (do 0.4.0 bez dopadu:
+            # cesta nesedi na zadny hlidany klic; mazani vetve od CR2-5 kazdou konfiguraci odmita).
+            if ($args2[$i] -ceq '-c' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
             elseif ($args2[$i] -match '^--config-env=(.*)$') { $gitConfig += $Matches[1] }
             # TASK-195 CR1-3: git bere i `--config-env <klic>=<promenna>` s mezerou (zmereno git 2.50).
             elseif ($args2[$i] -eq '--config-env' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
@@ -1778,6 +1784,21 @@ function Test-GitPushRule($Leaf, $Config) {
     if ($Leaf.Exe -ne 'git') { return $null }
     if ($Leaf.Args.Count -eq 0 -or $Leaf.Args[0] -ne 'push') { return $null }
 
+    # TASK-195 CR1-1: escape pred znakem (Bash `\:x`, `\-d`; PowerShell `` `-d ``) shell odstrani a git dostane `:x`, `-d`.
+    # CR2-1: jenze v Bashi je zpetny apostrof substituce, ne escape - cteni bez nej by z necitelneho cile udelalo citelny
+    # (`force` na `main` by z `deny` spadl do auditu). Slova se proto ctou DVAKRAT, doslova (verdikt 0.4.0) a bez escapu
+    # obou shellu; plati `deny` kterehokoli cteni. Druhe cteni muze jen pridat `deny`, nikdy ho neubere.
+    $raw = Get-RestTokens $Leaf.Args
+    $plain = @(foreach ($a in $raw) { ([string]$a) -replace '\\(.)', '$1' -replace '`(.)', '$1' })
+    $literal = Get-GitPushVerdict $raw $Leaf $Config
+    if ($literal -and $literal.Decision -eq 'deny') { return $literal }
+    $unescaped = Get-GitPushVerdict $plain $Leaf $Config
+    if ($unescaped -and $unescaped.Decision -eq 'deny') { return $unescaped }
+    if ($literal) { return $literal }
+    return $unescaped
+}
+
+function Get-GitPushVerdict($Tokens, $Leaf, $Config) {
     $protected = @(Get-Field (Get-Field $Config 'gate') 'protectedBranches' @('main'))
     $shapes = Get-Field (Get-Field $Config 'gate') 'shapes'
 
@@ -1785,10 +1806,8 @@ function Test-GitPushRule($Leaf, $Config) {
     $mirror = $false
     $deleteOpt = $false
     $positional = New-Object System.Collections.ArrayList
-    foreach ($a in (Get-RestTokens $Leaf.Args)) {
-        # TASK-195 CR1-1: escape pred znakem (Bash `\:x`, `\-d`; PowerShell `` `-d ``) shell odstrani a git dostane `:x`, `-d`.
-        # Slovo se cte bez nej. V PowerShellu je `\` doslovne (cesta remote) - remote je pozicni slovo, verdikt nemeni.
-        $a = ([string]$a) -replace '\\(.)', '$1' -replace '`(.)', '$1'
+    foreach ($a in $Tokens) {
+        $a = [string]$a
         # GSD TASK-195 (0.4.1, S041-N3): vzor `git-push-delete` zna jen `--delete` a `-d` jako cele slovo. Git bere i jednoznacnou
         # zkratku dlouhe volby (`--del`; `--d` je nejednoznacne s `--dry-run` a git ho odmitne - deny nic nestoji), `--prune`
         # (`--pru`; `--pr` je nejednoznacne s `--progress`) maze vzdalene vetve bez lokalniho protejsku a spojene kratke
@@ -1913,6 +1932,8 @@ function Test-GitBranchRule($Leaf, $Config) {
         if (Test-ExpandableWord $w) { $isDelete = $true; break }
         # CR1-6: glob, ktery zacina pomlckou (`-?`), shell rozvine na jmeno souboru - to muze byt `-D`.
         if ($w -match '^-.*[*?\[]') { $isDelete = $true; break }
+        # CR2-2, CR2-3: escape nebo slozene zavorky az za pomlckami (`--\x`, `--{a,b}`) - Test-ExpandableWord hlida jen prvni znak.
+        if ($w -match '^-.*[\\{]') { $isDelete = $true; break }
         if ($skipValue) { $skipValue = $false; continue }
         if ($script:BranchValueOptions -ccontains $w) { $skipValue = $true; continue }
         if ($w -cmatch '^-[^-]' -and $w -cmatch '[dD]') { $isDelete = $true; break }
@@ -1921,6 +1942,11 @@ function Test-GitBranchRule($Leaf, $Config) {
     if (-not $isDelete) { return $null }
 
     $denied = @{ Id = 'git-branch-delete'; Decision = 'deny'; Shape = (Get-Field $shapes 'gitBranchDelete' 'git branch -d/-D') }
+    # CR2-4: xargs pripoji dalsi jmena ze vstupu i za doslovne jmeno - chranenou vetev hook nevidi.
+    if ([bool](Get-LeafField $Leaf 'ArgsAppended' $false)) { return $denied }
+    # CR2-5: `-c` / `--config-env` u mazani (`branch.<n>.remote`, `branch.<n>.merge`) meni, do ceho git sloucenost kontroluje -
+    # jedina zaruka auditu by padla. Klic se neposuzuje: mazani s konfiguraci z prikazove radky = deny.
+    if (@(Get-LeafField $Leaf 'GitConfig' @()).Count -gt 0) { return $denied }
     $protected = @(Get-Field $gate 'protectedBranches' @('main'))
     $hasName = $false
     foreach ($w in $rest) {
