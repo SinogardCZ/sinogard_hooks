@@ -12690,6 +12690,90 @@
       "cmd": "git -c core.quotepath=off branch -vv",
       "expect": "allow",
       "since": "K26 -c jiny klic u git branch bez mazani -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d feature/x 2>$null",
+      "expect": "allow",
+      "since": "B21 -d s presmerovanim 2>$null (CR3-1, PowerShell) -> ticho + audit"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo '-D main' | xargs git branch",
+      "expect": "deny",
+      "since": "H18 xargs dodava prepinac mazani (CR3-4) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo main | xargs git branch -f",
+      "expect": "deny",
+      "since": "H19 xargs dodava jmeno k -f (CR3-4) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --{format=x,delete,force} feature/x",
+      "expect": "deny",
+      "since": "H20 slozene zavorky pred = (CR3-10, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo :main | xargs git push origin",
+      "expect": "deny",
+      "since": "N20 xargs dodava refspec (CR3-7) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo '--delete main' | xargs git push origin",
+      "expect": "deny",
+      "since": "N21 xargs dodava --delete (CR3-7) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -odeploy origin feature/x",
+      "expect": "allow",
+      "since": "Q10 -o s prilepenou hodnotou s d (CR3-6) -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch --show-current 2>$null",
+      "expect": "allow",
+      "since": "K27 presmerovani 2>$null (CR3-1, PowerShell) -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -a *>$null",
+      "expect": "allow",
+      "since": "K28 presmerovani *>$null (CR3-1, PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='%(refname:short)\\t%(upstream)'",
+      "expect": "allow",
+      "since": "K29 --format= se zpetnym lomitkem (CR3-2) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='{\"n\":\"%(refname:short)\"}'",
+      "expect": "allow",
+      "since": "K30 --format= se slozenymi zavorkami (CR3-2) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='%(if)%(HEAD)%(then)* %(end)%(refname:short)'",
+      "expect": "allow",
+      "since": "K31 --format= s hvezdickou (CR3-3) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='[%(refname:short)]'",
+      "expect": "allow",
+      "since": "K32 --format= s hranatymi zavorkami (CR3-3) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -uorigin/develop",
+      "expect": "allow",
+      "since": "K33 -u s prilepenou hodnotou s d (CR3-5) -> ticho"
     }
   ]
 }

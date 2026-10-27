@@ -1788,6 +1788,10 @@ function Test-GitPushRule($Leaf, $Config) {
     # CR2-1: jenze v Bashi je zpetny apostrof substituce, ne escape - cteni bez nej by z necitelneho cile udelalo citelny
     # (`force` na `main` by z `deny` spadl do auditu). Slova se proto ctou DVAKRAT, doslova (verdikt 0.4.0) a bez escapu
     # obou shellu; plati `deny` kterehokoli cteni. Druhe cteni muze jen pridat `deny`, nikdy ho neubere.
+    # CR3-7: xargs pripoji slova ze vstupu (`:x`, `--delete x`) - refspecy ani prepinace hook nevidi.
+    if ([bool](Get-LeafField $Leaf 'ArgsAppended' $false)) {
+        return @{ Id = 'pushDelete'; Decision = 'deny'; Shape = (Get-Field (Get-Field (Get-Field $Config 'gate') 'shapes') 'pushDelete' 'git push --delete') }
+    }
     $raw = Get-RestTokens $Leaf.Args
     $plain = @(foreach ($a in $raw) { ([string]$a) -replace '\\(.)', '$1' -replace '`(.)', '$1' })
     $literal = Get-GitPushVerdict $raw $Leaf $Config
@@ -1812,7 +1816,11 @@ function Get-GitPushVerdict($Tokens, $Leaf, $Config) {
         # zkratku dlouhe volby (`--del`; `--d` je nejednoznacne s `--dry-run` a git ho odmitne - deny nic nestoji), `--prune`
         # (`--pru`; `--pr` je nejednoznacne s `--progress`) maze vzdalene vetve bez lokalniho protejsku a spojene kratke
         # prepinace nesou `d` kdekoli (`-qd`, `-ud`). Zmereno `git push -h`, git 2.50.
-        if ($a -match '^--d(e(l(e(te?)?)?)?)?$' -or $a -match '^--pru(ne?)?$' -or $a -cmatch '^-[A-Za-z0-9]*d[A-Za-z0-9]*$') {
+        # CR3-6: za `-o` (`--push-option`) je zbytek slova hodnota (`-odeploy`), ne dalsi prepinace.
+        $short = $a
+        $o = $a.IndexOf('o')
+        if ($o -gt 0) { $short = $a.Substring(0, $o) }
+        if ($a -match '^--d(e(l(e(te?)?)?)?)?$' -or $a -match '^--pru(ne?)?$' -or $short -cmatch '^-[A-Za-z0-9]*d[A-Za-z0-9]*$') {
             $deleteOpt = $true; continue
         }
         if ($a -match '^--force(-with-lease|-if-includes)?(=.*)?$') { $force = $true; continue }
@@ -1922,28 +1930,44 @@ function Test-GitBranchRule($Leaf, $Config) {
 
     $gate = Get-Field $Config 'gate'
     $shapes = Get-Field $gate 'shapes'
-    # Bez `@( )`: Get-RestTokens vraci `,@(...)` a obal by pole zabalil jeste jednou (viz Expand-ColonParameter).
-    $rest = Get-RestTokens $Leaf.Args
+    $denied = @{ Id = 'git-branch-delete'; Decision = 'deny'; Shape = (Get-Field $shapes 'gitBranchDelete' 'git branch -d/-D') }
+    # CR2-4, CR3-4: xargs pripoji slova ze vstupu - dalsi jmena i sam prepinac mazani (`-D`). Slova listu nejsou cela, takze
+    # `git branch` pod xargs = deny bez ohledu na to, co je videt.
+    if ([bool](Get-LeafField $Leaf 'ArgsAppended' $false)) { return $denied }
+
+    # CR3-1: presmerovani (`2>$null`, `*>log`, `> x`) neni slovo prikazu - cil `$null` by se cetl jako rozvinutelne slovo.
+    # Operator bez cile (`2>` `x`) vezme i dalsi slovo.
+    $rest = New-Object System.Collections.ArrayList
+    $skipTarget = $false
+    foreach ($w in (Get-RestTokens $Leaf.Args)) {
+        $w = [string]$w
+        if ($skipTarget) { $skipTarget = $false; continue }
+        $redirect = Get-RedirectWord $w
+        if ($null -ne $redirect -and $redirect.Before -eq '') { $skipTarget = ($redirect.Target -eq ''); continue }
+        [void]$rest.Add($w)
+    }
 
     $isDelete = $false
     $skipValue = $false
     foreach ($w in $rest) {
-        $w = [string]$w
         if (Test-ExpandableWord $w) { $isDelete = $true; break }
-        # CR1-6: glob, ktery zacina pomlckou (`-?`), shell rozvine na jmeno souboru - to muze byt `-D`.
-        if ($w -match '^-.*[*?\[]') { $isDelete = $true; break }
-        # CR2-2, CR2-3: escape nebo slozene zavorky az za pomlckami (`--\x`, `--{a,b}`) - Test-ExpandableWord hlida jen prvni znak.
-        if ($w -match '^-.*[\\{]') { $isDelete = $true; break }
+        # CR1-6, CR2-2, CR2-3 (sloucene CR3-10): glob, escape nebo slozene zavorky v pomlckove casti slova shell rozvine -
+        # muze vzniknout `-D`. CR3-2, CR3-3: hodnota za `=` (`--format=[%(x)]`) ma pevnou predponu `--jmeno=`, volbou se
+        # rozvinutim nestane - posuzuje se jen cast pred prvnim `=`.
+        if ((($w -split '=', 2)[0]) -match '^-.*[*?\[\\{]') { $isDelete = $true; break }
         if ($skipValue) { $skipValue = $false; continue }
         if ($script:BranchValueOptions -ccontains $w) { $skipValue = $true; continue }
-        if ($w -cmatch '^-[^-]' -and $w -cmatch '[dD]') { $isDelete = $true; break }
+        if ($w -cmatch '^-[^-]') {
+            # CR3-5: za `-u` je zbytek slova hodnota (`-uorigin/develop`), ne dalsi prepinace.
+            $flags = $w
+            $u = $w.IndexOf('u')
+            if ($u -gt 0) { $flags = $w.Substring(0, $u) }
+            if ($flags -cmatch '[dD]') { $isDelete = $true; break }
+        }
         if ($w -match '^--d') { $isDelete = $true; break }
     }
     if (-not $isDelete) { return $null }
 
-    $denied = @{ Id = 'git-branch-delete'; Decision = 'deny'; Shape = (Get-Field $shapes 'gitBranchDelete' 'git branch -d/-D') }
-    # CR2-4: xargs pripoji dalsi jmena ze vstupu i za doslovne jmeno - chranenou vetev hook nevidi.
-    if ([bool](Get-LeafField $Leaf 'ArgsAppended' $false)) { return $denied }
     # CR2-5: `-c` / `--config-env` u mazani (`branch.<n>.remote`, `branch.<n>.merge`) meni, do ceho git sloucenost kontroluje -
     # jedina zaruka auditu by padla. Klic se neposuzuje: mazani s konfiguraci z prikazove radky = deny.
     if (@(Get-LeafField $Leaf 'GitConfig' @()).Count -gt 0) { return $denied }

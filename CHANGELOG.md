@@ -33,7 +33,9 @@ Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` 
   které shell teprve rozvine (proměnná, substituce, splat a podvýraz PowerShellu, složené závorky Bashe, escape, `%X%`),
   může být `-D`. **Cena:** `git branch` s proměnnou kdekoli za `branch` (`git branch -m stary $NOVY`) = `deny`.
   Totéž glob, který začíná pomlčkou (`-?`, `-*`; H14, H15, `/code-review` CR1-6) — shell ho rozvine na jméno souboru —
-  a escape nebo složené závorky až za pomlčkami (H16, H17, CR2-2, CR2-3).
+  a escape nebo složené závorky až za pomlčkami (H16, H17, H20, CR2-2, CR2-3) — posuzuje se část slova před prvním `=`,
+  hodnota `--format=…` s `*`, `[`, `{`, `\` dál mlčí (K29–K32, CR3-2, CR3-3). Každý `git branch` pod `xargs` (xargs
+  dodá i sám přepínač mazání; H18, H19, CR3-4).
 - `git branch --delete-merged` (neexistující volba; `deny` nic nestojí, git ji odmítne) — C7.
 - **Vzdálené mazání** (`S041-N3`, `N11`; skupina `P-new`, id `pushDelete`): `git push --prune` a zkratka `--pru`,
   zkratky `--delete` (`--de`–`--delet`), spojené krátké přepínače s `d` (`-qd`, `-dq`, `-ud`), zkratky `--mirror`
@@ -45,6 +47,10 @@ Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` 
   nečitelný, N19). Kontrola: remote jako cesta se zpětnými lomítky v PowerShellu dál ticho (Q9). **Cena:** slovo, které
   zpětné lomítko nese doslova (v jednoduchých uvozovkách Bashe), se čte i bez něj — refspec se zpětným lomítkem git
   stejně odmítne (jméno reference ho nesmí nést).
+- **`git push` pod `xargs`** (N20, N21, CR3-7): xargs připojí refspec `:x` nebo `--delete` a hook je nevidí.
+- Kontroly bez změny verdiktu proti 0.4.0 (CR3-1, CR3-5, CR3-6): přesměrování (`2>$null`, `*>$null`) není slovo příkazu
+  (K27, K28; `git branch -d x 2>$null` = ticho + audit, B21); za `-u` u `git branch` a za `-o` u `git push` je zbytek
+  slova hodnota (`-uorigin/develop`, `-odeploy`; K33, Q10).
 - Beze změny `deny` (skupiny `B-force`, `B-closed`, `B-prot`, `P-del`): `-D` kdekoli, force v každé podobě, `-r`
   s `-d`, neznámá volba, nedoslovné jméno, chráněná větev (nové id `gitBranchDeleteProtected`), `git push --delete`,
   `-d`, `:x`, `+:x`, `--mirror`. Také `git branch -d` **bez doslovného jména** — jména z roury (`| xargs git branch -d`)
@@ -73,13 +79,14 @@ u `deny` mazání větve).
 
 ### Testy
 
-`tests/fixtures/task195-gate.json` (165 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
+`tests/fixtures/task195-gate.json` (179 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
 `P-new`, `P-ctl`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
 jehož `was` se liší od `expect`. Řádky z `/code-review` prošly červenou fází zvlášť, vždy nad 0.4.0 (červené přesně
 řádky s `was` = `allow`) i nad předchozí hlavou: kolo 1 (C30–C33, H14, H15, N14–N18, Q9) 7 z 13 a 11 z 13, kolo 2
-(C34, C35, H16, H17, N19, K26) 2 ze 7 a 5 ze 7.
+(C34, C35, H16, H17, N19, K26) 2 ze 7 a 5 ze 7, kolo 3 (B21, K27–K33, H18–H20, N20, N21, Q10) 7 z 16 a 14 z 16.
+**Opravy kola 3 (posledního) skill `/code-review` nereviewoval.**
 Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají).
-Invariant 1850 → 1992 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
+Invariant 1850 → 2006 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
 
 ### Čísla verzí
 
