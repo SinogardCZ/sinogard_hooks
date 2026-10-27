@@ -1483,6 +1483,8 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
         for ($i = 0; $i -lt $args2.Count; $i++) {
             if ($args2[$i] -eq '-c' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
             elseif ($args2[$i] -match '^--config-env=(.*)$') { $gitConfig += $Matches[1] }
+            # TASK-195 CR1-3: git bere i `--config-env <klic>=<promenna>` s mezerou (zmereno git 2.50).
+            elseif ($args2[$i] -eq '--config-env' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
         }
         $args2 = Remove-GitGlobalOption $args2
     }
@@ -1784,6 +1786,9 @@ function Test-GitPushRule($Leaf, $Config) {
     $deleteOpt = $false
     $positional = New-Object System.Collections.ArrayList
     foreach ($a in (Get-RestTokens $Leaf.Args)) {
+        # TASK-195 CR1-1: escape pred znakem (Bash `\:x`, `\-d`; PowerShell `` `-d ``) shell odstrani a git dostane `:x`, `-d`.
+        # Slovo se cte bez nej. V PowerShellu je `\` doslovne (cesta remote) - remote je pozicni slovo, verdikt nemeni.
+        $a = ([string]$a) -replace '\\(.)', '$1' -replace '`(.)', '$1'
         # GSD TASK-195 (0.4.1, S041-N3): vzor `git-push-delete` zna jen `--delete` a `-d` jako cele slovo. Git bere i jednoznacnou
         # zkratku dlouhe volby (`--del`; `--d` je nejednoznacne s `--dry-run` a git ho odmitne - deny nic nestoji), `--prune`
         # (`--pru`; `--pr` je nejednoznacne s `--progress`) maze vzdalene vetve bez lokalniho protejsku a spojene kratke
@@ -1906,6 +1911,8 @@ function Test-GitBranchRule($Leaf, $Config) {
     foreach ($w in $rest) {
         $w = [string]$w
         if (Test-ExpandableWord $w) { $isDelete = $true; break }
+        # CR1-6: glob, ktery zacina pomlckou (`-?`), shell rozvine na jmeno souboru - to muze byt `-D`.
+        if ($w -match '^-.*[*?\[]') { $isDelete = $true; break }
         if ($skipValue) { $skipValue = $false; continue }
         if ($script:BranchValueOptions -ccontains $w) { $skipValue = $true; continue }
         if ($w -cmatch '^-[^-]' -and $w -cmatch '[dD]') { $isDelete = $true; break }
@@ -1915,10 +1922,12 @@ function Test-GitBranchRule($Leaf, $Config) {
 
     $denied = @{ Id = 'git-branch-delete'; Decision = 'deny'; Shape = (Get-Field $shapes 'gitBranchDelete' 'git branch -d/-D') }
     $protected = @(Get-Field $gate 'protectedBranches' @('main'))
+    $hasName = $false
     foreach ($w in $rest) {
         $w = [string]$w
         if ($script:BranchDeleteWords -ccontains $w) { continue }
         if ($w -eq '' -or $w.StartsWith('-') -or (Test-ExpandableWord $w) -or $w -match '[$`(){}@*?\[\]%\\~^:,\s]') { return $denied }
+        $hasName = $true
         $name = ($w -replace '^refs/heads/', '').ToLowerInvariant()
         foreach ($p in $protected) {
             if ($name -eq ([string]$p).ToLowerInvariant()) {
@@ -1927,6 +1936,8 @@ function Test-GitBranchRule($Leaf, $Config) {
             }
         }
     }
+    # CR1-2: bez doslovneho jmena prijdou jmena odjinud (`| xargs git branch -d`, stdin) a chranenou vetev hook nevidi.
+    if (-not $hasName) { return $denied }
     return (New-PolicyVerdict $gate 'gitBranchDeleteMerged' ([string](Get-Field $shapes 'gitBranchDeleteMerged' 'git branch -d')))
 }
 

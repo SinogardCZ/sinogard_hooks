@@ -12582,6 +12582,78 @@
       "cmd": "git push origin feature/d-nove",
       "expect": "allow",
       "since": "Q8 push vetve se jmenem s d -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d",
+      "expect": "deny",
+      "since": "C30 -d bez jmena vetve (CR1-2) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --merged | xargs git branch -d",
+      "expect": "deny",
+      "since": "C31 jmena z roury pres xargs (CR1-2) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo main | xargs git branch -d",
+      "expect": "deny",
+      "since": "C32 chranena vetev z roury pres xargs (CR1-2) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -q -d --",
+      "expect": "deny",
+      "since": "C33 jen -q -d -- bez jmena (CR1-2, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -? feature/x",
+      "expect": "deny",
+      "since": "H14 glob s pomlckou na zacatku (?) (CR1-6, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -* feature/x",
+      "expect": "deny",
+      "since": "H15 glob s pomlckou na zacatku (*) (CR1-6, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --config-env remote.origin.push=PUSHSPEC push origin",
+      "expect": "deny",
+      "since": "N14 --config-env s mezerou (CR1-3) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin \\:feature/x",
+      "expect": "deny",
+      "since": "N15 escape pred dvojteckou refspecu (CR1-1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push \\-\\-delete origin feature/x",
+      "expect": "deny",
+      "since": "N16 escape v --delete (CR1-1, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push origin `-d feature/x",
+      "expect": "deny",
+      "since": "N17 escape v -d (CR1-1, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push \\-f origin main",
+      "expect": "deny",
+      "since": "N18 escape v -f na main (CR1-1, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push C:\\repos\\gsd feature/x",
+      "expect": "allow",
+      "since": "Q9 remote jako cesta se zpetnymi lomitky (PowerShell) -> ticho"
     }
   ]
 }

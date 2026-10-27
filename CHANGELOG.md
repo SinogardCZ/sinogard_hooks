@@ -32,13 +32,19 @@ Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` 
 - **Mazání větve přepínačem, který jako slovo vidět není** — i bez viditelného `-d` (skupina `B-hidden`, H1–H13): slovo,
   které shell teprve rozvine (proměnná, substituce, splat a podvýraz PowerShellu, složené závorky Bashe, escape, `%X%`),
   může být `-D`. **Cena:** `git branch` s proměnnou kdekoli za `branch` (`git branch -m stary $NOVY`) = `deny`.
+  Totéž glob, který začíná pomlčkou (`-?`, `-*`; H14, H15, `/code-review` CR1-6) — shell ho rozvine na jméno souboru.
 - `git branch --delete-merged` (neexistující volba; `deny` nic nestojí, git ji odmítne) — C7.
 - **Vzdálené mazání** (`S041-N3`, `N11`; skupina `P-new`, id `pushDelete`): `git push --prune` a zkratka `--pru`,
   zkratky `--delete` (`--de`–`--delet`), spojené krátké přepínače s `d` (`-qd`, `-dq`, `-ud`), zkratky `--mirror`
-  (`--m`–`--mirro`), `-c remote.<jméno>.push=…`, `-c remote.<jméno>.mirror` a táž dvojice přes `--config-env`.
+  (`--m`–`--mirro`), `-c remote.<jméno>.push=…`, `-c remote.<jméno>.mirror` a táž dvojice přes `--config-env`
+  (s `=` i s mezerou — tvar s mezerou do 0.4.0 nečetla ani kontrola aliasu; N14, CR1-3).
+- **Escape ve slovech `git push`** (N15–N18, CR1-1): Bash `\` a PowerShell `` ` `` před znakem shell odstraní, git dostane
+  `:x`, `--delete`, `-d`, `-f`; hook teď slovo čte bez escapu. Kontrola: remote jako cesta se zpětnými lomítky
+  v PowerShellu dál ticho (Q9).
 - Beze změny `deny` (skupiny `B-force`, `B-closed`, `B-prot`, `P-del`): `-D` kdekoli, force v každé podobě, `-r`
   s `-d`, neznámá volba, nedoslovné jméno, chráněná větev (nové id `gitBranchDeleteProtected`), `git push --delete`,
-  `-d`, `:x`, `+:x`, `--mirror`.
+  `-d`, `:x`, `+:x`, `--mirror`. Také `git branch -d` **bez doslovného jména** — jména z roury (`| xargs git branch -d`)
+  nebo ze stdin hook nevidí, chráněnou větev by minul (C30–C33, CR1-2; v 0.4.0 `deny` vzorem).
 
 ### ⚠️ Migrace přepisu
 
@@ -59,11 +65,12 @@ u `deny` mazání větve).
 
 ### Testy
 
-`tests/fixtures/task195-gate.json` (147 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
+`tests/fixtures/task195-gate.json` (159 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
 `P-new`, `P-ctl`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
-jehož `was` se liší od `expect`. Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole
-`zmeneno`; jména řádků zůstávají). Invariant 1850 → 1974 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací
-`Z179-Q1`/`ZOPT-Q108`.
+jehož `was` se liší od `expect`. Dvanáct řádků z `/code-review` kola 1 (C30–C33, H14, H15, N14–N18, Q9) prošlo
+červenou fází zvlášť: nad 0.4.0 7 z 13 červených (přesně řádky s `was` = `allow`), nad první opravou 11 z 13.
+Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají).
+Invariant 1850 → 1986 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
 
 ### Čísla verzí
 
