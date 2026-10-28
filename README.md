@@ -890,7 +890,13 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       podpříkazu (`git $SUB …`) je `deny` i s neškodným podpříkazem — náhrada je doslovný podpříkaz. **Cena
       v PowerShellu** (Amber `AOPT-O34`): výraz s víc git příkazy v závorkách (`(git status) + (git log -1)`) je `deny` —
       rozdělení obalovou závorku strhne jen jako jeden pár, poslední slovo v závorce si nese `)` a podpříkaz `status)`
-      prostý literál není. Náhrada: příkazy zvlášť (`git status; git log -1`) nebo výsledky do proměnných zvlášť. Proměnná jako **hodnota** známého přepínače
+      prostý literál není. Náhrada: příkazy zvlášť (`git status; git log -1`) nebo výsledky do proměnných zvlášť. **Dvě běžné
+      ceny** (Grace S041-N19, Amber `AOPT-O35`; obě `deny`, dřív ticho): subshell v Bashi s gitem jako posledním příkazem
+      (`(cd x && git status)` — dvojče CR-X8, podpříkaz `status)`; náhrada bez závorek, `cd x && git status`) a přesměrování
+      přilepené k holému podpříkazu (`git status>/dev/null`, `git diff>x.patch`, v PowerShellu `git status>$null` už od
+      14e678e; náhrada mezera před přesměrováním, `git status >/dev/null`). Totéž zavřelo regresi 0.4.1: `git
+      branch>/dev/null -D main` byl do 14e678e ticho (pravidlo bralo `branch>/dev/null` jako podpříkaz), od 0.4.1 je zase
+      `deny` jako v 0.4.0. Proměnná jako **hodnota** známého přepínače
       (`git -C $repo status`) mlčí dál; `-v`, `--version`, `-h`, `--help` git čte jako podpříkaz `version` / `help` (mlčí).
     - **Hodnota volby není přepínač:** za `--sort`, `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`,
       `--with`, `--without`, `--points-at`, `--set-upstream-to` a `-u` bere git další slovo jako hodnotu i s pomlčkou (změřeno

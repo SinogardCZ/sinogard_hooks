@@ -13284,6 +13284,72 @@
       "cmd": "\\git branch -D main",
       "expect": "deny",
       "since": "T14 zpetne lomitko na zacatku jmena prikazu (README 27) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd /w/dev/x && git status)",
+      "expect": "deny",
+      "since": "C1 subshell s gitem jako poslednim prikazem (S041-N19 R1, AOPT-O35 cena, dvojce CR-X8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status>/dev/null",
+      "expect": "deny",
+      "since": "C2 presmerovani prilepene k podprikazu status (S041-N19 R4, AOPT-O35 cena, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git diff>x.patch",
+      "expect": "deny",
+      "since": "C3 presmerovani prilepene k podprikazu diff (S041-N19 R5, AOPT-O35 cena, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git log>log.txt",
+      "expect": "deny",
+      "since": "C4 presmerovani prilepene k podprikazu log (S041-N19 R6, AOPT-O35 cena, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git status>$null",
+      "expect": "deny",
+      "since": "C5 presmerovani prilepene k podprikazu (S041-N19 R9, deny od 14e678e, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch>/dev/null -D main",
+      "expect": "deny",
+      "since": "C6 presmerovani prilepene k branch pred -D (S041-N19, regrese 0.4.1 do 14e678e zavrena) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cd /w/dev/x && git status",
+      "expect": "allow",
+      "since": "C7 nahrada C1: bez zavorek -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status >/dev/null",
+      "expect": "allow",
+      "since": "C8 nahrada C2: mezera pred presmerovanim -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git diff > x.patch",
+      "expect": "allow",
+      "since": "C9 nahrada C3: mezery kolem presmerovani -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git status >$null",
+      "expect": "allow",
+      "since": "C10 nahrada C5: mezera pred presmerovanim (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd /w/dev/x; git log -1)",
+      "expect": "allow",
+      "since": "C11 subshell, git neni posledni slovo pred zavorkou -> ticho"
     }
   ]
 }

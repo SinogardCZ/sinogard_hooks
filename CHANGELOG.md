@@ -83,9 +83,13 @@ Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` 
   odstraní nebo rozvine, hook slovo četl doslova a žádné git pravidlo nesedlo (i za `-C` / `-c`, pod `bash -c` a `xargs`).
   Třetí díra téhož předpokladu (hook pozná špatné znaky: přepínače N14, `$` O32, `\ { [ * ?` N16), proto místo dalšího
   znaku **uzavřená množina**: první znak písmeno nebo číslice, dál písmena, číslice, `.`, `_`, `-`; cokoli jiného = `deny`
-  (id `gitExpandableSubcommand`). `-v` / `--version` / `-h` / `--help` stojí mimo (V3–V5, T13). **Cena:** žádná známá —
-  jména příkazů i aliasů gitu jinak nevypadají (`cherry-pick`, `rev-parse`, `ls-files`, `credential-manager`, `lfs`
-  mlčí, T8–T12); v PowerShellu zpětné lomítko escape není, git takové jméno odmítne (L16). Kontroly beze změny: podpříkaz
+  (id `gitExpandableSubcommand`). `-v` / `--version` / `-h` / `--help` stojí mimo (V3–V5, T13). Jména příkazů i aliasů
+  gitu jinak nevypadají (`cherry-pick`, `rev-parse`, `ls-files`, `credential-manager`, `lfs` mlčí, T8–T12); v PowerShellu
+  zpětné lomítko escape není, git takové jméno odmítne (L16). **Cena** (Grace `S041-N19`, Amber `AOPT-O35`; obě ticho →
+  `deny`, díru nenesou): subshell v Bashi s gitem jako posledním příkazem (`(cd x && git status)`, dvojče CR-X8; náhrada
+  bez závorek) a přesměrování přilepené k holému podpříkazu (`git status>/dev/null`, `git diff>x.patch`, v PowerShellu
+  `git status>$null` už od 14e678e; náhrada mezera před přesměrováním) — skupina `G-cena` C1–C5, náhrady C7–C11. Totéž zavřelo regresi
+  0.4.1: `git branch>/dev/null -D main` byl do 14e678e ticho, od 0.4.1 zase `deny` jako v 0.4.0 (C6). Kontroly beze změny: podpříkaz
   v uvozovkách i z částí v uvozovkách (T1, T2) čte pravidlo podpříkazu. **Cena v PowerShellu** (Amber `AOPT-O34`, změna
   verdiktu ticho → `deny`): výraz s víc git příkazy v závorkách (`(git status) + (git log -1)`, task179 CR-X8) — rozdělení
   strhne obalovou závorku jen jako jeden pár, poslední slovo v závorce nese `)` a podpříkaz `status)` prostý literál
@@ -114,8 +118,8 @@ u `deny` mazání větve).
 
 ### Testy
 
-`tests/fixtures/task195-gate.json` (264 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
-`P-new`, `P-ctl`, `G-global`, `G-ctl`, `G-lit`, `G-litctl`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
+`tests/fixtures/task195-gate.json` (275 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
+`P-new`, `P-ctl`, `G-global`, `G-ctl`, `G-lit`, `G-litctl`, `G-cena`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
 jehož `was` se liší od `expect`. Řádky z `/code-review` prošly červenou fází zvlášť, vždy nad 0.4.0 (červené přesně
 řádky s `was` = `allow`) i nad předchozí hlavou: kolo 1 (C30–C33, H14, H15, N14–N18, Q9) 7 z 13 a 11 z 13, kolo 2
 (C34, C35, H16, H17, N19, K26) 2 ze 7 a 5 ze 7, kolo 3 (B21, K27–K33, H18–H20, N20, N21, Q10) 7 z 16 a 14 z 16.
@@ -127,6 +131,8 @@ V9, V13); **oprava nad stropem tří kol, skillem `/code-review` nereviewovaná.
 Oprava `S041-N16` (druhá delta brána Grace, `AOPT-O33`; skupiny `G-lit`, `G-litctl`, 30 řádků; fixtura tím 264 řádků):
 červená fáze nad `14e678e` pod powershell.exe i pwsh — červené přesně L1–L16; nad 0.4.0 L1–L13, L15, L16 a T3 (L14 tam
 zakázal vzor `git-branch-delete`, T3 zavřelo pravidlo větve 0.4.1); **oprava skillem `/code-review` nereviewovaná.**
+Ceny uzavřené množiny (Grace `S041-N19`, `AOPT-O35`; skupina `G-cena`, 11 řádků, `gate.ps1` beze změny; fixtura tím 275
+řádků): C1–C5 `deny` s `was` = `allow`, C6 `deny` i nad 0.4.0 (nad `14e678e` ticho), náhrady C7–C11 mlčí.
 Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají),
 sedmý `CR-X8` (ticho → `deny`, `AOPT-O34`). Invariant 1850 → 2091 řádků; šest očekávání změněno nástrojem `-Prijmout`
 s citací `Z179-Q1`/`ZOPT-Q108`, sedmé (`CR-X8`) s citací `AOPT-O34`.
