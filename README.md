@@ -887,7 +887,10 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       Proměnná, substituce, escape, složené závorky i glob ve slově podpříkazu (`git bran\ch …`) jsou proto `deny`;
       dřív escape, glob a závorky uvnitř slova mlčely (díra už v 0.4.0). Podpříkaz v uvozovkách (`git "branch" …`)
       shell i hook čtou jako literál, posoudí ho pravidlo podpříkazu. **Cena:** git s proměnnou nebo substitucí na místě
-      podpříkazu (`git $SUB …`) je `deny` i s neškodným podpříkazem — náhrada je doslovný podpříkaz. Proměnná jako **hodnota** známého přepínače
+      podpříkazu (`git $SUB …`) je `deny` i s neškodným podpříkazem — náhrada je doslovný podpříkaz. **Cena
+      v PowerShellu** (Amber `AOPT-O34`): výraz s víc git příkazy v závorkách (`(git status) + (git log -1)`) je `deny` —
+      rozdělení obalovou závorku strhne jen jako jeden pár, poslední slovo v závorce si nese `)` a podpříkaz `status)`
+      prostý literál není. Náhrada: příkazy zvlášť (`git status; git log -1`) nebo výsledky do proměnných zvlášť. Proměnná jako **hodnota** známého přepínače
       (`git -C $repo status`) mlčí dál; `-v`, `--version`, `-h`, `--help` git čte jako podpříkaz `version` / `help` (mlčí).
     - **Hodnota volby není přepínač:** za `--sort`, `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`,
       `--with`, `--without`, `--points-at`, `--set-upstream-to` a `-u` bere git další slovo jako hodnotu i s pomlčkou (změřeno

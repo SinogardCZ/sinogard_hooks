@@ -86,7 +86,11 @@ Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` 
   (id `gitExpandableSubcommand`). `-v` / `--version` / `-h` / `--help` stojí mimo (V3–V5, T13). **Cena:** žádná známá —
   jména příkazů i aliasů gitu jinak nevypadají (`cherry-pick`, `rev-parse`, `ls-files`, `credential-manager`, `lfs`
   mlčí, T8–T12); v PowerShellu zpětné lomítko escape není, git takové jméno odmítne (L16). Kontroly beze změny: podpříkaz
-  v uvozovkách i z částí v uvozovkách (T1, T2) čte pravidlo podpříkazu.
+  v uvozovkách i z částí v uvozovkách (T1, T2) čte pravidlo podpříkazu. **Cena v PowerShellu** (Amber `AOPT-O34`, změna
+  verdiktu ticho → `deny`): výraz s víc git příkazy v závorkách (`(git status) + (git log -1)`, task179 CR-X8) — rozdělení
+  strhne obalovou závorku jen jako jeden pár, poslední slovo v závorce nese `)` a podpříkaz `status)` prostý literál
+  není; díra v tom nebyla (`reset --hard`, `branch -D`, `push --force`, `clean`, `stash clear` v součtu závorek jsou
+  `deny` i v 0.4.0). Náhrada: příkazy zvlášť nebo výsledky do proměnných zvlášť; oprava strhávání s tokenizérem 0.4.2.
 - **Meze bez opravy v 0.4.1** (Grace `S041-N17`, `S041-N18`, obě i v 0.4.0): escape uvnitř **argumentu** pravidla `reset`,
   `clean`, `stash`, `checkout`, `restore` nevidí (README 27; tokenizér 0.4.2, GSD TASK-190); rozvinutelnou hodnotu
   `-c` / `--config-env` hook nečte, alias ani `remote.<jméno>.mirror` / `.push` takto definované nevidí (README 29; 0.4.2).
@@ -123,8 +127,9 @@ V9, V13); **oprava nad stropem tří kol, skillem `/code-review` nereviewovaná.
 Oprava `S041-N16` (druhá delta brána Grace, `AOPT-O33`; skupiny `G-lit`, `G-litctl`, 30 řádků; fixtura tím 264 řádků):
 červená fáze nad `14e678e` pod powershell.exe i pwsh — červené přesně L1–L16; nad 0.4.0 L1–L13, L15, L16 a T3 (L14 tam
 zakázal vzor `git-branch-delete`, T3 zavřelo pravidlo větve 0.4.1); **oprava skillem `/code-review` nereviewovaná.**
-Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají).
-Invariant 1850 → 2091 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
+Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají),
+sedmý `CR-X8` (ticho → `deny`, `AOPT-O34`). Invariant 1850 → 2091 řádků; šest očekávání změněno nástrojem `-Prijmout`
+s citací `Z179-Q1`/`ZOPT-Q108`, sedmé (`CR-X8`) s citací `AOPT-O34`.
 
 ### Čísla verzí
 
