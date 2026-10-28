@@ -13104,6 +13104,186 @@
       "cmd": "git --exec-path branch -D main",
       "expect": "deny",
       "since": "V13 --exec-path bez hodnoty pred branch -D (git vypise cestu a skonci; hook fail-closed) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git bran\\ch -D main",
+      "expect": "deny",
+      "since": "L1 escape ve slove podprikazu pred -D (S041-N16 X1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git res\\et --hard",
+      "expect": "deny",
+      "since": "L2 escape ve slove podprikazu reset --hard (S041-N16 X6, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git pu\\sh --force origin main",
+      "expect": "deny",
+      "since": "L3 escape ve slove podprikazu push --force (S041-N16 X7, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git cle\\an -fdx",
+      "expect": "deny",
+      "since": "L4 escape ve slove podprikazu clean -fdx (S041-N16 X8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git st\\ash clear",
+      "expect": "deny",
+      "since": "L5 escape ve slove podprikazu stash clear (S041-N16 X40, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git check\\out .",
+      "expect": "deny",
+      "since": "L6 escape ve slove podprikazu checkout . (S041-N16 X41, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git re\\store .",
+      "expect": "deny",
+      "since": "L7 escape ve slove podprikazu restore . (S041-N16 Z8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C x bran\\ch -D main",
+      "expect": "deny",
+      "since": "L8 -C cesta a escape ve slove podprikazu (S041-N16 Y6, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c core.x=1 res\\et --hard",
+      "expect": "deny",
+      "since": "L9 -c a escape ve slove podprikazu (S041-N16 B5, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'git bran\\ch -D main'",
+      "expect": "deny",
+      "since": "L10 escape ve slove podprikazu pod bash -c (S041-N16 X37, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo x | xargs git bran\\ch -D",
+      "expect": "deny",
+      "since": "L11 escape ve slove podprikazu pod xargs (S041-N16 Y12, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git b{r,}anch -D main",
+      "expect": "deny",
+      "since": "L12 slozene zavorky uvnitr slova podprikazu (S041-N16 B1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git br[a]nch -D main",
+      "expect": "deny",
+      "since": "L13 glob [] ve slove podprikazu (S041-N16 Y7, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch{,} -D main",
+      "expect": "deny",
+      "since": "L14 slozene zavorky na konci slova podprikazu (S041-N16, Grace brana 2; 0.4.0 deny vzorem, 0.4.1 do 14e678e allow) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git bran?h -D main",
+      "expect": "deny",
+      "since": "L15 glob ? ve slove podprikazu (S041-N16, Grace brana 2) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git bran\\ch -D main",
+      "expect": "deny",
+      "since": "L16 zpetne lomitko ve slove podprikazu (S041-N16, PowerShell; git takove jmeno nezna) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git \"bra\"nch -D main",
+      "expect": "deny",
+      "since": "T1 podprikaz z casti v uvozovkach (Bash) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git \"bra\"nch -D main",
+      "expect": "deny",
+      "since": "T2 podprikaz z casti v uvozovkach (PowerShell) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -\\D main",
+      "expect": "deny",
+      "since": "T3 escape v prepinaci vetve (pravidlo vetve cte escape samo od 0.4.1) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c $kv log",
+      "expect": "allow",
+      "since": "T4 promenna jako hodnota -c pred log -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status",
+      "expect": "allow",
+      "since": "T5 git status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git log",
+      "expect": "allow",
+      "since": "T6 git log (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git rev-parse",
+      "expect": "allow",
+      "since": "T7 git rev-parse -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git cherry-pick --abort",
+      "expect": "allow",
+      "since": "T8 jmeno s pomlckou: cherry-pick --abort -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git rev-parse HEAD",
+      "expect": "allow",
+      "since": "T9 jmeno s pomlckou: rev-parse HEAD (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git ls-files",
+      "expect": "allow",
+      "since": "T10 jmeno s pomlckou: ls-files -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git credential-manager --version",
+      "expect": "allow",
+      "since": "T11 externi prikaz s pomlckou: credential-manager --version (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git lfs ls-files",
+      "expect": "allow",
+      "since": "T12 externi prikaz: lfs ls-files -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -h",
+      "expect": "allow",
+      "since": "T13 -h (git spusti help) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "\\git branch -D main",
+      "expect": "deny",
+      "since": "T14 zpetne lomitko na zacatku jmena prikazu (README 27) -> deny"
     }
   ]
 }

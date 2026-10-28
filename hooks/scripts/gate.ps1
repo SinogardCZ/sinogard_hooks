@@ -468,6 +468,9 @@ $script:GitGlobalAsCommand = @('-v', '--version', '-h', '--help')
 # TASK-195 S041-N14 (Grace): do 0.4.1 se prvni neznamy token s `-` bral jako podprikaz a kazde git pravidlo pak mlcelo.
 # Neznamy globalni prepinac git odmitne (exit 129), takze `deny` nic nestoji (fail-closed). S041-Q2 = (a) (AOPT-O32): totez
 # u rozvinutelneho slova na miste podprikazu - shell z nej udela cokoli, i nic (pak je podprikazem az dalsi slovo).
+# S041-N16 (AOPT-O33): misto seznamu spatnych znaku uzavrena mnozina - podprikaz je jen prosty literal (pismena, cislice,
+# `.`, `_`, `-`; jmena prikazu i aliasu gitu jinak nevypadaji), cokoli jineho (`\`, `{`, glob, `$` ...) = deny.
+$script:GitSubcommandLiteral = '^[A-Za-z0-9][A-Za-z0-9._-]*$'
 function Remove-GitGlobalOption($Tokens) {
     $out = New-Object System.Collections.ArrayList
     $unread = ''
@@ -486,7 +489,7 @@ function Remove-GitGlobalOption($Tokens) {
             if ($script:GitGlobalNoValue -ccontains $name) { $i += 1; continue }
             $unread = $t
             $id = 'gitUnknownGlobalOption'
-        } elseif (Test-ExpandableWord $t) {
+        } elseif ($script:GitGlobalAsCommand -cnotcontains $t -and $t -cnotmatch $script:GitSubcommandLiteral) {
             $unread = $t
             $id = 'gitExpandableSubcommand'
         }

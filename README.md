@@ -795,7 +795,9 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       escape, `$( … )`, `${ … }` (do první `}`) a zpětné apostrofy, ale ne ANSI-C `$'…'`, uvozovky uvnitř `${ … }`
       a zpětných apostrofů v uvozovkách ani vnořené `${ … }`. Špatně určená hranice slova posune argumenty, takže pravidlo
       nad argumenty může minout cíl (nálezy `/code-review` kol 12–13 CR-AB2 a CR-AC4–AC5 mimo prefix). Změřeno
-      2026-10-22: ze 32 sond recenzentů kol 12–13 projdou tichem 4, všechny s `${ … }` v argumentu.
+      2026-10-22: ze 32 sond recenzentů kol 12–13 projdou tichem 4, všechny s `${ … }` v argumentu. **Escape uvnitř
+      argumentu** zůstává ve slově, takže pravidla `reset`, `clean`, `stash`, `checkout` a `restore` vynucený tvar
+      s escapem nepoznají (`git reset --ha\rd` mlčí; Grace S041-N17, i v 0.4.0); pravidla `branch` a `push` escape čtou samy.
     - **Rozdělený subshell projde tichem — stejně jako v 0.3.0** (`A179-O13`, `A179-O14`). `Split-CommandLine` nepočítá
       hloubku holé `(`, takže `( a; b )` dělí na úlomky `(a` a `b)`. První příkaz nese `(`, poslední `)`, a pravidla nad
       tokeny `(rm` nebo `--hard)` nesednou. **`(cd x && git reset --hard)`** i **`(rm -rf src; ls)`** proto projdou tichem.
@@ -869,16 +871,23 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       za `-u` je zbytek slova hodnota. **Mazání s `-c` / `--config-env`** = `deny`
       (`branch.<jméno>.remote` / `.merge` mění, do čeho git sloučenost kontroluje). **Mez:** tentýž klíč z prostředí
       v tomtéž příkazu (`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` před příkazem, za `env` i `$env:…` v PowerShellu) hook
-      nevidí a `-d` mlčí; kandidát pro 0.4.2 (`/code-review` CR1-5, Grace S041-N15).
+      nevidí a `-d` mlčí; kandidát pro 0.4.2 (`/code-review` CR1-5, Grace S041-N15). **Mez:** rozvinutelná hodnota
+      `-c` / `--config-env` (proměnná, substituce) se nečte — alias (`alias.<jméno>`) ani `remote.<jméno>.mirror` /
+      `.push` definované takto hook nevidí a pravidla podpříkazu mlčí (doslovné tvary jsou `deny`; i v 0.4.0); oprava
+      0.4.2 (Grace S041-N18).
       Chráněná větev = `deny` s id `gitBranchDeleteProtected`.
     - **Před podpříkazem gitu (všechna git pravidla — `branch`, `push`, `reset`, `clean`, `stash`, `checkout`, `restore`;
       Grace S041-N14, Amber `AOPT-O31`, `AOPT-O32`):** globální přepínače se přeskočí podle tabulky gitu 2.50 (`git.html`
       OPTIONS, změřeno na pokusném repu; i `--no-lazy-fetch`, `--no-advice`, `--attr-source` s `=` i s mezerou; velikost
       písmen se rozlišuje). Do 0.4.1 se **první neznámý přepínač bral jako podpříkaz** a každé git pravidlo mlčelo (díra
       už v 0.4.0). Od 0.4.1: **neznámý přepínač před podpříkazem = `deny`** (id `gitUnknownGlobalOption`; git ho sám
-      odmítne, cena nulová) a **slovo, které shell teprve rozvine, na místě podpříkazu = `deny`** (id
-      `gitExpandableSubcommand`). **Cena:** git s proměnnou nebo substitucí na místě podpříkazu (`git $SUB …`) je `deny`
-      i s neškodným podpříkazem — náhrada je doslovný podpříkaz. Proměnná jako **hodnota** známého přepínače
+      odmítne, cena nulová) a **slovo podpříkazu, které není prostý literál, = `deny`** (id
+      `gitExpandableSubcommand`; Grace S041-N16, Amber `AOPT-O33`). Prostý literál je uzavřená množina: písmeno nebo
+      číslice, dál písmena, číslice, `.`, `_`, `-` (tak vypadají jména příkazů i aliasů gitu) — ne seznam špatných znaků.
+      Proměnná, substituce, escape, složené závorky i glob ve slově podpříkazu (`git bran\ch …`) jsou proto `deny`;
+      dřív escape, glob a závorky uvnitř slova mlčely (díra už v 0.4.0). Podpříkaz v uvozovkách (`git "branch" …`)
+      shell i hook čtou jako literál, posoudí ho pravidlo podpříkazu. **Cena:** git s proměnnou nebo substitucí na místě
+      podpříkazu (`git $SUB …`) je `deny` i s neškodným podpříkazem — náhrada je doslovný podpříkaz. Proměnná jako **hodnota** známého přepínače
       (`git -C $repo status`) mlčí dál; `-v`, `--version`, `-h`, `--help` git čte jako podpříkaz `version` / `help` (mlčí).
     - **Hodnota volby není přepínač:** za `--sort`, `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`,
       `--with`, `--without`, `--points-at`, `--set-upstream-to` a `-u` bere git další slovo jako hodnotu i s pomlčkou (změřeno

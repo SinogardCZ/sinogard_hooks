@@ -8,8 +8,8 @@ verzování je [semver](https://semver.org/lang/cs/).
 **GSD TASK-195: nevynucené smazání lokální větve (`git branch -d`) bez zákazu; vynucené a vzdálené mazání dál `deny`.**
 Rozhodnutí Toma `Z179-Q1 = B` (2026-10-25) a `ZOPT-Q108 = A` (2026-10-27), podnět HRMS (`ZOPT-Q102` pro celé PC); zadání
 Amber `2026-10-27-zadani-sinogard-041.md` s Doplňkem po revizi Grace (`S041-N1`–`N13`). Vydání nese **jen tuhle změnu**
-(`AOPT-O29`) a opravu díry z 0.4.0, kterou našla brána Grace před merge — slovo před podpříkazem gitu (`S041-N14`;
-`AOPT-O29` zúžila Amber `AOPT-O31` a `AOPT-O32`); tokenizér Bashe (GSD TASK-190) a meze TASK-161 jsou **0.4.2** (viz
+(`AOPT-O29`) a opravu díry z 0.4.0, kterou našla brána Grace před merge — slovo před podpříkazem gitu a slovo podpříkazu
+(`S041-N14`, `S041-N16`; `AOPT-O29` zúžila Amber `AOPT-O31`, `AOPT-O32` a `AOPT-O33`); tokenizér Bashe (GSD TASK-190) a meze TASK-161 jsou **0.4.2** (viz
 Čísla verzí níž). Doklady: repo GSD `docs/logs/mutants/task-195/`.
 
 ### Změněno — `git branch -d` mlčí (změna verdiktu `deny` → ticho + audit)
@@ -78,6 +78,18 @@ Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` 
   W1–W4) mlčí, podpříkaz v uvozovkách čte pravidlo jako dřív (W5, W6), `-v` / `--version` / `-h` / `--help` jsou pro git
   podpříkaz `version` / `help` (V3–V5, mlčí). `--exec-path` bez hodnoty git vypíše a skončí; hook ho přeskočí a čte dál
   (V13, nejhůř falešný `deny`).
+- **Slovo podpříkazu gitu je jen prostý literál** (brána Grace `S041-N16`, díra už v 0.4.0; Amber `AOPT-O33`; skupina
+  `G-lit` L1–L16, kontroly `G-litctl` T1–T14): escape, složené závorky a glob **uvnitř** slova podpříkazu (Bash) shell
+  odstraní nebo rozvine, hook slovo četl doslova a žádné git pravidlo nesedlo (i za `-C` / `-c`, pod `bash -c` a `xargs`).
+  Třetí díra téhož předpokladu (hook pozná špatné znaky: přepínače N14, `$` O32, `\ { [ * ?` N16), proto místo dalšího
+  znaku **uzavřená množina**: první znak písmeno nebo číslice, dál písmena, číslice, `.`, `_`, `-`; cokoli jiného = `deny`
+  (id `gitExpandableSubcommand`). `-v` / `--version` / `-h` / `--help` stojí mimo (V3–V5, T13). **Cena:** žádná známá —
+  jména příkazů i aliasů gitu jinak nevypadají (`cherry-pick`, `rev-parse`, `ls-files`, `credential-manager`, `lfs`
+  mlčí, T8–T12); v PowerShellu zpětné lomítko escape není, git takové jméno odmítne (L16). Kontroly beze změny: podpříkaz
+  v uvozovkách i z částí v uvozovkách (T1, T2) čte pravidlo podpříkazu.
+- **Meze bez opravy v 0.4.1** (Grace `S041-N17`, `S041-N18`, obě i v 0.4.0): escape uvnitř **argumentu** pravidla `reset`,
+  `clean`, `stash`, `checkout`, `restore` nevidí (README 27; tokenizér 0.4.2, GSD TASK-190); rozvinutelnou hodnotu
+  `-c` / `--config-env` hook nečte, alias ani `remote.<jméno>.mirror` / `.push` takto definované nevidí (README 29; 0.4.2).
 
 ### ⚠️ Migrace přepisu
 
@@ -98,8 +110,8 @@ u `deny` mazání větve).
 
 ### Testy
 
-`tests/fixtures/task195-gate.json` (234 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
-`P-new`, `P-ctl`, `G-global`, `G-ctl`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
+`tests/fixtures/task195-gate.json` (264 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
+`P-new`, `P-ctl`, `G-global`, `G-ctl`, `G-lit`, `G-litctl`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
 jehož `was` se liší od `expect`. Řádky z `/code-review` prošly červenou fází zvlášť, vždy nad 0.4.0 (červené přesně
 řádky s `was` = `allow`) i nad předchozí hlavou: kolo 1 (C30–C33, H14, H15, N14–N18, Q9) 7 z 13 a 11 z 13, kolo 2
 (C34, C35, H16, H17, N19, K26) 2 ze 7 a 5 ze 7, kolo 3 (B21, K27–K33, H18–H20, N20, N21, Q10) 7 z 16 a 14 z 16.
@@ -108,8 +120,11 @@ nad 0.4.0 červený jen B21 (záměrná změna), nad `abd8d6a` R1–R6 a R11; op
 Oprava `S041-N14` / `AOPT-O32` (brána Grace, skupiny `G-global`, `G-ctl`, 44 řádků; fixtura tím 234 řádků): červená
 fáze nad `b514d64` pod powershell.exe i pwsh a nad 0.4.0 shodně — červené přesně řádky s `was` ≠ `expect` (U1–U25, V7,
 V9, V13); **oprava nad stropem tří kol, skillem `/code-review` nereviewovaná.**
+Oprava `S041-N16` (druhá delta brána Grace, `AOPT-O33`; skupiny `G-lit`, `G-litctl`, 30 řádků; fixtura tím 264 řádků):
+červená fáze nad `14e678e` pod powershell.exe i pwsh — červené přesně L1–L16; nad 0.4.0 L1–L13, L15, L16 a T3 (L14 tam
+zakázal vzor `git-branch-delete`, T3 zavřelo pravidlo větve 0.4.1); **oprava skillem `/code-review` nereviewovaná.**
 Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají).
-Invariant 1850 → 2061 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
+Invariant 1850 → 2091 řádků; šest očekávání změněno nástrojem `-Prijmout` s citací `Z179-Q1`/`ZOPT-Q108`.
 
 ### Čísla verzí
 
