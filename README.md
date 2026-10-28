@@ -867,8 +867,19 @@ nebo `deny`. Hranice samy (co hook nevidí) se tím nemění.
       náhrada je výčet jmen v příkazu. Přesměrování (`2>$null`) slovem příkazu není — jen
       když v původním příkazu stojí mimo uvozovky a tentýž text není nikde v uvozovkách (jinak se čte jako slovo, fail-closed);
       za `-u` je zbytek slova hodnota. **Mazání s `-c` / `--config-env`** = `deny`
-      (`branch.<jméno>.remote` / `.merge` mění, do čeho git sloučenost kontroluje).
+      (`branch.<jméno>.remote` / `.merge` mění, do čeho git sloučenost kontroluje). **Mez:** tentýž klíč z prostředí
+      v tomtéž příkazu (`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` před příkazem, za `env` i `$env:…` v PowerShellu) hook
+      nevidí a `-d` mlčí; kandidát pro 0.4.2 (`/code-review` CR1-5, Grace S041-N15).
       Chráněná větev = `deny` s id `gitBranchDeleteProtected`.
+    - **Před podpříkazem gitu (všechna git pravidla — `branch`, `push`, `reset`, `clean`, `stash`, `checkout`, `restore`;
+      Grace S041-N14, Amber `AOPT-O31`, `AOPT-O32`):** globální přepínače se přeskočí podle tabulky gitu 2.50 (`git.html`
+      OPTIONS, změřeno na pokusném repu; i `--no-lazy-fetch`, `--no-advice`, `--attr-source` s `=` i s mezerou; velikost
+      písmen se rozlišuje). Do 0.4.1 se **první neznámý přepínač bral jako podpříkaz** a každé git pravidlo mlčelo (díra
+      už v 0.4.0). Od 0.4.1: **neznámý přepínač před podpříkazem = `deny`** (id `gitUnknownGlobalOption`; git ho sám
+      odmítne, cena nulová) a **slovo, které shell teprve rozvine, na místě podpříkazu = `deny`** (id
+      `gitExpandableSubcommand`). **Cena:** git s proměnnou nebo substitucí na místě podpříkazu (`git $SUB …`) je `deny`
+      i s neškodným podpříkazem — náhrada je doslovný podpříkaz. Proměnná jako **hodnota** známého přepínače
+      (`git -C $repo status`) mlčí dál; `-v`, `--version`, `-h`, `--help` git čte jako podpříkaz `version` / `help` (mlčí).
     - **Hodnota volby není přepínač:** za `--sort`, `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`,
       `--with`, `--without`, `--points-at`, `--set-upstream-to` a `-u` bere git další slovo jako hodnotu i s pomlčkou (změřeno
       git 2.50), takže `git branch --sort -committerdate` od 0.4.1 mlčí. **Cena:** zkratka hodnotové volby (`--so

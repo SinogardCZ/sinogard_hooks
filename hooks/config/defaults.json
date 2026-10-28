@@ -166,6 +166,8 @@
       "gitBranchDelete": "smazání větve vynucené nebo se slovem, které hook neumí přečíst (git branch -D, -f / --force, -r, neznámá volba, proměnná, substituce, glob) — nevynucené `git branch -d <větev>` s doslovným jménem mlčí",
       "gitBranchDeleteProtected": "smazání chráněné větve ({branch})",
       "gitBranchDeleteMerged": "nevynucené smazání lokální větve (git branch -d)",
+      "gitUnknownGlobalOption": "globální přepínač gitu, který hook nezná ({text}) — podpříkaz za ním hook nepřečte; git neznámý přepínač stejně odmítne",
+      "gitExpandableSubcommand": "na místě podpříkazu gitu stojí slovo, které teprve rozvine shell ({text}) — napiš podpříkaz doslova",
       "deleteFromPipeline": "mazání se vstupem z roury (cíl není v příkazu vidět)",
       "_shortAbsolutePathComment": "TASK-106 bod 4 (nález Amber I6, 0.2.0): `rm -rf /srv` končilo ask s hláškou o rouře. Skutečná příčina: `/xxx` do tří znaků je od přepínače cmd (`/s`, `/q`) k nerozeznání, cíl není vidět. Rozhodnutí se nemění, věta ano.",
       "shortAbsolutePath": "rekurzivní mazání s krátkou absolutní cestou ({target}) — do tří znaků je od přepínače cmd (/s, /q) k nerozeznání, cíl není vidět",

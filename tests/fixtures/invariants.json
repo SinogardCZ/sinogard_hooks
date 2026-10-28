@@ -12840,6 +12840,270 @@
       "cmd": "echo x 2> f; git branch '2>' -D main",
       "expect": "deny",
       "since": "R11 tyz text mimo uvozovky v jinem prikazu a v uvozovkach pred -D (S041-A1, fail-closed) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice branch -D main",
+      "expect": "deny",
+      "since": "U1 --no-advice pred branch -D (S041-N14 G4, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-advice branch -D main",
+      "expect": "deny",
+      "since": "U2 --no-advice pred branch -D (S041-N14 H1, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-lazy-fetch branch -D main",
+      "expect": "deny",
+      "since": "U3 --no-lazy-fetch pred branch -D (S041-N14 G5, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --attr-source=HEAD branch -D main",
+      "expect": "deny",
+      "since": "U4 --attr-source= pred branch -D (S041-N14 G10, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --attr-source HEAD branch -D main",
+      "expect": "deny",
+      "since": "U5 --attr-source s mezerou pred branch -D (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'git --no-advice branch -D main'",
+      "expect": "deny",
+      "since": "U6 --no-advice pod bash -c (S041-N14 H8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --bogus-option branch -D main",
+      "expect": "deny",
+      "since": "U7 neznamy globalni prepinac pred branch -D (S041-N14 H12, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice push --force origin main",
+      "expect": "deny",
+      "since": "U8 --no-advice pred push --force main (S041-N14 H3, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-lazy-fetch push origin --delete main",
+      "expect": "deny",
+      "since": "U9 --no-lazy-fetch pred push --delete (S041-N14 H4, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice reset --hard",
+      "expect": "deny",
+      "since": "U10 --no-advice pred reset --hard (S041-N14 H2, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --attr-source HEAD reset --hard",
+      "expect": "deny",
+      "since": "U11 --attr-source s mezerou pred reset --hard (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice clean -fdx",
+      "expect": "deny",
+      "since": "U12 --no-advice pred clean -fdx (S041-N14 H5, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-lazy-fetch clean -fd",
+      "expect": "deny",
+      "since": "U13 --no-lazy-fetch pred clean -fd (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice stash clear",
+      "expect": "deny",
+      "since": "U14 --no-advice pred stash clear (S041-N14 H10, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-advice stash drop",
+      "expect": "deny",
+      "since": "U15 --no-advice pred stash drop (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice checkout -- .",
+      "expect": "deny",
+      "since": "U16 --no-advice pred checkout -- . (S041-N14, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --attr-source=HEAD checkout .",
+      "expect": "deny",
+      "since": "U17 --attr-source= pred checkout . (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice restore .",
+      "expect": "deny",
+      "since": "U18 --no-advice pred restore . (S041-N14, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --bogus-option reset --hard",
+      "expect": "deny",
+      "since": "U19 neznamy globalni prepinac pred reset --hard (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --bogus-option status",
+      "expect": "deny",
+      "since": "U20 neznamy globalni prepinac pred neskodnym podprikazem (S041-N14, fail-closed; git ho odmitne) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -Cx branch -D main",
+      "expect": "deny",
+      "since": "U21 prilepena hodnota -C (git 2.50 neumi, fail-closed) pred branch -D -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git $X branch -D main",
+      "expect": "deny",
+      "since": "U22 promenna na miste podprikazu (S041-Q2, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git $(true) branch -D main",
+      "expect": "deny",
+      "since": "U23 substituce na miste podprikazu (S041-Q2, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git $x branch -D main",
+      "expect": "deny",
+      "since": "U24 promenna na miste podprikazu (S041-Q2, PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git (Write-Output) branch -D main",
+      "expect": "deny",
+      "since": "U25 podvyraz na miste podprikazu (S041-Q2, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C $repo status",
+      "expect": "allow",
+      "since": "W1 promenna jako hodnota -C (hodnota, ne podprikaz) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C \"$(pwd)\" log",
+      "expect": "allow",
+      "since": "W2 substituce jako hodnota -C v uvozovkach -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c $kv status",
+      "expect": "allow",
+      "since": "W3 promenna jako hodnota -c pred status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git -C $repo status",
+      "expect": "allow",
+      "since": "W4 promenna jako hodnota -C (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git \"branch\" -D main",
+      "expect": "deny",
+      "since": "W5 podprikaz v uvozovkach, branch -D (Bash) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git 'branch' -D main",
+      "expect": "deny",
+      "since": "W6 podprikaz v uvozovkach, branch -D (PowerShell) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice status",
+      "expect": "allow",
+      "since": "V1 --no-advice pred status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-lazy-fetch log --oneline",
+      "expect": "allow",
+      "since": "V2 --no-lazy-fetch pred log (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --version",
+      "expect": "allow",
+      "since": "V3 --version -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git -v",
+      "expect": "allow",
+      "since": "V4 -v (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --help branch",
+      "expect": "allow",
+      "since": "V5 --help s podprikazem (git spusti help) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --attr-source HEAD diff",
+      "expect": "allow",
+      "since": "V6 --attr-source s mezerou pred diff -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice branch -d feature/x",
+      "expect": "allow",
+      "since": "V7 --no-advice pred branch -d (S041-N14, Bash) -> ticho + audit"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -P branch -D main",
+      "expect": "deny",
+      "since": "V8 -P pred branch -D (velke P, rozliseni velikosti) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C W:/dev/x --no-advice reset --hard",
+      "expect": "deny",
+      "since": "V9 -C cesta a --no-advice pred reset --hard -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -p status",
+      "expect": "allow",
+      "since": "V10 -p pred status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-pager branch -D main",
+      "expect": "deny",
+      "since": "V11 --no-pager pred branch -D (PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --literal-pathspecs status",
+      "expect": "allow",
+      "since": "V12 --literal-pathspecs pred status (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --exec-path branch -D main",
+      "expect": "deny",
+      "since": "V13 --exec-path bez hodnoty pred branch -D (git vypise cestu a skonci; hook fail-closed) -> deny"
     }
   ]
 }

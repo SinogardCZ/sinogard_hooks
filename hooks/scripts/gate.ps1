@@ -451,33 +451,50 @@ function Split-Heredoc([string]$Command) {
 
 # ------------------------------------------------------------- pravidla ---
 
-# Globalni prepinace gitu pred podprikazem. Hodnota: kolik tokenu se preskoci.
-$script:GitGlobalWithValue = @('-c', '-C', '--git-dir', '--work-tree', '--namespace',
-                               '--exec-path', '--config-env', '--super-prefix')
-$script:GitGlobalNoValue   = @('-p', '--paginate', '--no-pager', '--bare', '--no-replace-objects',
-                               '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
-                               '--icase-pathspecs', '--no-optional-locks')
+# Globalni prepinace gitu pred podprikazem (git 2.50: OPTIONS v `git.html`, zmereno na pokusnem repu - TASK-195 S041-N14).
+# Velikost pismen se rozlisuje (`-c` x `-C`, `-p` x `-P`), git ji rozlisuje taky. S hodnotou: dalsi token, u dlouhych i za `=`.
+$script:GitGlobalWithValue = @('-c', '-C', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix',
+                               '--attr-source', '--shallow-file')
+# Bez hodnoty. `--exec-path` bez `=`, `--html-path`, `--man-path`, `--info-path` a `--list-cmds=` git vypise a skonci -
+# hook je presto preskoci a cte dal (nejhur falesny deny).
+$script:GitGlobalNoValue   = @('-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects', '--no-lazy-fetch',
+                               '--no-optional-locks', '--no-advice', '--literal-pathspecs', '--no-literal-pathspecs',
+                               '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+                               '--exec-path', '--html-path', '--man-path', '--info-path', '--list-cmds')
+# `-v` / `--version` / `-h` / `--help` git cte jako podprikaz `version` / `help`; zbytek prikazu jsou jejich argumenty (zmereno).
+$script:GitGlobalAsCommand = @('-v', '--version', '-h', '--help')
 
+# Vraci @{ Tokens = podprikaz s argumenty; Unread = slovo pred podprikazem, ktere hook neprecte, jinak ''; Id = id verdiktu }.
+# TASK-195 S041-N14 (Grace): do 0.4.1 se prvni neznamy token s `-` bral jako podprikaz a kazde git pravidlo pak mlcelo.
+# Neznamy globalni prepinac git odmitne (exit 129), takze `deny` nic nestoji (fail-closed). S041-Q2 = (a) (AOPT-O32): totez
+# u rozvinutelneho slova na miste podprikazu - shell z nej udela cokoli, i nic (pak je podprikazem az dalsi slovo).
 function Remove-GitGlobalOption($Tokens) {
     $out = New-Object System.Collections.ArrayList
+    $unread = ''
+    $id = ''
     $i = 0
     while ($i -lt $Tokens.Count) {
-        $t = $Tokens[$i]
-        if ($t.StartsWith('-')) {
+        $t = [string]$Tokens[$i]
+        if ($t.StartsWith('-') -and $script:GitGlobalAsCommand -cnotcontains $t) {
             $name = $t
             $eq = $t.IndexOf('=')
             if ($eq -ge 0) { $name = $t.Substring(0, $eq) }
-            if ($script:GitGlobalWithValue -contains $name) {
+            if ($script:GitGlobalWithValue -ccontains $name) {
                 if ($eq -ge 0) { $i += 1 } else { $i += 2 }
                 continue
             }
-            if ($script:GitGlobalNoValue -contains $name) { $i += 1; continue }
+            if ($script:GitGlobalNoValue -ccontains $name) { $i += 1; continue }
+            $unread = $t
+            $id = 'gitUnknownGlobalOption'
+        } elseif (Test-ExpandableWord $t) {
+            $unread = $t
+            $id = 'gitExpandableSubcommand'
         }
         # prvni token, ktery neni globalni prepinac, je podprikaz
         for ($j = $i; $j -lt $Tokens.Count; $j++) { [void]$out.Add($Tokens[$j]) }
         break
     }
-    return ,@($out)
+    return @{ Tokens = @($out); Unread = $unread; Id = $id }
 }
 
 function Get-RestTokens($Tokens) {
@@ -1481,6 +1498,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $args2 = Expand-ColonParameter $rest
     $gitConfig = @()
+    $gitUnread = $null
     if ($exe -eq 'git') {
         # Hodnoty `-c klic=hodnota` se pri normalizaci zahazuji, ale nektere z nich
         # MENI VYZNAM podprikazu (nalezy Metis 26 a 27) - proto se schovaji na list.
@@ -1492,11 +1510,13 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             # TASK-195 CR1-3: git bere i `--config-env <klic>=<promenna>` s mezerou (zmereno git 2.50).
             elseif ($args2[$i] -eq '--config-env' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
         }
-        $args2 = Remove-GitGlobalOption $args2
+        $g = Remove-GitGlobalOption $args2
+        $args2 = @($g.Tokens)
+        $gitUnread = @{ Word = [string]$g.Unread; Id = [string]$g.Id }
     }
     $text = ($exe + ' ' + ($args2 -join ' ')).Trim()
     [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @($args2); Raw = $raw; Text = $text
-                      GitConfig = @($gitConfig) })
+                      GitConfig = @($gitConfig); GitUnread = $gitUnread })
     foreach ($l in $containerLeaves) { [void]$out.Add($l) }
     return $out
 }
@@ -3053,6 +3073,12 @@ function Test-Leaf($Leaf, $Config) {
     # do definice aliasu. Rozbalit to neumime, takze plati Z3: nerozebratelne -> politika `gate.decisions.gitAlias`
     # (0.3.1, ZOPT-Q102 / A179-O3 Q3: vychozi deny - alias spusti cokoli; do 0.3.0 ask).
     if ($Leaf.Exe -eq 'git') {
+        # TASK-195 S041-N14 / S041-Q2: slovo pred podprikazem, ktere hook neprecte - podprikaz neni znamy (fail-closed).
+        $unread = Get-LeafField $Leaf 'GitUnread' $null
+        if ($null -ne $unread -and [string]$unread.Word -ne '') {
+            return @{ Id = [string]$unread.Id; Decision = 'deny'
+                      Shape = (([string](Get-Field $shapes ([string]$unread.Id) 'git {text}')).Replace('{text}', [string]$unread.Word)) }
+        }
         foreach ($cfg in $Leaf.GitConfig) {
             if ($cfg -match '(?i)^alias\.') {
                 return (New-PolicyVerdict $gate 'gitAlias' (([string](Get-Field $shapes 'gitAlias' '{text}')).Replace('{text}', [string]($cfg))))
