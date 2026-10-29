@@ -7,7 +7,7 @@
   ASCII-ONLY zdroj (viz _common.ps1). Vsechny lidske texty jsou v
   hooks/config/defaults.json.
 
-  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.1.
+  Verze v komentarich (A179-O19, A179-O23 N6): "0.3.1" = vydani 0.4.0 (vyvijelo se pod 0.3.1), "0.3.2" = 0.4.2 (do GSD TASK-195 tu stalo 0.4.1; vydani 0.4.1 nese jen git branch -d, AOPT-O29).
 
   Fail-closed: jakakoli vyjimka, nevalidni nebo prazdny vstup, chybejici prikaz
   i neznamy nastroj konci exit 2. Ukazkovy validator Anthropicu tohle nedela
@@ -451,33 +451,53 @@ function Split-Heredoc([string]$Command) {
 
 # ------------------------------------------------------------- pravidla ---
 
-# Globalni prepinace gitu pred podprikazem. Hodnota: kolik tokenu se preskoci.
-$script:GitGlobalWithValue = @('-c', '-C', '--git-dir', '--work-tree', '--namespace',
-                               '--exec-path', '--config-env', '--super-prefix')
-$script:GitGlobalNoValue   = @('-p', '--paginate', '--no-pager', '--bare', '--no-replace-objects',
-                               '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
-                               '--icase-pathspecs', '--no-optional-locks')
+# Globalni prepinace gitu pred podprikazem (git 2.50: OPTIONS v `git.html`, zmereno na pokusnem repu - TASK-195 S041-N14).
+# Velikost pismen se rozlisuje (`-c` x `-C`, `-p` x `-P`), git ji rozlisuje taky. S hodnotou: dalsi token, u dlouhych i za `=`.
+$script:GitGlobalWithValue = @('-c', '-C', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix',
+                               '--attr-source', '--shallow-file')
+# Bez hodnoty. `--exec-path` bez `=`, `--html-path`, `--man-path`, `--info-path` a `--list-cmds=` git vypise a skonci -
+# hook je presto preskoci a cte dal (nejhur falesny deny).
+$script:GitGlobalNoValue   = @('-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects', '--no-lazy-fetch',
+                               '--no-optional-locks', '--no-advice', '--literal-pathspecs', '--no-literal-pathspecs',
+                               '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+                               '--exec-path', '--html-path', '--man-path', '--info-path', '--list-cmds')
+# `-v` / `--version` / `-h` / `--help` git cte jako podprikaz `version` / `help`; zbytek prikazu jsou jejich argumenty (zmereno).
+$script:GitGlobalAsCommand = @('-v', '--version', '-h', '--help')
 
+# Vraci @{ Tokens = podprikaz s argumenty; Unread = slovo pred podprikazem, ktere hook neprecte, jinak ''; Id = id verdiktu }.
+# TASK-195 S041-N14 (Grace): do 0.4.1 se prvni neznamy token s `-` bral jako podprikaz a kazde git pravidlo pak mlcelo.
+# Neznamy globalni prepinac git odmitne (exit 129), takze `deny` nic nestoji (fail-closed). S041-Q2 = (a) (AOPT-O32): totez
+# u rozvinutelneho slova na miste podprikazu - shell z nej udela cokoli, i nic (pak je podprikazem az dalsi slovo).
+# S041-N16 (AOPT-O33): misto seznamu spatnych znaku uzavrena mnozina - podprikaz je jen prosty literal (pismena, cislice,
+# `.`, `_`, `-`; jmena prikazu i aliasu gitu jinak nevypadaji), cokoli jineho (`\`, `{`, glob, `$` ...) = deny.
+$script:GitSubcommandLiteral = '^[A-Za-z0-9][A-Za-z0-9._-]*$'
 function Remove-GitGlobalOption($Tokens) {
     $out = New-Object System.Collections.ArrayList
+    $unread = ''
+    $id = ''
     $i = 0
     while ($i -lt $Tokens.Count) {
-        $t = $Tokens[$i]
-        if ($t.StartsWith('-')) {
+        $t = [string]$Tokens[$i]
+        if ($t.StartsWith('-') -and $script:GitGlobalAsCommand -cnotcontains $t) {
             $name = $t
             $eq = $t.IndexOf('=')
             if ($eq -ge 0) { $name = $t.Substring(0, $eq) }
-            if ($script:GitGlobalWithValue -contains $name) {
+            if ($script:GitGlobalWithValue -ccontains $name) {
                 if ($eq -ge 0) { $i += 1 } else { $i += 2 }
                 continue
             }
-            if ($script:GitGlobalNoValue -contains $name) { $i += 1; continue }
+            if ($script:GitGlobalNoValue -ccontains $name) { $i += 1; continue }
+            $unread = $t
+            $id = 'gitUnknownGlobalOption'
+        } elseif ($script:GitGlobalAsCommand -cnotcontains $t -and $t -cnotmatch $script:GitSubcommandLiteral) {
+            $unread = $t
+            $id = 'gitExpandableSubcommand'
         }
         # prvni token, ktery neni globalni prepinac, je podprikaz
         for ($j = $i; $j -lt $Tokens.Count; $j++) { [void]$out.Add($Tokens[$j]) }
         break
     }
-    return ,@($out)
+    return @{ Tokens = @($out); Unread = $unread; Id = $id }
 }
 
 function Get-RestTokens($Tokens) {
@@ -846,7 +866,7 @@ function Get-BashCommandStart([string]$Text, [switch]$NoArm) {
         # A179-O14 (Amber 2026-10-22): heuristiky fragmentu ROZDELENEHO subshellu (Split-CommandLine deli i uvnitr `( ... )`;
         # kola 15-17: odlamovani `)` CR-AE4/AF6/AG4, preskok `(` CR-AF1/AG1, ocas za slovem s `)` CR-AF3/AG2) jsou vraceny -
         # kola 16-18 v nich nachazela regrese. Prvni a posledni prikaz rozdeleneho subshellu je dira 0.3.0 (README mez 27),
-        # oprava = hloubka `( )` ve skeneru (CR-AF5) ve verzi 0.4.1 (puvodne 0.3.2, A179-O19).
+        # oprava = hloubka `( )` ve skeneru (CR-AF5) ve verzi 0.4.2 (puvodne 0.3.2, A179-O19; pak 0.4.1).
         $m = $r.Keyword.Match($Text, $pos)
         if (-not $m.Success) { $m = $r.FuncDef.Match($Text, $pos) }
         if ($m.Success) { $pos += $m.Length; $first = $false; continue }
@@ -1105,7 +1125,7 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
     # procesni substituce nebo komentare (`( ... ) > >(tee log)`) - z deny bylo allow. Vracena: uzavre-li Find-CloseParen subshell
     # pred koncem textu, rozhoduje jeho konec a ocas, ktery neni jen presmerovani, je deny (CR-AE2); neuzavre-li ho, jde tvar
     # starou cestou 0.3.0 (CR-AK1/AK2: ANSI-C `$'...'`, `((...) )` - README mez 27). Cena: vnoreny subshell s presmerovanim na konci rozdeleneho subshellu
-    # a uvozovky vnorene v `$( ... )` uvnitr uvozovek (Find-CloseParen je nevnoruje, CR-AJ5 -> 0.4.1) = falesny deny.
+    # a uvozovky vnorene v `$( ... )` uvnitr uvozovek (Find-CloseParen je nevnoruje, CR-AJ5 -> 0.4.2) = falesny deny.
     if ((Get-ScannerEscape) -eq '\') {
         $lead = [regex]::Match($stripped, '^\s*\(')
         if ($lead.Success -and -not $script:BashZoneRx.Arith.IsMatch($stripped, $lead.Index + $lead.Length - 1)) {
@@ -1444,7 +1464,11 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
             #   tail je PRIKAZOVA RADKA (bash -c, cmd /c, eval, ...) -> Join-CommandString
             $inner = (Join-Argument ($rest | Select-Object -Skip $i))
             if ($inner -eq '') { return $out }
-            foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) { [void]$out.Add($l) }
+            # TASK-195 CR2-4: xargs pripoji argumenty ze vstupu - list nese, ze jeho slova nejsou cela (Test-GitBranchRule).
+            foreach ($l in (Get-CommandLeaf $inner ($Depth + 1))) {
+                if ($l -is [hashtable]) { $l['ArgsAppended'] = $true }
+                [void]$out.Add($l)
+            }
             return $out
         }
         '^(find)$' {
@@ -1477,18 +1501,25 @@ function Get-CommandLeaf([string]$Sub, [int]$Depth) {
 
     $args2 = Expand-ColonParameter $rest
     $gitConfig = @()
+    $gitUnread = $null
     if ($exe -eq 'git') {
         # Hodnoty `-c klic=hodnota` se pri normalizaci zahazuji, ale nektere z nich
         # MENI VYZNAM podprikazu (nalezy Metis 26 a 27) - proto se schovaji na list.
         for ($i = 0; $i -lt $args2.Count; $i++) {
-            if ($args2[$i] -eq '-c' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
+            # TASK-195 CR2-5: `-ceq` - `-eq` bral i `git -C <cesta>` a cesta se tu tvarila jako konfigurace (do 0.4.0 bez dopadu:
+            # cesta nesedi na zadny hlidany klic; mazani vetve od CR2-5 kazdou konfiguraci odmita).
+            if ($args2[$i] -ceq '-c' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
             elseif ($args2[$i] -match '^--config-env=(.*)$') { $gitConfig += $Matches[1] }
+            # TASK-195 CR1-3: git bere i `--config-env <klic>=<promenna>` s mezerou (zmereno git 2.50).
+            elseif ($args2[$i] -eq '--config-env' -and ($i + 1) -lt $args2.Count) { $gitConfig += $args2[$i + 1] }
         }
-        $args2 = Remove-GitGlobalOption $args2
+        $g = Remove-GitGlobalOption $args2
+        $args2 = @($g.Tokens)
+        $gitUnread = @{ Word = [string]$g.Unread; Id = [string]$g.Id }
     }
     $text = ($exe + ' ' + ($args2 -join ' ')).Trim()
     [void]$out.Add(@{ Kind = 'leaf'; Exe = $exe; Args = @($args2); Raw = $raw; Text = $text
-                      GitConfig = @($gitConfig) })
+                      GitConfig = @($gitConfig); GitUnread = $gitUnread })
     foreach ($l in $containerLeaves) { [void]$out.Add($l) }
     return $out
 }
@@ -1776,20 +1807,61 @@ function Test-GitPushRule($Leaf, $Config) {
     if ($Leaf.Exe -ne 'git') { return $null }
     if ($Leaf.Args.Count -eq 0 -or $Leaf.Args[0] -ne 'push') { return $null }
 
+    # TASK-195 CR1-1: escape pred znakem (Bash `\:x`, `\-d`; PowerShell `` `-d ``) shell odstrani a git dostane `:x`, `-d`.
+    # CR2-1: jenze v Bashi je zpetny apostrof substituce, ne escape - cteni bez nej by z necitelneho cile udelalo citelny
+    # (`force` na `main` by z `deny` spadl do auditu). Slova se proto ctou DVAKRAT, doslova (verdikt 0.4.0) a bez escapu
+    # obou shellu; plati `deny` kterehokoli cteni. Druhe cteni muze jen pridat `deny`, nikdy ho neubere.
+    # CR3-7: xargs pripoji slova ze vstupu (`:x`, `--delete x`) - refspecy ani prepinace hook nevidi.
+    if ([bool](Get-LeafField $Leaf 'ArgsAppended' $false)) {
+        return @{ Id = 'pushDelete'; Decision = 'deny'; Shape = (Get-Field (Get-Field (Get-Field $Config 'gate') 'shapes') 'pushDelete' 'git push --delete') }
+    }
+    $raw = Get-RestTokens $Leaf.Args
+    $plain = @(foreach ($a in $raw) { ([string]$a) -replace '\\(.)', '$1' -replace '`(.)', '$1' })
+    $literal = Get-GitPushVerdict $raw $Leaf $Config
+    if ($literal -and $literal.Decision -eq 'deny') { return $literal }
+    $unescaped = Get-GitPushVerdict $plain $Leaf $Config
+    if ($unescaped -and $unescaped.Decision -eq 'deny') { return $unescaped }
+    if ($literal) { return $literal }
+    return $unescaped
+}
+
+function Get-GitPushVerdict($Tokens, $Leaf, $Config) {
     $protected = @(Get-Field (Get-Field $Config 'gate') 'protectedBranches' @('main'))
     $shapes = Get-Field (Get-Field $Config 'gate') 'shapes'
 
     $force = $false
     $mirror = $false
+    $deleteOpt = $false
     $positional = New-Object System.Collections.ArrayList
-    foreach ($a in (Get-RestTokens $Leaf.Args)) {
+    foreach ($a in $Tokens) {
+        $a = [string]$a
+        # GSD TASK-195 (0.4.1, S041-N3): vzor `git-push-delete` zna jen `--delete` a `-d` jako cele slovo. Git bere i jednoznacnou
+        # zkratku dlouhe volby (`--del`; `--d` je nejednoznacne s `--dry-run` a git ho odmitne - deny nic nestoji), `--prune`
+        # (`--pru`; `--pr` je nejednoznacne s `--progress`) maze vzdalene vetve bez lokalniho protejsku a spojene kratke
+        # prepinace nesou `d` kdekoli (`-qd`, `-ud`). Zmereno `git push -h`, git 2.50.
+        # CR3-6: za `-o` (`--push-option`) je zbytek slova hodnota (`-odeploy`), ne dalsi prepinace.
+        $short = $a
+        $o = $a.IndexOf('o')
+        if ($o -gt 0) { $short = $a.Substring(0, $o) }
+        if ($a -match '^--d(e(l(e(te?)?)?)?)?$' -or $a -match '^--pru(ne?)?$' -or $short -cmatch '^-[A-Za-z0-9]*d[A-Za-z0-9]*$') {
+            $deleteOpt = $true; continue
+        }
         if ($a -match '^--force(-with-lease|-if-includes)?(=.*)?$') { $force = $true; continue }
         # Nalez Metis 14: --mirror force-updatuje zmenene reference a MAZE chybejici,
         # tedy dela oboji, co deny zakazuje - jen se to jinak jmenuje.
-        if ($a -eq '--mirror') { $mirror = $true; continue }
+        # TASK-195: i zkratka (`--m` je v `git push` jen `--mirror`).
+        if ($a -match '^--m(i(r(r(or?)?)?)?)?$') { $mirror = $true; continue }
         if ($a -cmatch '^-[A-Za-z]*f[A-Za-z]*$') { $force = $true; continue }
         if ($a.StartsWith('-')) { continue }
         [void]$positional.Add($a)
+    }
+    # TASK-195 (S041-N11): `-c remote.<n>.push=<refspec>` (i `--config-env`) dosadi refspec, ktery v prikazu neni videt (`:x` maze),
+    # `remote.<n>.mirror` dela z pushe `--mirror`. Hodnotu hook neposuzuje - klic sam staci.
+    foreach ($cfg in @($Leaf.GitConfig)) {
+        if ([string]$cfg -match '(?i)^remote\..+\.(push|mirror)(\s*=|$)') { $deleteOpt = $true }
+    }
+    if ($deleteOpt) {
+        return @{ Id = 'pushDelete'; Decision = 'deny'; Shape = (Get-Field $shapes 'pushDelete' 'git push --delete') }
     }
     if ($mirror) {
         return @{ Id = 'forcePushProtected'; Decision = 'deny'; Shape = (Get-Field $shapes 'forcePushProtected' 'force push') }
@@ -1850,6 +1922,108 @@ function Test-GitPushRule($Leaf, $Config) {
         return (New-PolicyVerdict $gate 'forcePushUnknown' ([string](Get-Field $shapes 'forcePushUnknown' 'force push')))
     }
     return (New-PolicyVerdict $gate 'forcePushOther' ([string](Get-Field $shapes 'forcePushOther' 'force push')))
+}
+
+# GSD TASK-195 (0.4.1; Tom Z179-Q1 = B 2026-10-25, ZOPT-Q108 = A 2026-10-27; Doplnek S041-N1 az N13): nevynucene smazani lokalni
+# vetve (`git branch -d|--delete <vetve>`) = seda zona `gate.decisions.gitBranchDeleteMerged` (vychozi `audit`). Zaruka "sloucena"
+# je kontrola gitu (do upstreamu vetve, jinak do HEAD) - hook `main` nevidi. Do 0.4.0 to drzel vzor `git-branch-delete`, ktery
+# zakazoval kazde `-d` a zaroven minul prepinac, ktery jako slovo videt neni (escape, promenna, substituce). Rozbor slov:
+#   1. Je to mazani? Kratka volba s `d`/`D`, `--d...`, nebo slovo, ktere se teprve rozvine (Test-ExpandableWord) - to muze byt
+#      `-D` a hook to nevi. Hodnota volby, ktera hodnotu bere (`--sort -committerdate`), volbou neni: git ji bere i s pomlckou
+#      (zmereno git 2.50: `--merged -vvv` -> "malformed object name -vvv").
+#   2. Uzavrena mnozina (N1): ticho jen kdyz je kazde slovo za `branch` z `$script:BranchDeleteWords` nebo doslovne jmeno vetve;
+#      cokoli jineho (force, `-r` - git s nim nastavi DELETE_BRANCH_FORCE -, neznama volba, nedoslovne slovo) = deny.
+#   3. Chranena vetev (N9, `gate.protectedBranches`) = deny; porovnani bez ohledu na velikost pismen (reference na NTFS).
+$script:BranchValueOptions = @('--sort', '--format', '--contains', '--no-contains', '--merged', '--no-merged',
+                               '--with', '--without', '--points-at', '--set-upstream-to', '-u')
+$script:BranchDeleteWords = @('-d', '--d', '--de', '--del', '--dele', '--delet', '--delete', '-q', '--quiet', '--')
+
+# Slovo, ktere shell teprve rozvine (promenna, substituce, splat, podvyraz, slozene zavorky, escape, cmd `%X%`, `--%`).
+function Test-ExpandableWord([string]$Word) {
+    if ($Word -eq '--%') { return $true }
+    if ($Word.Contains('$') -or $Word.Contains('`')) { return $true }
+    if ($Word -match '^[@{(\\]') { return $true }
+    if ($Word -match '%[A-Za-z_][A-Za-z0-9_]*%') { return $true }
+    return $false
+}
+
+function Test-GitBranchRule($Leaf, $Config) {
+    if ($Leaf.Exe -ne 'git') { return $null }
+    if ($Leaf.Args.Count -eq 0 -or $Leaf.Args[0] -ne 'branch') { return $null }
+
+    $gate = Get-Field $Config 'gate'
+    $shapes = Get-Field $gate 'shapes'
+    $denied = @{ Id = 'git-branch-delete'; Decision = 'deny'; Shape = (Get-Field $shapes 'gitBranchDelete' 'git branch -d/-D') }
+    # CR2-4, CR3-4: xargs pripoji slova ze vstupu - dalsi jmena i sam prepinac mazani (`-D`). Slova listu nejsou cela, takze
+    # `git branch` pod xargs = deny bez ohledu na to, co je videt.
+    if ([bool](Get-LeafField $Leaf 'ArgsAppended' $false)) { return $denied }
+
+    # CR3-1: presmerovani (`2>$null`, `*>log`, `> x`) neni slovo prikazu - cil `$null` by se cetl jako rozvinutelne slovo.
+    # Operator bez cile (`2>` `x`) vezme i dalsi slovo.
+    # S041-A1 (review Amber nad abd8d6a): slova listu jsou uz bez uvozovek, takze `'2>'` (pro git obycejny argument) vypadalo
+    # jako operator a s nim zmizelo i nasledujici `-D`. Presmerovanim je jen slovo, ktere v puvodnim prikazu stoji MIMO
+    # uvozovky a neni casti zadneho textu v uvozovkach - totez fail-closed pravidlo jako u ssh (Get-RemoteShellArgs, CR-AP1,
+    # CR-AQ2). Cena: `git branch -d x 2>$null; echo '2>$null'` = deny.
+    $source = if ([string]$script:FullCommand -ne '') { [string]$script:FullCommand } else { [string]$Leaf.Raw }
+    $inQuotes = Get-UnquotedRedirectWords $source -InQuotes
+    $redirects = New-Object System.Collections.Generic.List[string]
+    foreach ($u in (Get-UnquotedRedirectWords $source)) {
+        $amb = $false
+        foreach ($q in $inQuotes) { if ($q.Contains($u)) { $amb = $true; break } }
+        if (-not $amb) { $redirects.Add($u) }
+    }
+    $rest = New-Object System.Collections.ArrayList
+    $skipTarget = $false
+    foreach ($w in (Get-RestTokens $Leaf.Args)) {
+        $w = [string]$w
+        if ($skipTarget) { $skipTarget = $false; continue }
+        $redirect = Get-RedirectWord $w
+        if ($null -ne $redirect -and $redirect.Before -eq '' -and $redirects.Contains($w)) { $skipTarget = ($redirect.Target -eq ''); continue }
+        [void]$rest.Add($w)
+    }
+
+    $isDelete = $false
+    $skipValue = $false
+    foreach ($w in $rest) {
+        if (Test-ExpandableWord $w) { $isDelete = $true; break }
+        # CR1-6, CR2-2, CR2-3 (sloucene CR3-10): glob, escape nebo slozene zavorky v pomlckove casti slova shell rozvine -
+        # muze vzniknout `-D`. CR3-2, CR3-3: hodnota za `=` (`--format=[%(x)]`) ma pevnou predponu `--jmeno=`, volbou se
+        # rozvinutim nestane - posuzuje se jen cast pred prvnim `=`.
+        if ((($w -split '=', 2)[0]) -match '^-.*[*?\[\\{]') { $isDelete = $true; break }
+        if ($skipValue) { $skipValue = $false; continue }
+        if ($script:BranchValueOptions -ccontains $w) { $skipValue = $true; continue }
+        if ($w -cmatch '^-[^-]') {
+            # CR3-5: za `-u` je zbytek slova hodnota (`-uorigin/develop`), ne dalsi prepinace.
+            $flags = $w
+            $u = $w.IndexOf('u')
+            if ($u -gt 0) { $flags = $w.Substring(0, $u) }
+            if ($flags -cmatch '[dD]') { $isDelete = $true; break }
+        }
+        if ($w -match '^--d') { $isDelete = $true; break }
+    }
+    if (-not $isDelete) { return $null }
+
+    # CR2-5: `-c` / `--config-env` u mazani (`branch.<n>.remote`, `branch.<n>.merge`) meni, do ceho git sloucenost kontroluje -
+    # jedina zaruka auditu by padla. Klic se neposuzuje: mazani s konfiguraci z prikazove radky = deny.
+    if (@(Get-LeafField $Leaf 'GitConfig' @()).Count -gt 0) { return $denied }
+    $protected = @(Get-Field $gate 'protectedBranches' @('main'))
+    $hasName = $false
+    foreach ($w in $rest) {
+        $w = [string]$w
+        if ($script:BranchDeleteWords -ccontains $w) { continue }
+        if ($w -eq '' -or $w.StartsWith('-') -or (Test-ExpandableWord $w) -or $w -match '[$`(){}@*?\[\]%\\~^:,\s]') { return $denied }
+        $hasName = $true
+        $name = ($w -replace '^refs/heads/', '').ToLowerInvariant()
+        foreach ($p in $protected) {
+            if ($name -eq ([string]$p).ToLowerInvariant()) {
+                return @{ Id = 'gitBranchDeleteProtected'; Decision = 'deny'
+                          Shape = (([string](Get-Field $shapes 'gitBranchDeleteProtected' 'git branch -d {branch}')).Replace('{branch}', [string]$p)) }
+            }
+        }
+    }
+    # CR1-2: bez doslovneho jmena prijdou jmena odjinud (`| xargs git branch -d`, stdin) a chranenou vetev hook nevidi.
+    if (-not $hasName) { return $denied }
+    return (New-PolicyVerdict $gate 'gitBranchDeleteMerged' ([string](Get-Field $shapes 'gitBranchDeleteMerged' 'git branch -d')))
 }
 
 function Test-GitCleanRule($Leaf, $Config) {
@@ -2577,7 +2751,7 @@ function Test-RemoteShellEnvCommand([string]$Raw) {
 
 # CR-AM7: prikazy pro cizi stroj na standardnim vstupu (`ssh host < cmds.sh`) - ssh bez prikazu je posle vzdalenemu
 # shellu (`StdinFile` z Get-RemoteShellArgs; heredoc `<<` resi vetev heredocu). Roura do ssh (`cat cmds | ssh host`)
-# list nevidi - README mez 28, oprava s tokenizerem 0.4.1 (GSD TASK-190).
+# list nevidi - README mez 28, oprava s tokenizerem 0.4.2 (GSD TASK-190).
 
 # Write-GateAudit zije od 0.2.0 v _common.ps1 - secrets.ps1 audituje taky (TASK-106 bod 11,
 # vyrok 7: trida chranena jmenem u globu). Volani tady zustavaji beze zmeny.
@@ -2902,6 +3076,12 @@ function Test-Leaf($Leaf, $Config) {
     # do definice aliasu. Rozbalit to neumime, takze plati Z3: nerozebratelne -> politika `gate.decisions.gitAlias`
     # (0.3.1, ZOPT-Q102 / A179-O3 Q3: vychozi deny - alias spusti cokoli; do 0.3.0 ask).
     if ($Leaf.Exe -eq 'git') {
+        # TASK-195 S041-N14 / S041-Q2: slovo pred podprikazem, ktere hook neprecte - podprikaz neni znamy (fail-closed).
+        $unread = Get-LeafField $Leaf 'GitUnread' $null
+        if ($null -ne $unread -and [string]$unread.Word -ne '') {
+            return @{ Id = [string]$unread.Id; Decision = 'deny'
+                      Shape = (([string](Get-Field $shapes ([string]$unread.Id) 'git {text}')).Replace('{text}', [string]$unread.Word)) }
+        }
         foreach ($cfg in $Leaf.GitConfig) {
             if ($cfg -match '(?i)^alias\.') {
                 return (New-PolicyVerdict $gate 'gitAlias' (([string](Get-Field $shapes 'gitAlias' '{text}')).Replace('{text}', [string]($cfg))))
@@ -2913,7 +3093,7 @@ function Test-Leaf($Leaf, $Config) {
     if ($shape) { return @{ Id = $shape.Id; Decision = 'deny'; Shape = $shape.Shape } }
 
     # Seda zona (`audit`) jednoho pravidla se drzi stranou - `deny` pozdejsiho pravidla tehoz listu ma prednost.
-    foreach ($rule in @('Test-GitPushRule', 'Test-GitCleanRule', 'Test-GitRestoreRule', 'Test-RecursiveDeleteRule', 'Test-DatabaseRule')) {
+    foreach ($rule in @('Test-GitPushRule', 'Test-GitBranchRule', 'Test-GitCleanRule','Test-GitRestoreRule', 'Test-RecursiveDeleteRule', 'Test-DatabaseRule')) {
         $r = & $rule $Leaf $Config
         if ($r -and $r.Decision -eq 'deny') { return $r }
         if ($r -and $r.Decision -eq 'audit' -and -not $script:PendingAudit) { $script:PendingAudit = $r }

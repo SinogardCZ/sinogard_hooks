@@ -53,9 +53,8 @@ $denyCases = @(
     (Case 'restore .'                  'git restore .' 'deny')
     # (3) mazani vetvi
     (Case 'branch -D'                  'git branch -D feature/x' 'deny')
-    # A179-O17 (Amber 2026-10-23): `-d` je deny jako v 0.3.0 (ZOPT-Q40, SCHVALUJU pro smazani jakekoli vetve);
-    # vyvojova 0.3.1 (A179-O3 Q11) ho uvolnila.
-    (Case 'branch -d'                  'git branch -d feature/x' 'deny')
+    # GSD TASK-195 (0.4.1, Tom ZOPT-Q108 = A 2026-10-27): nevynucene `-d` mlci (seda zona gitBranchDeleteMerged) - radek
+    # je v poli allow nize. Do 0.4.0 tu stalo deny (A179-O17, ZOPT-Q40); vynucene tvary zustavaji tady.
     (Case 'branch -d -f'               'git branch -d -f feature/x' 'deny')
     (Case 'branch --delete --force'    'git branch --delete --force feature/x' 'deny')
     (Case 'push --delete'              'git push --delete origin feature/x' 'deny')
@@ -213,7 +212,9 @@ $allowCases = @(
     (Case 'stash'                      'git stash' 'allow')
     (Case 'stash pop'                  'git stash pop' 'allow')
     (Case 'branch -m'                  'git branch -m stary novy' 'allow')
-    (Case 'clean -n'                   'git clean -n' 'allow')
+    # GSD TASK-195 (0.4.1): nevynucene smazani lokalni vetve mlci (do 0.4.0 deny; detail fixtures/task195-gate.json).
+    (Case 'branch -d'                  'git branch -d feature/x' 'allow')
+    (Case 'clean -n'                 'git clean -n' 'allow')
     (Case 'status'                     'git status --porcelain' 'allow')
     (Case 'commit'                     'git commit -m "TASK-36: hooky"' 'allow')
     (Case 'checkout vetve'             'git checkout -b feature/x' 'allow')
@@ -1894,6 +1895,12 @@ Invoke-Task117Rows 'gate'
 #     Pripady v tests/fixtures/task179-gate.json; mutanti v repu GSD docs/logs/mutants/task-179/.
 Start-Case 'TASK-179 (fixtures/task179-gate.json)'
 Invoke-Task117Rows 'gate' 'task179'
+
+# --- GSD TASK-195 (0.4.1): nevynucene `git branch -d` = ticho + audit gitBranchDeleteMerged (uzavrena mnozina slov, S041-N1);
+#     vynucene a vzdalene mazani deny (N3, N11), chranena vetev (N9), kontrolni skupina (N10), prepis (N7).
+#     Pripady v tests/fixtures/task195-gate.json; cervena faze a mutanti v repu GSD docs/logs/mutants/task-195/.
+Start-Case 'TASK-195 (fixtures/task195-gate.json)'
+Invoke-Task117Rows 'gate' 'task195'
 
 # ZOPT-Q102 (0.3.1): zadny beh sady nevydal ask, zdroj ani vychozi konfigurace ask neznaji.
 Assert-NoAskVerdict

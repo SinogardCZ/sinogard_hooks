@@ -3,6 +3,147 @@
 Formát vychází z [Keep a Changelog](https://keepachangelog.com/cs/1.1.0/);
 verzování je [semver](https://semver.org/lang/cs/).
 
+## [0.4.1] — 2026-10-27
+
+**GSD TASK-195: nevynucené smazání lokální větve (`git branch -d`) bez zákazu; vynucené a vzdálené mazání dál `deny`.**
+Rozhodnutí Toma `Z179-Q1 = B` (2026-10-25) a `ZOPT-Q108 = A` (2026-10-27), podnět HRMS (`ZOPT-Q102` pro celé PC); zadání
+Amber `2026-10-27-zadani-sinogard-041.md` s Doplňkem po revizi Grace (`S041-N1`–`N13`). Vydání nese **jen tuhle změnu**
+(`AOPT-O29`) a opravu díry z 0.4.0, kterou našla brána Grace před merge — slovo před podpříkazem gitu a slovo podpříkazu
+(`S041-N14`, `S041-N16`; `AOPT-O29` zúžila Amber `AOPT-O31`, `AOPT-O32` a `AOPT-O33`); tokenizér Bashe (GSD TASK-190) a meze TASK-161 jsou **0.4.2** (viz
+Čísla verzí níž). Doklady: repo GSD `docs/logs/mutants/task-195/`.
+
+### Změněno — `git branch -d` mlčí (změna verdiktu `deny` → ticho + audit)
+
+- Vzor `git-branch-delete` (regex nad textem, zakazoval každé `-d`) **z výchozích `gate.denyPatterns` odešel**. Mazání větve
+  rozebírá nové pravidlo nad slovy (`Test-GitBranchRule`, README omezení 29). Ticho + řádek auditu
+  `gate:gitBranchDeleteMerged` dostane jen příkaz, jehož každé slovo za `branch` je z uzavřené množiny `-d`, `--delete`
+  (i zkratky `--d`–`--delet`), `-q`, `--quiet`, `--` a doslovná jména větví, a žádné jméno není chráněná větev.
+- Politika `gate.decisions.gitBranchDeleteMerged` (výchozí `audit`; přepis smí `deny`).
+- Že je větev **sloučená**, kontroluje git (do upstreamu větve, jinak do `HEAD`) — hook `main` nevidí a „jen větev
+  sloučenou do `main`" neslibuje (`S041-N5`).
+- **Změna verdiktu `deny` → ticho:** `git branch -d|--delete|--d|--de|--del|--delet <větev>` (skupina `B-allow` fixtury
+  `task195-gate.json`); `git branch --sort -committerdate` a obecně hodnota za volbou, která hodnotu bere (`--sort`,
+  `--format`, `--contains`, `--no-contains`, `--merged`, `--no-merged`, `--with`, `--without`, `--points-at`,
+  `--set-upstream-to`, `-u`) — git ji bere i s pomlčkou (změřeno git 2.50). Věta README o ceně vzoru 0.3.0 odešla.
+
+### Bezpečnost — zavřené tvary (změna verdiktu ticho → `deny`)
+
+Každý řádek byl v 0.4.0 tichem — změřeno červenou fází nad `dace936` (pole `was` fixtury):
+
+- **Mazání větve přepínačem, který jako slovo vidět není** — i bez viditelného `-d` (skupina `B-hidden`, H1–H13): slovo,
+  které shell teprve rozvine (proměnná, substituce, splat a podvýraz PowerShellu, složené závorky Bashe, escape, `%X%`),
+  může být `-D`. **Cena:** `git branch` s proměnnou kdekoli za `branch` (`git branch -m stary $NOVY`) = `deny`.
+  Totéž glob, který začíná pomlčkou (`-?`, `-*`; H14, H15, `/code-review` CR1-6) — shell ho rozvine na jméno souboru —
+  a escape nebo složené závorky až za pomlčkami (H16, H17, H20, CR2-2, CR2-3) — posuzuje se část slova před prvním `=`,
+  hodnota `--format=…` s `*`, `[`, `{`, `\` dál mlčí (K29–K32, CR3-2, CR3-3). Každý `git branch` pod `xargs` (xargs
+  dodá i sám přepínač mazání; H18, H19, CR3-4).
+- `git branch --delete-merged` (neexistující volba; `deny` nic nestojí, git ji odmítne) — C7.
+- **Vzdálené mazání** (`S041-N3`, `N11`; skupina `P-new`, id `pushDelete`): `git push --prune` a zkratka `--pru`,
+  zkratky `--delete` (`--de`–`--delet`), spojené krátké přepínače s `d` (`-qd`, `-dq`, `-ud`), zkratky `--mirror`
+  (`--m`–`--mirro`), `-c remote.<jméno>.push=…`, `-c remote.<jméno>.mirror` a táž dvojice přes `--config-env`
+  (s `=` i s mezerou — tvar s mezerou do 0.4.0 nečetla ani kontrola aliasu; N14, CR1-3).
+- **Escape ve slovech `git push`** (N15–N18, CR1-1): Bash `\` a PowerShell `` ` `` před znakem shell odstraní, git dostane
+  `:x`, `--delete`, `-d`, `-f`. Hook čte slova **dvakrát** — doslova (verdikt 0.4.0) a bez escapu obou shellů — a platí
+  `deny` kteréhokoli čtení; druhé čtení `deny` jen přidává (CR2-1: v Bashi je zpětný apostrof substituce, cíl z ní zůstává
+  nečitelný, N19). Kontrola: remote jako cesta se zpětnými lomítky v PowerShellu dál ticho (Q9). **Cena:** slovo, které
+  zpětné lomítko nese doslova (v jednoduchých uvozovkách Bashe), se čte i bez něj — refspec se zpětným lomítkem git
+  stejně odmítne (jméno reference ho nesmí nést).
+- **`git push` pod `xargs`** (N20, N21, CR3-7): xargs připojí refspec `:x` nebo `--delete` a hook je nevidí.
+- Kontroly bez změny verdiktu proti 0.4.0 (CR3-1, CR3-5, CR3-6): přesměrování (`2>$null`, `*>$null`) není slovo příkazu
+  (K27, K28; `git branch -d x 2>$null` = ticho + audit, B21) — **jen slovo, které v původním příkazu stojí mimo uvozovky
+  a není částí textu v uvozovkách** (review Amber `S041-A1`: slovo `'2>'` v uvozovkách je pro git obyčejný argument
+  a s ním by zmizelo i následující `-D`; R1–R11, fail-closed jako u ssh, cena: tentýž text v uvozovkách jinde v příkazu
+  = `deny`); za `-u` u `git branch` a za `-o` u `git push` je zbytek
+  slova hodnota (`-uorigin/develop`, `-odeploy`; K33, Q10).
+- Beze změny `deny` (skupiny `B-force`, `B-closed`, `B-prot`, `P-del`): `-D` kdekoli, force v každé podobě, `-r`
+  s `-d`, neznámá volba, nedoslovné jméno, chráněná větev (nové id `gitBranchDeleteProtected`), `git push --delete`,
+  `-d`, `:x`, `+:x`, `--mirror`. Také `git branch -d` **bez doslovného jména** — jména z roury (`| xargs git branch -d`)
+  nebo ze stdin hook nevidí, chráněnou větev by minul (C30–C33, CR1-2; v 0.4.0 `deny` vzorem). Pod `xargs` vždy, i s
+  doslovným jménem — xargs připojí další (C34, CR2-4). Mazání s konfigurací z příkazové řádky (`git -c …` /
+  `--config-env … branch -d`): `branch.<jméno>.remote` / `.merge` mění, do čeho git sloučenost kontroluje (C35, CR2-5).
+  Kontrola: `git -c <jiný klíč> branch -vv` dál ticho (K26); `git -C <cesta>` se od 0.4.1 mezi konfigurace `-c` neplete
+  (do 0.4.0 bez dopadu na verdikt). **Mez:** tentýž klíč z prostředí (`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>`, `env`,
+  `$env:…`) hook nevidí — kandidát 0.4.2 (CR1-5; README 29 i u odrážky `deny`, Grace `S041-N15`).
+- **Slovo před podpříkazem gitu — všechna git pravidla** (brána Grace `S041-N14`, díra už v 0.4.0; Amber `AOPT-O31`,
+  `AOPT-O32`; skupina `G-global` U1–U25, kontroly `G-ctl` V1–V13, W1–W6): **první globální přepínač, který tabulka hooku
+  neznala, se bral jako podpříkaz** a `branch -D`, `push --force` / `--delete`, `reset --hard`, `clean`, `stash clear` /
+  `drop`, `checkout .`, `restore .` za ním mlčely (i pod `bash -c`). Tabulka doplněna podle gitu 2.50 (`git.html` OPTIONS,
+  změřeno na pokusném repu): `--no-lazy-fetch`, `--no-advice`, `--attr-source` (s `=` i s mezerou), `--shallow-file`,
+  `--no-literal-pathspecs`, `-P`, tiskové `--exec-path`, `--html-path`, `--man-path`, `--info-path`, `--list-cmds=`;
+  velikost písmen se rozlišuje. **Neznámý přepínač před podpříkazem = `deny`** (id `gitUnknownGlobalOption`, fail-closed;
+  git neznámý globální přepínač odmítne, exit 129 — cena nulová). **Slovo, které shell teprve rozvine, na místě podpříkazu
+  = `deny`** (id `gitExpandableSubcommand`; prázdná proměnná posune podpříkaz na další slovo). **Cena:** git s proměnnou
+  nebo substitucí na místě podpříkazu (`git $SUB …`) je `deny` i s neškodným podpříkazem — v GSD ani ve fixturách se
+  nepoužívá (grep, srovnání invariantů). Kontroly beze změny: hodnota známého přepínače z proměnné (`git -C $repo status`,
+  W1–W4) mlčí, podpříkaz v uvozovkách čte pravidlo jako dřív (W5, W6), `-v` / `--version` / `-h` / `--help` jsou pro git
+  podpříkaz `version` / `help` (V3–V5, mlčí). `--exec-path` bez hodnoty git vypíše a skončí; hook ho přeskočí a čte dál
+  (V13, nejhůř falešný `deny`).
+- **Slovo podpříkazu gitu je jen prostý literál** (brána Grace `S041-N16`, díra už v 0.4.0; Amber `AOPT-O33`; skupina
+  `G-lit` L1–L16, kontroly `G-litctl` T1–T14): escape, složené závorky a glob **uvnitř** slova podpříkazu (Bash) shell
+  odstraní nebo rozvine, hook slovo četl doslova a žádné git pravidlo nesedlo (i za `-C` / `-c`, pod `bash -c` a `xargs`).
+  Třetí díra téhož předpokladu (hook pozná špatné znaky: přepínače N14, `$` O32, `\ { [ * ?` N16), proto místo dalšího
+  znaku **uzavřená množina**: první znak písmeno nebo číslice, dál písmena, číslice, `.`, `_`, `-`; cokoli jiného = `deny`
+  (id `gitExpandableSubcommand`). `-v` / `--version` / `-h` / `--help` stojí mimo (V3–V5, T13). Jména příkazů i aliasů
+  gitu jinak nevypadají (`cherry-pick`, `rev-parse`, `ls-files`, `credential-manager`, `lfs` mlčí, T8–T12); v PowerShellu
+  zpětné lomítko escape není, git takové jméno odmítne (L16). **Cena** (Grace `S041-N19`, Amber `AOPT-O35`; obě ticho →
+  `deny`, díru nenesou): subshell v Bashi s gitem jako posledním příkazem (`(cd x && git status)`, dvojče CR-X8; náhrada
+  bez závorek) a přesměrování přilepené k holému podpříkazu (`git status>/dev/null`, `git diff>x.patch`, v PowerShellu
+  `git status>$null` už od 14e678e; náhrada mezera před přesměrováním) — skupina `G-cena` C1–C5, náhrady C7–C11. Totéž zavřelo regresi
+  0.4.1: `git branch>/dev/null -D main` byl do 14e678e ticho, od 0.4.1 zase `deny` jako v 0.4.0 (C6). Kontroly beze změny: podpříkaz
+  v uvozovkách i z částí v uvozovkách (T1, T2) čte pravidlo podpříkazu. **Cena v PowerShellu** (Amber `AOPT-O34`, změna
+  verdiktu ticho → `deny`): výraz s víc git příkazy v závorkách (`(git status) + (git log -1)`, task179 CR-X8) — rozdělení
+  strhne obalovou závorku jen jako jeden pár, poslední slovo v závorce nese `)` a podpříkaz `status)` prostý literál
+  není; díra v tom nebyla (`reset --hard`, `branch -D`, `push --force`, `clean`, `stash clear` v součtu závorek jsou
+  `deny` i v 0.4.0). Náhrada: příkazy zvlášť nebo výsledky do proměnných zvlášť; oprava strhávání s tokenizérem 0.4.2.
+- **Meze bez opravy v 0.4.1** (Grace `S041-N17`, `S041-N18`, obě i v 0.4.0): escape uvnitř **argumentu** pravidla `reset`,
+  `clean`, `stash`, `checkout`, `restore` nevidí (README 27; tokenizér 0.4.2, GSD TASK-190); rozvinutelnou hodnotu
+  `-c` / `--config-env` hook nečte, alias ani `remote.<jméno>.mirror` / `.push` takto definované nevidí (README 29; 0.4.2).
+
+### ⚠️ Migrace přepisu
+
+Změřila Grace 2026-10-27: pod `W:\dev` ani v profilu dnes žádný `.claude\sinogard-hooks.json` není — nikoho se to netýká.
+
+- **Přepis, který kopíruje `gate.denyPatterns` z 0.4.0** (s položkou `git-branch-delete`), je pořád nadmnožinou nových
+  výchozích, takže **platí — a `-d` u něj zůstane `deny`, tiše** (fixtura `O1`; `-D` a výpis beze změny, `O5`, `O6`).
+  Chceš-li povolení 0.4.1, položku `git-branch-delete` z přepisu odeber.
+- **Přepis s vlastním `gate.decisions`** se slučuje jako celý objekt; chybí-li v něm `gitBranchDeleteMerged`, platí
+  `deny` (chybějící = `deny`, fixtura `O3`). Doplň `"gitBranchDeleteMerged": "audit"`.
+- Neplatná hodnota (`"allow"`) odmítne celý klíč `gate.decisions` přepisu (pravidlo `policy`, platí výchozí; `O4`).
+
+### Konfigurace
+
+`gate.decisions.gitBranchDeleteMerged` (`audit`); `gate.shapes.gitBranchDelete`, `gitBranchDeleteProtected`,
+`gitBranchDeleteMerged`, `pushDelete`, `gitUnknownGlobalOption`, `gitExpandableSubcommand`; vzor `git-branch-delete` z `gate.denyPatterns` odebrán (id zůstává v auditu
+u `deny` mazání větve).
+
+### Testy
+
+`tests/fixtures/task195-gate.json` (275 řádků: `B-allow`, `B-force`, `B-closed`, `B-prot`, `B-hidden`, `B-ctl`, `P-del`,
+`P-new`, `P-ctl`, `G-global`, `G-ctl`, `G-lit`, `G-litctl`, `G-cena`, `O`); červená fáze nad 0.4.0 (`dace936`, powershell.exe): 58 assertů z 159 červených, každý na řádku,
+jehož `was` se liší od `expect`. Řádky z `/code-review` prošly červenou fází zvlášť, vždy nad 0.4.0 (červené přesně
+řádky s `was` = `allow`) i nad předchozí hlavou: kolo 1 (C30–C33, H14, H15, N14–N18, Q9) 7 z 13 a 11 z 13, kolo 2
+(C34, C35, H16, H17, N19, K26) 2 ze 7 a 5 ze 7, kolo 3 (B21, K27–K33, H18–H20, N20, N21, Q10) 7 z 16 a 14 z 16.
+**Opravy kola 3 (posledního) skill `/code-review` nereviewoval.** Delta review Amber nad nimi (`S041-A1`, R1–R11):
+nad 0.4.0 červený jen B21 (záměrná změna), nad `abd8d6a` R1–R6 a R11; oprava nad stropem tří kol, skillem nereviewovaná.
+Oprava `S041-N14` / `AOPT-O32` (brána Grace, skupiny `G-global`, `G-ctl`, 44 řádků; fixtura tím 234 řádků): červená
+fáze nad `b514d64` pod powershell.exe i pwsh a nad 0.4.0 shodně — červené přesně řádky s `was` ≠ `expect` (U1–U25, V7,
+V9, V13); **oprava nad stropem tří kol, skillem `/code-review` nereviewovaná.**
+Oprava `S041-N16` (druhá delta brána Grace, `AOPT-O33`; skupiny `G-lit`, `G-litctl`, 30 řádků; fixtura tím 264 řádků):
+červená fáze nad `14e678e` pod powershell.exe i pwsh — červené přesně L1–L16; nad 0.4.0 L1–L13, L15, L16 a T3 (L14 tam
+zakázal vzor `git-branch-delete`, T3 zavřelo pravidlo větve 0.4.1); **oprava skillem `/code-review` nereviewovaná.**
+Ceny uzavřené množiny (Grace `S041-N19`, `AOPT-O35`; skupina `G-cena`, 11 řádků, `gate.ps1` beze změny; fixtura tím 275
+řádků): C1–C5 `deny` s `was` = `allow`, C6 `deny` i nad 0.4.0 (nad `14e678e` ticho), náhrady C7–C11 mlčí.
+Šest řádků `task179-gate.json` (`O17`, `CR-AL5`, `CR-AL6`) změnilo očekávání (pole `zmeneno`; jména řádků zůstávají),
+sedmý `CR-X8` (ticho → `deny`, `AOPT-O34`). Invariant 1850 → 2091 řádků; šest očekávání změněno nástrojem `-Prijmout`
+s citací `Z179-Q1`/`ZOPT-Q108`, sedmé (`CR-X8`) s citací `AOPT-O34`.
+
+### Čísla verzí
+
+Sliby „ve verzi 0.4.1" (tokenizér Bashe GSD TASK-190, meze TASK-161, převod skupin globu, kandidáti) jsou **0.4.2** —
+v sekci [0.4.0] níž, v README i v komentářích zdrojů přepsáno na 0.4.2 (ℹ️ do tohoto vydání tam stálo „0.4.1"); mapa
+verzí v hlavičkách skriptů a `defaults.json` je `"0.3.2" = 0.4.2`. Jména řádků fixtur a `since` invariantu, která nesou
+„0.4.1" nebo „0.3.2", zůstávají (cituje je hlášení) — čti je jako 0.4.2.
+
 ## [0.4.0] — 2026-10-23
 
 **TASK-179 (GSD): destruktivní DB příkaz uvnitř kontejnerového obalu — oprava DB části README omezení 11.** Zadání
@@ -13,7 +154,7 @@ fáze, mutanti).
 **Číslo verze (`A179-O19`, Amber 2026-10-23):** vydání se vyvíjelo jako **0.3.1** (zadání, rozhodnutí `A179-O2`); mění
 rozhodnutí brány (přes 440 očekávání invariantu, přejmenované klíče přepisu), takže podle konvence `A117-O3` („mění se
 rozhodnutí brány → minor verze") vychází jako **0.4.0**. „0.3.1" v textu níž a v rozhodnutích = toto vydání; plánovaná
-„0.3.2" = **0.4.1**. Do review Amber B2 tu stálo *„Bezpečnostní oprava brány §6 → patch verze"*.
+„0.3.2" = **0.4.2**. Do review Amber B2 tu stálo *„Bezpečnostní oprava brány §6 → patch verze"*.
 
 ### Bezpečnost — mazání větve a čtení tajemství přes zástupný znak zpět na `deny` (`A179-O17`, `A179-O18`)
 
@@ -44,7 +185,7 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
     trefí-li chráněný soubor → `deny` (`secrets:wildcardPath`). Negace `[!x]` a třídy znaků se rozvinou nad abecedou jmen
     souborů (CR-AN3 níž); co rozvinout nejde (řada s krokem) nebo by dalo víc než 64 kandidátů, se posoudí jako nadmnožina
     (viz CR-AM níž).
-    Převod skupin na regex globu bez výčtu = 0.4.1 (GSD TASK-190);
+    Převod skupin na regex globu bez výčtu = 0.4.2 (GSD TASK-190);
   - **příkaz na cizím stroji volbou:** `ssh -o RemoteCommand=…` (i `-oRemoteCommand=`, ve shluku, klíč bez ohledu na
     velikost písmen; `RemoteCommand none` mlčí) a `plink -m <soubor>` → `deny`. `ssh -F <konfigurace>` může RemoteCommand
     nést taky, ale soubor hook nečte — README mez 28;
@@ -64,7 +205,7 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
     proto mlčí (do opravy falešné `deny`) (CR-AM7); plink `-cert` (CR-AM8); jeden rozbor argumentů ssh/plink místo dvou
     kopií (CR-AM10);
   - vědomě beze změny: migrace přepisu `denyPatterns` (CR-AM6 = CR-AL4 výše); výčet kandidátů spouští pravidlo cesty
-    až 64× (CR-AM9; převod na regex = 0.4.1); roura do ssh bez příkazu a třída `[[:alpha:]]` = README mez 28.
+    až 64× (CR-AM9; převod na regex = 0.4.2); roura do ssh bez příkazu a třída `[[:alpha:]]` = README mez 28.
 - **Kolo `/code-review` nad `824775e` (CR-AN, skupina `CR-AN`):**
   - moje regrese CR-AM7: přesměrování se poznávalo v argumentech bez uvozovek, takže `ssh host '2>/dev/null rm -rf x'`
     mlčelo (v `c54a843` `deny`). Přesměrování je teď jen slovo, které v příkazu stojí mimo uvozovky (CR-AN1); vstup ze
@@ -108,7 +249,7 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
     (CR-AP2, ticho; v 0.3.0 se nehlídalo vůbec), přesměrování slepené s `&` / `&&` = příkaz (CR-AP4, `deny`; 0.3.0 `ask`),
     slovo `SSH_ASKPASS=…` kdekoli v příkazu = `deny` každému ssh (CR-AP5); escape znak vnořeného shellu nad původním
     textem, nedosažitelná větev `>|`, opakovaný rozbor celého příkazu pro každý list ssh a dvojí význam `$Braces`
-    (CR-AP6–AP10, bez doloženého selhání) — řešení je příznak „v uvozovkách" u argumentu listu z tokenizéru 0.4.1.
+    (CR-AP6–AP10, bez doloženého selhání) — řešení je příznak „v uvozovkách" u argumentu listu z tokenizéru 0.4.2.
 - **Delta review Amber nad `fc426ee` (`A179-O23`, skupina `O23`):** moje regrese CR-AL2 do ticha — tabulka voleb plink
   zná `-load <relace>`, jméno relace se spotřebovalo a `plink -load relace příkaz` měl jediný poziční argument (0.3.0
   `ask`, od `c54a843` ticho bez auditu). Uložená relace může nést host, pak je první poziční argument už příkaz (manuál
@@ -130,7 +271,7 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
   - podle `A179-O22` neopraveno, README mez 28 a GSD TASK-190: vstup ze souboru před ssh ve vnořeném shellu (CR-AQ3,
     ticho i v 0.3.0), uložená relace PuTTY s příkazem u `plink -load relace` (CR-AQ5, ticho i v 0.3.0),
     `SSH_SK_PROVIDER=internal;` = falešné `deny` (CR-AQ6); porovnávání slov textem mezi celým příkazem a listem (CR-AQ4)
-    a dvojí průchod celého příkazu pro každý list ssh (CR-AQ8) řeší příznak „v uvozovkách" z tokenizéru 0.4.1; zastaralý
+    a dvojí průchod celého příkazu pro každý list ssh (CR-AQ8) řeší příznak „v uvozovkách" z tokenizéru 0.4.2; zastaralý
     komentář „multimnožina" opraven (CR-AQ7). CR-AQ9 (počty řádků fixtur) se neprokázal: `rows` gate = 690 (JSON).
 - **Falešné `deny` u interaktivní relace (CR-AL2)** opraveno: tabulka voleb ssh s hodnotou je úplná podle ssh(1)
   (`-O exit`, `-B rozhraní`, `-P tag` …) a čte shluk krátkých voleb (`-vp 2222`, `-p2222`); plink má vlastní tabulku
@@ -141,7 +282,7 @@ Review Amber nad `a2cb9f0` našla dvě místa, kde mapa `ZOPT-Q102` vývojové v
   vývojové verze (`remoteShell: audit`, `wildcardPath: audit`), tak ztratí i svá zpřísnění — platí výchozí, kanárek
   a audit `config:overrideRejected:<klíč>` to řeknou. Totéž `gate.denyPatterns` z 0.3.0: vzor `git-branch-delete` nese
   od `A179-O20` zkratky, takže starý seznam už není nadmnožinou → odmítnut, platí výchozí (přísnější). Na stroji žádný
-  přepis není (`80` F3). Granularita po podklíčích = kandidát 0.4.1.
+  přepis není (`80` F3). Granularita po podklíčích = kandidát 0.4.2.
 - **Cena vzoru 0.3.0 vrácená s O17 (CR-AL6):** pomlčkové slovo s `d` v hodnotě volby `git branch` (`--sort -committerdate`)
   = `deny`; náhrada `--sort=-committerdate`. Skupina `CR-AL`.
 
@@ -239,7 +380,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 
   Skupina `CR-AE`.
 - **Kolo 16 `/code-review` (CR-AF) — od něj platí `A179-O13`:** v 0.3.1 se opravují jen regrese 0.3.1 a nálezy
-  v pravidle. Díry 0.3.0 mimo něj jdou do README meze 27 a do verze 0.4.1.
+  v pravidle. Díry 0.3.0 mimo něj jdou do README meze 27 a do verze 0.4.2.
   - Opraveno:
     - ~~přeskok `(` prvního příkazu rozděleného subshellu (AF1) a slovo s `)` + přesměrování jako hlava (AF3)~~
       **vráceno `A179-O14`** (kolo 18);
@@ -247,7 +388,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
     - ~~escapovaná `\)` se neodlamuje (AF6)~~ — s AE4 vráceno;
     - `source` jen malými písmeny (AF7), jeden vzor proměnné (AF8), jedna větev tečky a `source` (AF9).
   - **Odloženo (`A179-O13`):** `)` slepená s přesměrováním bez mezery (AF2, díra 0.3.0) a hloubka `( )` ve skeneru (AF5)
-    → 0.4.1, README mez 27.
+    → 0.4.2, README mez 27.
 
   Skupina `CR-AF`.
 - **Kolo 17 `/code-review` (CR-AG) nad opravami kola 16:**
@@ -262,7 +403,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 - **Kolo 18 `/code-review` (CR-AH) → návrat (`A179-O14`, Amber 2026-10-22):** všech 8 nálezů kola 18 byly regrese
   heuristik pro **rozdělený subshell**, tedy pro úlomky, které vzniknou, když skener dělí příkaz i uvnitř `( … )`
   (CR-AF5). Ty heuristiky jsou vrácené na stav kola 14: AE4/AF6/AG4, AF1/AG1, AF3/AG2.
-  - **Tiché projití shodné s 0.3.0** (README mez 27, oprava ve verzi 0.4.1 s vysokou prioritou): první a poslední příkaz
+  - **Tiché projití shodné s 0.3.0** (README mez 27, oprava ve verzi 0.4.2 s vysokou prioritou): první a poslední příkaz
     rozděleného subshellu, např. **`(cd x && git reset --hard)`** a **`(rm -rf src; ls)`**.
   - Zůstávají opravy, které na úlomcích nestojí: celý subshell s přesměrováním za ním (AD1, AE2), funkce (AD4, AE7),
     poziční parametr v hlavě (AE1, AE3), `source` (AE6, AF4) a lineární čtení ocasu (AG3).
@@ -282,10 +423,10 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   textu, rozhoduje jeho konec a ocas, který není jen přesměrování, je `deny`. Když ho neuzavře (vrátí konec textu), jde tvar
   dál starou cestou z 0.3.0 (líný regex do poslední `)`). Tou cestou projdou i tvary, které `Find-CloseParen` nepřečte:
   ANSI-C `$'…'` (AK1) a vnořený subshell `((…) )`, který vypadá jako aritmetika (AK2). Obojí byla díra už v 0.3.0 →
-  README mez 27, 0.4.1 (`A179-O13`; kolo 21).
+  README mez 27, 0.4.2 (`A179-O13`; kolo 21).
   - **Cena (fail-closed):** falešné `deny` u vnořeného subshellu s přesměrováním na konci rozděleného subshellu
     (`(cd x; (git status) 2>/dev/null)`) a u uvozovek vnořených v `$( … )` uvnitř uvozovek. `Find-CloseParen` kontext
-    uvozovek nevnořuje (AJ5) → oprava ve verzi 0.4.1.
+    uvozovek nevnořuje (AJ5) → oprava ve verzi 0.4.2.
   - Větev `case` se závorkou, globem a tělem jen z přesměrování (`(*) > /dev/null ;;`) je `deny`. Příčinou je CR-AI1
     z kola 19, ne tento návrat. Od celého subshellu s globem v hlavě ji nejde rozeznat (AJ4, vědomě fail-closed).
 
@@ -293,7 +434,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
 - **Finále (mutanti a plné sady nad `dc0b1de`):**
   - fixtura CR-AI1 slibovala u `(psql) < drop.sql` řádek auditu `sqlFromFile`. Přesměrování celého subshellu se ale
     do vnitřního příkazu nepřenáší, stejně jako v 0.3.0. Rozhodnutí je stejné (ticho), chybí jen řádek auditu → README
-    mez 27, 0.4.1. Fixtura už řádek auditu nečeká. Kontrolní běh bez mutace (M0) ji ukázal červeně;
+    mez 27, 0.4.2. Fixtura už řádek auditu nečeká. Kontrolní běh bez mutace (M0) ji ukázal červeně;
   - test B15 `bash -c "$(cat cmd.txt)"` čekal audit. Od `A179-O11` je to `deny` (cena výše), test i invariant jsou
     přijaté s citací `A179-O11`;
   - test kanárku H-c (`resume-cost`) bral jako zpřísňující přepis `depth: audit`. Od `A179-O1` má `depth` výchozí
@@ -314,7 +455,7 @@ kola 11 a nad ním platí jedno pravidlo (`Get-BashCommandStart`, `Test-WrapperP
   mezery za ní dřív zkoušela každé rozdělení a hook přetekl timeout, tedy prošel **bez verdiktu**. Červená fáze ukázala
   20 s u Bashe (regrese kola 11) i u PowerShellu, teď je to pod 2 s (řádky `maxMs` ve skupinách `CR-AB` a `O9`).
 - **Co pravidlo nezavře:** README omezení 27 (uvozovky a substituce v **argumentech**, ANSI-C `$'…'`, druhá gramatika
-  slova v `Split-Arguments`). Oprava je jeden tokenizér Bashe ve verzi 0.4.1 (GSD TASK-190).
+  slova v `Split-Arguments`). Oprava je jeden tokenizér Bashe ve verzi 0.4.2 (GSD TASK-190).
 
 ### Změněno — žádné `ask` (`ZOPT-Q102`, `A179-O3`)
 
@@ -524,8 +665,8 @@ který nastaví `PGHOST` mimo prostředí hooku, hook nevidí (zbytek CR-R7, REA
   žádná pravidla: `if true; then rm -rf src; fi`, `for f in a; do git reset --hard; done`, `case x in a) rm -rf src;; esac`
   a `X=$(case x in a) echo;; esac) <příkaz>` prošly. Brána slova strhne a rozebere příkaz za nimi. Konec subshellu
   (`(cd x; ls) > out`) zůstává beze změny. Secrets čte tokeny bez ohledu na pozici a díru neměl.
-- **Známá mez (AA7) → 0.4.1.** Gramatika slova shellu je na dvou místech: prefix před příkazem (v Bashi od `A179-O9`
-  `Get-BashCommandStart`) a `Split-Arguments`. Jeden tokenizér Bashe je kostra verze 0.4.1 (GSD TASK-190, README omezení 27).
+- **Známá mez (AA7) → 0.4.2.** Gramatika slova shellu je na dvou místech: prefix před příkazem (v Bashi od `A179-O9`
+  `Get-BashCommandStart`) a `Split-Arguments`. Jeden tokenizér Bashe je kostra verze 0.4.2 (GSD TASK-190, README omezení 27).
 
 **Dvanácté a třinácté kolo `/code-review` (CR-AB, CR-AC) → návrat a jedno pravidlo (`A179-O9`):**
 - Kolo 12 přepsalo slovo shellu na lineární průchod (`Split-CommandPrefix`, `Get-ShellWordEnd`, `Find-CloseBrace`).
@@ -608,9 +749,9 @@ a nově umí `auditAbsentShape` / `auditAbsentDecision` (tvar, který v auditu b
 nad `maxMs` se jednou opakuje a druhý běh píše audit do nové složky) a `{REP}` / `{REP2}` + `repText` / `repCount` / `repText2` / `repCount2` (dlouhý příkaz bez tisíců znaků ve
 fixtuře; takový řádek nejde do invariantu).
 
-### Meze TASK-161 přecházejí na 0.4.1
+### Meze TASK-161 přecházejí na 0.4.2
 
-Meze vydání 0.3.0 (`Z117-Q29`, README omezení 1 a 25) se opravují ve verzi **0.4.1** (GSD TASK-161; do `A179-O19` značeno
+Meze vydání 0.3.0 (`Z117-Q29`, README omezení 1 a 25) se opravují ve verzi **0.4.2** (GSD TASK-161; do `A179-O19` značeno
 0.3.2), ne v tomto vydání. Tokenizér Bashe (README omezení 27) = GSD TASK-190, téže verze.
 
 ## [0.3.0] — 2026-10-08

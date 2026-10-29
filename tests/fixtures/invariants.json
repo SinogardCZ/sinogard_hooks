@@ -1,7 +1,7 @@
 {
   "_pozn": "APPEND-ONLY. Kazdy tvar, ktery kdy byl deny, jim zustava; kazdy tvar oznaceny jako falesny blok zustava allow. Radek odsud odchazi JEN s citovanym rozhodnutim. Duvod je konkretni: v kole 1 jsem si falesny blok (git restore --staged .) zafixovala testem a v kole 2 oprava jednoho nalezu (B4) rozbila jiny (C1) - sada, ktera roste jen o nove pripady, tohle nechyti. Generovano z pripadovych poli sad, ne rucnim vyberem - generator je tests/_generate-invariants.ps1 (nalez Amber H2: soubor se na generator odvolaval, ale ten v repu nebyl). Radek bez klice 'hook'/'kind' je z prvniho vydani, kdy byl invariant jen pro branu nad prikazy; chybejici klic znamena 'gate' / 'cmd' a dopisovat ho zpetne by znamenalo prepsat 142 radku, ktere prepsat nemam.",
   "_odebrano": "2026-09-05: tvar 'echo DROP | TABLE users | psql' - radek nikdy neplatil. 'DROP | TABLE' neni platne SQL, takze deny bylo MOJE chybne ocekavani z tehoz kola, ne drivejsi chovani. Nahrazeno tvarem, ktery roury i stredniky v retezci testuje na platnem SQL.",
-  "_zmeneno": "2026-09-07, rozhodnuti Toma T36-O5 = A (audit misto dotazu u nerozebratelnych tvaru): 11 radkum se zmenilo ocekavani z \"ask\" na \"allow\". Radek z invariantu NEODESEL zadny. Seznam: $tool build - bash -c \"$x\" - cmd /c %X% - eval $cmd - $TOOL git push - [Math]::Truncate($x) - neukonceny heredoc (bash \u003c\u003cEOF / git status) - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq (x) -or (git reset --hard) } - $_.Name -like \"*.cs\" (Bash) - bash -c \"$CMD\". Vsechny jsou trida \"nerozebratelne\" (pricina variable, interpreter nebo heredocUnterminated); od 0.1.10 o nich rozhoduje vrstva opravneni Claude Code, ne plugin. NEZMENILY se: \u0026 $cmd, pwsh -enc, ssh host \"cmd\", ssh prod \u003c\u003cEOF, git -c alias., python -c s destruktivnim tokenem - a ZADNY radek s \"deny\". || 2026-09-08, T36-N34 (i) / T36-N35: 7 radkum se zmenilo ocekavani (allow -\u003e ask). Seznam: bash -c \"$x\" - cmd /c %X% - eval $cmd - bash \u003c\u003cEOF / git status - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq \u0027x\u0027 -or (git reset --hard) } - bash -c \"$CMD\". || 2026-09-13, TASK-106 bod 11, vyroky 7 + 8 Amber 2026-09-12 v mandatu Toma (jmenna trida u globu = audit): 3 radkum se zmenilo ocekavani (ask -> allow). Seznam: Get-Content .en? - cat * - cat *.env. || 2026-09-13, C1 delta review Amber 2026-09-13 (vada vyroku 7): glob mirici vzorem na secret = ask, ne audit: 1 radkum se zmenilo ocekavani (allow -> ask). Seznam: cat *.env. || 2026-10-08, Z117-Q5 (Tom 2026-10-01): ls ~/.ssh/* jen vypisuje jmena - jmenujici tvar, od 0.3.0 ticho (TASK-117 polozka 7): 1 radkum se zmenilo ocekavani (ask -> allow). Seznam: ls ~/.ssh/*. || 2026-10-08, Z117-Q23 (Tom 2026-10-08 18:43): hooks/hooks.json a hooks/config/* chranene jen v nainstalovane kopii (.claude/plugins/); envDump nemlci jen u vypisu jmen: 3 radkum se zmenilo ocekavani (ask -> allow). Seznam: hooks/hooks.json - hooks/config/defaults.json - $j | Out-File hooks/hooks.json. || 2026-10-21, ZOPT-Q102 + A179-O3 + A179-O1 (Tom/Amber 2026-10-20, 0.3.1: zadne ask): 440 radkum se zmenilo ocekavani (ask -> allow, ask -> deny, deny -> allow). Seznam: bash -c \"$x\" - cmd /c %X% - eval $cmd - git push --force-with-lease origin feature/x - git push --force origin feature/x - git push --force origin - rm -rf ./bin/* - rm -rf bin/../obj - rm -rf $BUILD/bin - Invoke-Expression $cmd - iex $cmd - dotnet ef migrations remove - psql -c \"DROP TABLE Record\" - dropdb gsd_test_e2e_1 - dotnet ef database drop - dotnet ef database drop --connection \"Host=localhost;Database=gsd_dev\" - psql -h 127.0.0.1 -c \"TRUNCATE Record\" - Get-ChildItem src -Recurse -Force -File | Remove-Item -Force - dotnet-ef database drop - python -c \"import shutil; shutil.rmtree('src')\" - node -e \"require('fs').rmSync('src')\" - git -c alias.bd='branch -D' bd feature/old - [IO.Directory]::Delete($p, $true) - [System.IO.File]::Delete($target) - psql <<SQL / DROP TABLE users / SQL - psql -c \"TRUNCATE users\" - psql -c \"DELETE FROM users\" - psql -c \"SELECT * FROM a WHERE id=1; DELETE FROM users\" - echo \"TRUNCATE users\" | psql - sqlcmd -Q \"TRUNCATE TABLE x\" - bash <<EOF / git status - psql -S -c \"TRUNCATE x\" - find . -exec sh -c 'rm -rf \"$0\"' {} \\; - pwsh -enc UmVtb3ZlLUl0ZW0gLVJlY3Vyc2UgLUZvcmNlIEM6XA== - pwsh -encod UmVtb3ZlLUl0ZW0= - Start-Process pwsh -ArgumentList @('-enc', 'UmVtb3ZlLUl0ZW0gQzpc') - sudo -u root rm -rf /srv - pwsh -ec UmVtb3ZlLUl0ZW0= - python <<EOF / import shutil / shutil.rmtree('src') / EOF - ssh prod <<EOF / rm -rf /srv / EOF - .claude/settings.local.json - .env.staging - .claude/settings.json - .claude/settings.json - .claude/sinogard-hooks.json - printenv - env - set - Get-ChildItem env: - gci env: - dir env: - ls env: - Get-Content Env:* - gc env:* - cat env: - echo $env:NVIDIA_API_KEY - echo $NVIDIA_API_KEY - [Environment]::GetEnvironmentVariable(\"GITHUB_TOKEN\") - Get-Item env:GITHUB_TOKEN - echo $DB_PASSWORD - echo $env:AZURE_CREDENTIAL - cat .claude/settings.local.json - echo $env:API_KEY - echo $env:DB_PWD - echo $env:CLIENT_SECRET - echo $env:GITHUB_TOKEN - echo $env:API_KEYS - echo $env:AZURE_CREDENTIALS - echo $env:DB_PASSWD - echo $env:apiKey - echo $secretKey - echo $env:GITHUB_TOKENS - echo $db_password - echo $api_key - echo $env:Mixed_Secret_Key - rm -rf bin/hlášení/* - rm -rf ${DIR} - rm -rf src/${x} - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq 'x' -or (git reset --hard) } - Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force } - psql -h localhost -c \"UPDATE users SET active=0\" - ssh host \"rm -rf /\" - ssh host \"psql -c 'DROP TABLE x'\" - ssh -i key.pem host \"rm -rf /\" - cat *.env - cp *.pem /tmp/x - git branch -d feature/x - psql -h localhost -c \"DROP TABLE x\" - bash -c \"$CMD\" - rm -rf /srv - & $cmd - echo $env:github_token - & $cmd -Force - pwsh -enc UmVtb3ZlLUl0ZW0= - ssh prod \"rm -rf /\" - git -c alias.bd='branch -D' bd x - python -c \"import os; os.remove('x')\" - [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, $true) - [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin) - [IO.File]::Delete($f) - psql -h localhost -c \"DROP TABLE x\" < x - sh -c \"$x\" - pwsh -c $x - Start-Process $x - . $x - $SUDO git reset --hard - (((((((rm -rf src))))))) - (((((((rm -rf bin))))))) - $SQL DELETE FROM users - dropdb -h localhost x < /dev/null - dropdb -h localhost x - dotnet ef database drop < /dev/null - bash -c \"$cmd arg\" - pwsh -c \"$x\" - pwsh -Command \"$cmd -Force\" - bash -c \"echo hi; $cmd\" - bash -c \"$(cat cmd.txt)\" - pwsh -NoProfile -Command '$e = $null; $other -Force' - pwsh -NoProfile -Command '$c = \"git status\"; & $c' - bash -c \"\\$cmd arg\" - Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $_.Delete() } - cat ~/.aws/* - git show HEAD:.claude/settings.json > .claude/settings.json - echo x >> .claude/settings.json - cat x | tee .claude/settings.json - Set-Content -Path .claude/sinogard-hooks.json -Value x - dotnet build 2> .claude/settings.json - cat .docker/*.json - Get-Content ~/.kube/* - cat .claude/* - cat **/credentials - cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json - echo $env:Gsd__Cursor__ActiveKey - cat .env* - cat *.env.local - cat *secrets.json - Get-Content src/*.env - dotnet ef database drop --force - sqlcmd -S localhost -Q \"DROP DATABASE [Hrms]\" - dotnet ef database drop --force --connection \"Server=(localdb)\\MSSQLLocalDB;Database=Hrms\" - & $x -Id 1 - dotnet ef database drop --force --project src/Tajne.Jmeno - $m = \"C:\\a\\x.ps1\"; $m = \"C:\\a\\y.ps1\"; & $m - if ($a) { $m = \"C:\\a\\x.ps1\" }; & $m - $m = \"C:\\a\\x.ps1\"; if ($a) { $m = \"C:\\a\\y.ps1\" }; & $m - & $m; $m = \"C:\\a\\x.ps1\" - $p = \"C:\\a\\x.ps1\"; Set-Content $p 'git status'; & $p - $p = \"C:\\a\\x.ps1\"; Set-Content C:\\a\\x.ps1 'git status'; & $p - $p = \"C:\\a\\x.ps1\"; 'git status' > $p; & $p - $sp = \"$env:API_HOME\\x\"; & \"$sp\\m.ps1\" - $rozdil = git diff --stat; & $rozdil - $m = \"C:\\a\\x.ps1\"; Get-Item C:\\b -OutVariable m; & $m - $x = 'git status'; iex $x - $x = 'C:\\a\\x.exe'; Start-Process $x - $x = 'ls'; bash -c \"$x\" - m=/tmp/x.sh; . $m - sqllocaldb delete MSSQLLocalDB - SqlLocalDB.exe delete MSSQLLocalDB - sqllocaldb d MSSQLLocalDB - sqllocaldb stop MSSQLLocalDB; sqllocaldb delete MSSQLLocalDB - git push --force origin release - & $tajnyPrikaz - $m = 'C:\\a\\mutant.ps1'; (Get-Content $m -Raw).Replace('a', 'b') | Set-Content $m; & $m -Id 1 - cat ~/.ssh/* - grep -niE 'dev.{1,3}hrms|W:' .claude/settings.json .claude/settings.local.json .mcp.json - grep -niE 'dev.{1,3}hrms|W:' .claude/settings.json .claude/settings.local.json .mcp.json - gc .claude/settings.local.json - Select-String -Path .claude/settings.local.json -Pattern env - grep -n x .claude/settings.local.json - tail -3 .claude/settings.local.json - cp .claude/settings.local.json /tmp/x.json - git ls-files .claude/settings.local.json > list.txt - git ls-files .claude/settings.local.json | Out-Null - git ls-files > .claude/settings.local.json - git ls-files > .claude/settings.local.json - mv .claude/settings.local.json x.json - rg --pre=printenv -e '\\$AWS_SECRET_ACCESS_KEY' -e '.' AWS_SECRET_ACCESS_KEY - git grep --textconv -n '$DB_PASSWORD' - grep -n \"^\\$env:GSD_E2E_PASSWORD\" e2e-deny-read.ps1 e2e-workflow.ps1 - echo \"$DB_PASSWORD\" - Write-Output \"$env:API_KEY\" - \"${env:API_KEY}\" - [Environment]::GetEnvironmentVariable('API_KEY') - (Get-Item 'env:API_KEY').Value - cmd /c echo %API_KEY% - cmd /c 'echo %API_KEY%' - curl -H \"Authorization: $GITHUB_TOKEN\" https://api.github.com/user - bash -c 'echo $DB_PASSWORD' - pwsh -c '$env:API_KEY' - sh -c \"echo \\$DB_PASSWORD\" - eval 'echo $DB_PASSWORD' - Invoke-Expression '$env:API_KEY' - iex '$env:API_KEY' - grep 'API_KEY' f; echo $API_KEY - grep '$API_KEY' f; echo $API_KEY - echo x | sed 's/.*/echo $DB_PASSWORD/e' - echo '$DB_PASSWORD' | envsubst - awk 'BEGIN{system(\"echo $DB_PASSWORD\")}' - find . -exec sh -c 'echo $DB_PASSWORD' \\; - xargs -I{} sh -c 'echo $DB_PASSWORD' - echo 'echo $DB_PASSWORD' | sh - bash <<<'echo $DB_PASSWORD' - echo 'echo $DB_PASSWORD' > t.sh; bash t.sh - $ExecutionContext.InvokeCommand.ExpandString('$env:API_KEY') - & ([scriptblock]::Create('$env:API_KEY')) - @\" / $env:API_KEY / \"@ - cat <<EOF / $DB_PASSWORD / EOF - echo \"'$DB_PASSWORD'\" - grep \"'$DB_PASSWORD'\" f - \"'$env:API_KEY'\" - Select-String -Pattern \"'$env:API_KEY'\" f - echo 'a\\' $DB_PASSWORD #' - grep 'a\\' $DB_PASSWORD f #' - echo \"\\\\$DB_PASSWORD\" - grep \"\\\\$DB_PASSWORD\" f - \"``$env:API_KEY\" - Select-String -Pattern \"``$env:API_KEY\" f - echo 'x'$DB_PASSWORD - grep 'x'$DB_PASSWORD f - Write-Output “'$env:API_KEY'” - Select-String -Pattern “'$env:API_KEY'” f - Select-String -Pattern ‘x’$env:API_KEY f - printenv API_KEY - printenv DB_PASSWORD - Get-Content Env:\\API_KEY - Get-Content Env:/API_KEY - gc Env:\\API_KEY - (Get-Item Env:\\API_KEY).Value - grep -n x '$DB_PASSWORD' - Get-Content (Get-Item .claude/settings.local.json) - grep -n '$DB_PASSWORD' a.sh | bash - grep -n '$DB_PASSWORD' a.sh | xargs echo - RIPGREP_CONFIG_PATH=x rg '$DB_PASSWORD' f - grep -f p.txt '$DB_PASSWORD' f - grep '$DB_PASSWORD' a; grep '$DB_PASSWORD' b - Select-String -Pattern \"${env:API_KEY}\" f.ps1 - grep -n \"\\$DB_PASSWORD $HOME\" f - grep -n \\$DB_PASSWORD f - rg --pre=cat -n '$DB_PASSWORD' f - printenv HOME API_KEY - grep -n '$DB_PASSWORD' \"$DB_PASSWORD.txt\" - psql -h localhost -c \"DROP TABLE x\" --host=127.0.0.1 - sqlcmd -S localhost -h -1 -Q \"DROP DATABASE X\" - psql -h localhost -H -c \"DROP TABLE x\" - $x = 'echo'; Set-Item variable:x 'git'; & $x reset --hard - $x = 'echo'; (Get-Variable x).Value = 'git'; & $x reset --hard - $x = 'echo'; $ExecutionContext.SessionState.PSVariable.Set('x', 'git'); & $x reset --hard - . .\\init.ps1; & $m; $m = 'C:\\safe.ps1'; & $m - $m = 'C:\\a'; & $mx\\y.ps1 - $x = 'echo'; $x, $a = 'git', 'b'; & $x reset --hard - C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/hooks.json - C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/defaults.json - $j | Out-File .claude/settings.json - C:/Users/tomas/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/config/defaults.json - C:/Users/tomas/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/hooks.json - C:/Users/tomas/.claude/x/../plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/config/defaults.json - echo x > C:/Users/tomas/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/hooks.json - W:/dev/sinogard_hooks/.claude/settings.json - W:/dev/gsd/repo/.claude/sinogard-hooks.json - Get-ChildItem Env: - Get-ChildItem Env: | Where-Object Name -like 'GSD_TEST*' - Get-ChildItem Env: | Select-Object Name, Value - Get-ChildItem Env: | Where-Object Value -like '*x*' | Select-Object -ExpandProperty Name - Get-ChildItem Env: | Where-Object { $_.Value -like '*x*' } | Select-Object -ExpandProperty Name - Get-ChildItem Env: | Select-Object -ExpandProperty Value - Set-Location C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0; Set-Content hooks/hooks.json '{}' - cd C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0 && echo x > hooks/config/defaults.json - Set-Alias measure Format-List; Get-ChildItem Env: | measure - $x = 'git'; $ExecutionContext.InvokeCommand.InvokeScript(\"$x reset --hard\") - cp x.json .claude/settings.json - Copy-Item x.json .claude/settings.json - Copy-Item -Destination .claude/sinogard-hooks.json -Path x.json - Copy-Item x.json -Destination:.claude/settings.json - Copy-Item -Path x.json -Dest .claude/settings.json - cp /tmp/settings.json .claude/ - Copy-Item C:/tmp/settings.json -Destination .claude - cp -t .claude /tmp/settings.json - cp --target-directory=.claude /tmp/settings.json - mv evil.json C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/hooks.json - Move-Item evil.json -Destination C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/defaults.json - xcopy /Y C:\\tmp\\settings.json .claude\\ - robocopy C:\\tmp .claude settings.json /NJH - Copy-Item -Destination .claude/settings.json x.json - { echo x > .claude/settings.json; } - \\\\?\\C:\\Users\\x\\.claude\\settings.json - \\\\?\\C:\\Users\\x\\.claude\\plugins\\cache\\sinogard-hooks\\sinogard-hooks\\0.3.0\\hooks\\config\\defaults.json - \\\\.\\C:\\Users\\x\\.claude\\settings.local.json - cp cfg/* .claude/ - cp *.json .claude/ - cp settings.* .claude/ - cp -r cfg/. .claude - cp -r src/.claude . - Copy-Item -Path cfg\\* -Destination .claude -Recurse - xcopy cfg .claude /E /Y - robocopy cfg .claude /MIR - robocopy cfg .claude *.json - cp -r cfg/* C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/ - Rename-Item .claude\\x.json settings.json - ren .claude\\x.json settings.json - Rename-Item -Path .claude\\x.json -NewName settings.json - mv src/.claude . - mv cfg .claude - Move-Item cfg .claude - Move-Item cfg -Destination C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config - Rename-Item cfg .claude - xcopy cfg .claude /Y - mv x.json .claude - Copy-Item cfg .claude -r - Copy-Item cfg .claude -re - cpi cfg .claude -r - Copy-Item evil\\hooks C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0 -r -Force - Get-ChildItem cfg | Copy-Item -Destination .claude - Get-ChildItem cfg -Recurse | Copy-Item -Destination .claude -Force - Get-Item .claude\\x.json | Rename-Item -NewName settings.json - Copy-Item -Path (Get-ChildItem cfg) -Destination .claude - cp cfg/[s]ettings.json .claude/ - cp cfg/{a,settings}.json .claude/ - Copy-Item cfg\\[s]ettings.json .claude - cp x.json .claude/settings.js* - mv .claude/x.json .claude/settings.jso? - cp x.json .claude/[s]ettings.json - Copy-Item x.json .claude\\settings.js* - cp -r cfg/. . - cp -r cfg/. ./ - cp -r cfg/* . - cp -r /tmp/x/. ~ - cp -r cfg/. $CLAUDE_PROJECT_DIR - Copy-Item C:\\tmp\\x\\* . -Recurse -Force - Copy-Item C:\\tmp\\x\\* $HOME -Recurse -Force - robocopy C:\\tmp\\x . /E - xcopy C:\\tmp\\x . /E /Y - mv cfg/* . - bash -c 'cp x.json .claude/settings.json' - pwsh -enc $e - install -m 644 x.json .claude/settings.json - ln -sf /tmp/evil.json .claude/settings.json - rsync x.json .claude/settings.json - rsync -avzhP cfg/ .claude/ - dd if=x.json of=.claude/settings.json - New-Item -ItemType SymbolicLink -Path .claude\\settings.json -Target C:\\tmp\\evil.json - New-Item -ItemType HardLink -Path .claude\\settings.json -Value C:\\tmp\\evil.json - New-Item -Path .claude -Name settings.json -ItemType File -Value '{}' -Force - ni .claude\\settings.json -Force - [IO.File]::Copy('x.json', '.claude\\settings.json', $true) - [System.IO.File]::Move(\"x.json\", \".claude/settings.json\") - [IO.File]::WriteAllText('.claude\\settings.json', '{}') - Copy-Item x.json (Join-Path .claude settings.json) - Copy-Item x.json (Join-Path $d settings.json) - cmd /c copy x.json .claude\\settings.json - cmd /c move x.json .claude\\settings.json - cmd /c mklink .claude\\settings.json C:\\tmp\\evil.json - rsync -a ../sablona/ . - docker exec db psql -U gsd -d postgres -c \"DROP DATABASE gsd_dev\" - podman --connection gsd-root exec gsd-dev-pg psql -U gsd -d postgres -v ON_ERROR_STOP=1 -c \"drop database gsd_dev;\" - podman exec gsd-dev-pg dropdb -U gsd gsd_dev - docker exec -i db psql -c \"DROP DATABASE gsd_dev\" - podman run --rm -e PGPASSWORD=x --network host postgres:17 dropdb -h 127.0.0.1 -U gsd gsd_dev - docker run -it --rm --name tmp -v pgdata:/var/lib/postgresql/data postgres:17 psql -c \"TRUNCATE audit_events\" - docker container exec db psql -c \"DROP DATABASE gsd_dev\" - podman container run --rm postgres:17 psql -c \"UPDATE t SET a = 1\" - docker compose exec db psql -U gsd -c \"DROP DATABASE gsd_dev\" - docker compose -f compose.yml -p gsd exec -T db dropdb -U gsd gsd_dev - podman compose run --rm db psql -c \"TRUNCATE t\" - podman-compose --podman-args \"--log-level debug\" exec db psql -c \"DELETE FROM t\" - docker --config /tmp/dcfg --log-level warn exec db dropdb gsd_dev - podman exec --url ssh://core@127.0.0.1:65340/run/podman/podman.sock db psql -c \"DROP DATABASE gsd_dev\" - docker --tlsverify --tlscacert ca.pem -D exec db psql -c \"TRUNCATE t\" - docker exec -u postgres -w /tmp -e LANG=C db psql -c \"DROP DATABASE gsd_dev\" - docker exec --env-file db.env --detach-keys ctrl-x db dropdb gsd_dev - docker exec -iu postgres db psql -c \"DROP TABLE x\" - docker exec --user=postgres db psql -c \"DROP TABLE x\" - docker exec -ePGAPPNAME=x db psql -c \"DROP TABLE x\" - docker exec -- db psql -c \"DROP TABLE x\" - \"C:/Program Files/Docker/Docker/resources/bin/docker.exe\" exec db psql -c \"DROP TABLE x\" - docker run --entrypoint=dropdb postgres:17 gsd_dev - docker compose run --entrypoint \"psql -c 'DROP TABLE x'\" db - podman exec --latest psql -c \"DROP TABLE x\" - podman exec -l dropdb gsd_dev - docker exec --future-opt value db psql -c \"DROP TABLE x\" - docker exec --future-flag db psql -c \"DROP TABLE x\" - podman exec -Z zz db dropdb gsd_dev - docker exec db bash -c 'psql -c \"DROP TABLE x\"' - podman --connection gsd-root exec -i gsd-dev-pg psql -U gsd <<SQL / DROP DATABASE gsd_dev; / SQL - echo \"DROP TABLE x\" | podman --connection gsd-root exec -i gsd-dev-pg psql - docker exec db sh -c \"$PSQL -c 'DROP TABLE x'\" - sudo docker --context x exec db psql -c \"DROP TABLE x\" - timeout 60 podman exec gsd-dev-pg dropdb gsd_dev - podman exec -i gsd-dev-pg xargs -n1 dropdb - docker exec -e PGHOST=localhost db psql -c \"DROP TABLE x\" - docker run --rm -h dbbox postgres:17 psql -c \"DROP TABLE x\" - docker -H ssh://db.example.com exec db psql -c \"DROP TABLE x\" - docker --context prod exec db dropdb gsd_dev - podman --url ssh://core@db.example.com/run/podman/podman.sock exec db psql -c \"TRUNCATE t\" - DOCKER_HOST=ssh://db.example.com docker exec db psql -c \"DROP TABLE x\" - $env:CONTAINER_HOST = 'ssh://db.example.com'; podman exec db psql -c \"DROP TABLE x\" - psql -c \"DROP DATABASE gsd_dev\" - dropdb gsd_dev - dotnet ef database drop --force - docker exec db sh -c 'echo $DB_PASSWORD' - env -S \"docker --context x exec db dropdb gsd_dev\" - podman-remote exec db dropdb gsd_dev - docker exec -e PGHOST db psql -c \"DROP TABLE x\" - docker exec --env-file prod.env db dropdb app - docker exec db sh -c \"$PSQL -c 'TRUNCATE t'\" - docker compose exec -T db bash <<'EOF' / psql -U gsd -c \"DROP DATABASE gsd_dev\" / EOF - podman --connection x exec -i c sh <<EOF / dropdb gsd_dev / EOF - env -S \"docker --context x exec -i db psql\" <<SQL / DROP DATABASE gsd_dev; / SQL - docker exec $(docker ps -qf name=db) dropdb gsd_dev - docker exec -it $(docker ps -q) psql -c \"DROP TABLE x\" - podman exec `podman ps -q` dropdb gsd_dev - docker exec (docker ps -q) dropdb gsd_dev - docker exec -i $(docker ps -q) psql <<SQL / DROP TABLE x; / SQL - podman-compose run --entry dropdb db gsd_dev - docker compose exec -T db bash -s -- --host=build.example.com <<'EOF' / dropdb gsd_dev / EOF - docker exec -e \"MSG=bye :(\" db dropdb prod - docker --context prod exec -i -e \"M=(\" db psql <<SQL / DROP TABLE x; / SQL - docker exec -w \"/data(1\" db dropdb prod - docker exec -e 'X=`' db dropdb prod - docker compose exec -T db python3 <<'EOF' / import os; os.system(\"dropdb -h prod.example.com prod\") / EOF - docker exec db pwsh -EncodedCommand ZAByAG8AcABkAGIAIABwAHIAbwBkAA== - docker exec app python -c \"c.execute('TRUNCATE t')\" - docker exec -i app python3 <<'EOF' / import shutil; shutil.rmtree('/srv/data') / EOF - sudo docker exec -i app node <<'EOF' / require('fs').rmSync('/srv/data', { recursive: true }) / EOF - docker exec -i -e PGHOST=prod.example.com app python3 <<'EOF' / import os; os.system('dropdb prod') / EOF - docker exec -e \"MSG=bye :(\" $(docker ps -q) dropdb prod - docker exec -e 'X=`' `docker ps -q` dropdb prod - docker exec -w \"/data(1\" (docker ps -q) dropdb prod - docker run -i --rm --entrypoint psql bash <<SQL / DROP TABLE x; / SQL - docker exec -i --detach-keys ctrl-q bash psql <<SQL / DROP TABLE x; / SQL - docker exec -i app python3 <<'EOF' / cur.execute('DROP DATABASE gsd_dev') / EOF - echo \"DROP TABLE x\" | docker exec -i --detach-keys ctrl-q bash psql - docker exec (docker ps -q) ls; bash -c 'docker exec `docker ps -q` dropdb prod' - docker ps; pwsh -c 'docker exec (docker ps -q) dropdb prod' - pwsh -c 'docker ps'; docker exec `docker ps -q` dropdb prod - docker exec c pwsh -EncodedCommand ZABvAGMAawBlAHIAIABlAHgAZQBjACAAKABkAG8AYwBrAGUAcgAgAHAAcwAgAC0AcQApACAAZAByAG8AcABkAGIAIABwAHIAbwBkAA== - docker exec $(docker ps -q --filter \"name=a(\") dropdb prod - docker exec (docker ps -q --filter \"name=a(\") dropdb prod - docker exec outer pwsh -EncodedCommand ZABvAGMAawBlAHIAIABlAHgAZQBjACAALQBlACAAUABHAEgATwBTAFQAIABpAG4AbgBlAHIAIABkAHIAbwBwAGQAYgAgAHgA - bash -c 'docker exec $(docker ps -q) ls'; docker exec (docker ps -q) dropdb prod. || 2026-10-21, ZOPT-Q102 + A179-O3 (Tom/Amber 2026-10-20, 0.3.1: zadne ask; dva radky bez zdroje dostaly zdroj v task179-gate.json skupina Q102-inv): 2 radkum se zmenilo ocekavani (ask -> allow, ask -> deny). Seznam: rm -rf bin/hl�sen�/* - $x = 'echo'; $a, $x = 'b', 'git'; & $x reset --hard. || 2026-10-22, A179-O11 (Amber 2026-10-22: hlava Bashe, ktera neni proste slovo ani hola promenna = deny) a A179-O7 (Amber 2026-10-21: DB allow jen pro jediny statement, roura do klienta = slozeny tvar): 2 radkum se zmenilo ocekavani (allow -> deny). Seznam: $_.Name -like \"*.cs\" - echo \"TRUNCATE t\" | psql -d gsd_dev. || 2026-10-23, 'A179-O11: 1 radkum se zmenilo ocekavani (allow -> deny). Seznam: bash -c \"$(cat cmd.txt)\". || 2026-10-23, A179-O17+A179-O18(Amber_2026-10-23:branch_-d,remoteShell,wildcardPath=deny): 23 radkum se zmenilo ocekavani (allow -> deny). Seznam: ssh prod <<EOF / rm -rf /srv / EOF - ssh host \"rm -rf /\" - ssh host \"psql -c 'DROP TABLE x'\" - ssh -i key.pem host \"rm -rf /\" - cat *.env - cp *.pem /tmp/x - git branch -d feature/x - ssh prod \"rm -rf /\" - cat ~/.aws/* - cat .docker/*.json - Get-Content ~/.kube/* - cat .claude/* - cat **/credentials - cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json - cat .env* - cat *.env.local - cat *secrets.json - Get-Content src/*.env - cat ~/.ssh/* - git branch -dr origin/feature-x - ssh build-host \"ls -la\" - ssh build-host <<EOF / ls / EOF - cat ~/.ssh/*; env. || 2026-10-23, A179-O20 A179-O21: 1 radkum se zmenilo ocekavani (deny -> allow). Seznam: cat [a-z][a-z].txt.",
+  "_zmeneno": "2026-09-07, rozhodnuti Toma T36-O5 = A (audit misto dotazu u nerozebratelnych tvaru): 11 radkum se zmenilo ocekavani z \"ask\" na \"allow\". Radek z invariantu NEODESEL zadny. Seznam: $tool build - bash -c \"$x\" - cmd /c %X% - eval $cmd - $TOOL git push - [Math]::Truncate($x) - neukonceny heredoc (bash \u003c\u003cEOF / git status) - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq (x) -or (git reset --hard) } - $_.Name -like \"*.cs\" (Bash) - bash -c \"$CMD\". Vsechny jsou trida \"nerozebratelne\" (pricina variable, interpreter nebo heredocUnterminated); od 0.1.10 o nich rozhoduje vrstva opravneni Claude Code, ne plugin. NEZMENILY se: \u0026 $cmd, pwsh -enc, ssh host \"cmd\", ssh prod \u003c\u003cEOF, git -c alias., python -c s destruktivnim tokenem - a ZADNY radek s \"deny\". || 2026-09-08, T36-N34 (i) / T36-N35: 7 radkum se zmenilo ocekavani (allow -\u003e ask). Seznam: bash -c \"$x\" - cmd /c %X% - eval $cmd - bash \u003c\u003cEOF / git status - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq \u0027x\u0027 -or (git reset --hard) } - bash -c \"$CMD\". || 2026-09-13, TASK-106 bod 11, vyroky 7 + 8 Amber 2026-09-12 v mandatu Toma (jmenna trida u globu = audit): 3 radkum se zmenilo ocekavani (ask -> allow). Seznam: Get-Content .en? - cat * - cat *.env. || 2026-09-13, C1 delta review Amber 2026-09-13 (vada vyroku 7): glob mirici vzorem na secret = ask, ne audit: 1 radkum se zmenilo ocekavani (allow -> ask). Seznam: cat *.env. || 2026-10-08, Z117-Q5 (Tom 2026-10-01): ls ~/.ssh/* jen vypisuje jmena - jmenujici tvar, od 0.3.0 ticho (TASK-117 polozka 7): 1 radkum se zmenilo ocekavani (ask -> allow). Seznam: ls ~/.ssh/*. || 2026-10-08, Z117-Q23 (Tom 2026-10-08 18:43): hooks/hooks.json a hooks/config/* chranene jen v nainstalovane kopii (.claude/plugins/); envDump nemlci jen u vypisu jmen: 3 radkum se zmenilo ocekavani (ask -> allow). Seznam: hooks/hooks.json - hooks/config/defaults.json - $j | Out-File hooks/hooks.json. || 2026-10-21, ZOPT-Q102 + A179-O3 + A179-O1 (Tom/Amber 2026-10-20, 0.3.1: zadne ask): 440 radkum se zmenilo ocekavani (ask -> allow, ask -> deny, deny -> allow). Seznam: bash -c \"$x\" - cmd /c %X% - eval $cmd - git push --force-with-lease origin feature/x - git push --force origin feature/x - git push --force origin - rm -rf ./bin/* - rm -rf bin/../obj - rm -rf $BUILD/bin - Invoke-Expression $cmd - iex $cmd - dotnet ef migrations remove - psql -c \"DROP TABLE Record\" - dropdb gsd_test_e2e_1 - dotnet ef database drop - dotnet ef database drop --connection \"Host=localhost;Database=gsd_dev\" - psql -h 127.0.0.1 -c \"TRUNCATE Record\" - Get-ChildItem src -Recurse -Force -File | Remove-Item -Force - dotnet-ef database drop - python -c \"import shutil; shutil.rmtree('src')\" - node -e \"require('fs').rmSync('src')\" - git -c alias.bd='branch -D' bd feature/old - [IO.Directory]::Delete($p, $true) - [System.IO.File]::Delete($target) - psql <<SQL / DROP TABLE users / SQL - psql -c \"TRUNCATE users\" - psql -c \"DELETE FROM users\" - psql -c \"SELECT * FROM a WHERE id=1; DELETE FROM users\" - echo \"TRUNCATE users\" | psql - sqlcmd -Q \"TRUNCATE TABLE x\" - bash <<EOF / git status - psql -S -c \"TRUNCATE x\" - find . -exec sh -c 'rm -rf \"$0\"' {} \\; - pwsh -enc UmVtb3ZlLUl0ZW0gLVJlY3Vyc2UgLUZvcmNlIEM6XA== - pwsh -encod UmVtb3ZlLUl0ZW0= - Start-Process pwsh -ArgumentList @('-enc', 'UmVtb3ZlLUl0ZW0gQzpc') - sudo -u root rm -rf /srv - pwsh -ec UmVtb3ZlLUl0ZW0= - python <<EOF / import shutil / shutil.rmtree('src') / EOF - ssh prod <<EOF / rm -rf /srv / EOF - .claude/settings.local.json - .env.staging - .claude/settings.json - .claude/settings.json - .claude/sinogard-hooks.json - printenv - env - set - Get-ChildItem env: - gci env: - dir env: - ls env: - Get-Content Env:* - gc env:* - cat env: - echo $env:NVIDIA_API_KEY - echo $NVIDIA_API_KEY - [Environment]::GetEnvironmentVariable(\"GITHUB_TOKEN\") - Get-Item env:GITHUB_TOKEN - echo $DB_PASSWORD - echo $env:AZURE_CREDENTIAL - cat .claude/settings.local.json - echo $env:API_KEY - echo $env:DB_PWD - echo $env:CLIENT_SECRET - echo $env:GITHUB_TOKEN - echo $env:API_KEYS - echo $env:AZURE_CREDENTIALS - echo $env:DB_PASSWD - echo $env:apiKey - echo $secretKey - echo $env:GITHUB_TOKENS - echo $db_password - echo $api_key - echo $env:Mixed_Secret_Key - rm -rf bin/hlášení/* - rm -rf ${DIR} - rm -rf src/${x} - Get-ChildItem | ForEach-Object { $_.Delete() } - Where-Object { $_.Name -eq 'x' -or (git reset --hard) } - Get-ChildItem | ForEach-Object { $_ | Remove-Item -Recurse -Force } - psql -h localhost -c \"UPDATE users SET active=0\" - ssh host \"rm -rf /\" - ssh host \"psql -c 'DROP TABLE x'\" - ssh -i key.pem host \"rm -rf /\" - cat *.env - cp *.pem /tmp/x - git branch -d feature/x - psql -h localhost -c \"DROP TABLE x\" - bash -c \"$CMD\" - rm -rf /srv - & $cmd - echo $env:github_token - & $cmd -Force - pwsh -enc UmVtb3ZlLUl0ZW0= - ssh prod \"rm -rf /\" - git -c alias.bd='branch -D' bd x - python -c \"import os; os.remove('x')\" - [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, $true) - [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin) - [IO.File]::Delete($f) - psql -h localhost -c \"DROP TABLE x\" < x - sh -c \"$x\" - pwsh -c $x - Start-Process $x - . $x - $SUDO git reset --hard - (((((((rm -rf src))))))) - (((((((rm -rf bin))))))) - $SQL DELETE FROM users - dropdb -h localhost x < /dev/null - dropdb -h localhost x - dotnet ef database drop < /dev/null - bash -c \"$cmd arg\" - pwsh -c \"$x\" - pwsh -Command \"$cmd -Force\" - bash -c \"echo hi; $cmd\" - bash -c \"$(cat cmd.txt)\" - pwsh -NoProfile -Command '$e = $null; $other -Force' - pwsh -NoProfile -Command '$c = \"git status\"; & $c' - bash -c \"\\$cmd arg\" - Get-ChildItem | ForEach-Object -Begin { $i = 0 } -Process { $_.Delete() } - cat ~/.aws/* - git show HEAD:.claude/settings.json > .claude/settings.json - echo x >> .claude/settings.json - cat x | tee .claude/settings.json - Set-Content -Path .claude/sinogard-hooks.json -Value x - dotnet build 2> .claude/settings.json - cat .docker/*.json - Get-Content ~/.kube/* - cat .claude/* - cat **/credentials - cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json - echo $env:Gsd__Cursor__ActiveKey - cat .env* - cat *.env.local - cat *secrets.json - Get-Content src/*.env - dotnet ef database drop --force - sqlcmd -S localhost -Q \"DROP DATABASE [Hrms]\" - dotnet ef database drop --force --connection \"Server=(localdb)\\MSSQLLocalDB;Database=Hrms\" - & $x -Id 1 - dotnet ef database drop --force --project src/Tajne.Jmeno - $m = \"C:\\a\\x.ps1\"; $m = \"C:\\a\\y.ps1\"; & $m - if ($a) { $m = \"C:\\a\\x.ps1\" }; & $m - $m = \"C:\\a\\x.ps1\"; if ($a) { $m = \"C:\\a\\y.ps1\" }; & $m - & $m; $m = \"C:\\a\\x.ps1\" - $p = \"C:\\a\\x.ps1\"; Set-Content $p 'git status'; & $p - $p = \"C:\\a\\x.ps1\"; Set-Content C:\\a\\x.ps1 'git status'; & $p - $p = \"C:\\a\\x.ps1\"; 'git status' > $p; & $p - $sp = \"$env:API_HOME\\x\"; & \"$sp\\m.ps1\" - $rozdil = git diff --stat; & $rozdil - $m = \"C:\\a\\x.ps1\"; Get-Item C:\\b -OutVariable m; & $m - $x = 'git status'; iex $x - $x = 'C:\\a\\x.exe'; Start-Process $x - $x = 'ls'; bash -c \"$x\" - m=/tmp/x.sh; . $m - sqllocaldb delete MSSQLLocalDB - SqlLocalDB.exe delete MSSQLLocalDB - sqllocaldb d MSSQLLocalDB - sqllocaldb stop MSSQLLocalDB; sqllocaldb delete MSSQLLocalDB - git push --force origin release - & $tajnyPrikaz - $m = 'C:\\a\\mutant.ps1'; (Get-Content $m -Raw).Replace('a', 'b') | Set-Content $m; & $m -Id 1 - cat ~/.ssh/* - grep -niE 'dev.{1,3}hrms|W:' .claude/settings.json .claude/settings.local.json .mcp.json - grep -niE 'dev.{1,3}hrms|W:' .claude/settings.json .claude/settings.local.json .mcp.json - gc .claude/settings.local.json - Select-String -Path .claude/settings.local.json -Pattern env - grep -n x .claude/settings.local.json - tail -3 .claude/settings.local.json - cp .claude/settings.local.json /tmp/x.json - git ls-files .claude/settings.local.json > list.txt - git ls-files .claude/settings.local.json | Out-Null - git ls-files > .claude/settings.local.json - git ls-files > .claude/settings.local.json - mv .claude/settings.local.json x.json - rg --pre=printenv -e '\\$AWS_SECRET_ACCESS_KEY' -e '.' AWS_SECRET_ACCESS_KEY - git grep --textconv -n '$DB_PASSWORD' - grep -n \"^\\$env:GSD_E2E_PASSWORD\" e2e-deny-read.ps1 e2e-workflow.ps1 - echo \"$DB_PASSWORD\" - Write-Output \"$env:API_KEY\" - \"${env:API_KEY}\" - [Environment]::GetEnvironmentVariable('API_KEY') - (Get-Item 'env:API_KEY').Value - cmd /c echo %API_KEY% - cmd /c 'echo %API_KEY%' - curl -H \"Authorization: $GITHUB_TOKEN\" https://api.github.com/user - bash -c 'echo $DB_PASSWORD' - pwsh -c '$env:API_KEY' - sh -c \"echo \\$DB_PASSWORD\" - eval 'echo $DB_PASSWORD' - Invoke-Expression '$env:API_KEY' - iex '$env:API_KEY' - grep 'API_KEY' f; echo $API_KEY - grep '$API_KEY' f; echo $API_KEY - echo x | sed 's/.*/echo $DB_PASSWORD/e' - echo '$DB_PASSWORD' | envsubst - awk 'BEGIN{system(\"echo $DB_PASSWORD\")}' - find . -exec sh -c 'echo $DB_PASSWORD' \\; - xargs -I{} sh -c 'echo $DB_PASSWORD' - echo 'echo $DB_PASSWORD' | sh - bash <<<'echo $DB_PASSWORD' - echo 'echo $DB_PASSWORD' > t.sh; bash t.sh - $ExecutionContext.InvokeCommand.ExpandString('$env:API_KEY') - & ([scriptblock]::Create('$env:API_KEY')) - @\" / $env:API_KEY / \"@ - cat <<EOF / $DB_PASSWORD / EOF - echo \"'$DB_PASSWORD'\" - grep \"'$DB_PASSWORD'\" f - \"'$env:API_KEY'\" - Select-String -Pattern \"'$env:API_KEY'\" f - echo 'a\\' $DB_PASSWORD #' - grep 'a\\' $DB_PASSWORD f #' - echo \"\\\\$DB_PASSWORD\" - grep \"\\\\$DB_PASSWORD\" f - \"``$env:API_KEY\" - Select-String -Pattern \"``$env:API_KEY\" f - echo 'x'$DB_PASSWORD - grep 'x'$DB_PASSWORD f - Write-Output “'$env:API_KEY'” - Select-String -Pattern “'$env:API_KEY'” f - Select-String -Pattern ‘x’$env:API_KEY f - printenv API_KEY - printenv DB_PASSWORD - Get-Content Env:\\API_KEY - Get-Content Env:/API_KEY - gc Env:\\API_KEY - (Get-Item Env:\\API_KEY).Value - grep -n x '$DB_PASSWORD' - Get-Content (Get-Item .claude/settings.local.json) - grep -n '$DB_PASSWORD' a.sh | bash - grep -n '$DB_PASSWORD' a.sh | xargs echo - RIPGREP_CONFIG_PATH=x rg '$DB_PASSWORD' f - grep -f p.txt '$DB_PASSWORD' f - grep '$DB_PASSWORD' a; grep '$DB_PASSWORD' b - Select-String -Pattern \"${env:API_KEY}\" f.ps1 - grep -n \"\\$DB_PASSWORD $HOME\" f - grep -n \\$DB_PASSWORD f - rg --pre=cat -n '$DB_PASSWORD' f - printenv HOME API_KEY - grep -n '$DB_PASSWORD' \"$DB_PASSWORD.txt\" - psql -h localhost -c \"DROP TABLE x\" --host=127.0.0.1 - sqlcmd -S localhost -h -1 -Q \"DROP DATABASE X\" - psql -h localhost -H -c \"DROP TABLE x\" - $x = 'echo'; Set-Item variable:x 'git'; & $x reset --hard - $x = 'echo'; (Get-Variable x).Value = 'git'; & $x reset --hard - $x = 'echo'; $ExecutionContext.SessionState.PSVariable.Set('x', 'git'); & $x reset --hard - . .\\init.ps1; & $m; $m = 'C:\\safe.ps1'; & $m - $m = 'C:\\a'; & $mx\\y.ps1 - $x = 'echo'; $x, $a = 'git', 'b'; & $x reset --hard - C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/hooks.json - C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/defaults.json - $j | Out-File .claude/settings.json - C:/Users/tomas/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/config/defaults.json - C:/Users/tomas/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/hooks.json - C:/Users/tomas/.claude/x/../plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/config/defaults.json - echo x > C:/Users/tomas/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.2.0/hooks/hooks.json - W:/dev/sinogard_hooks/.claude/settings.json - W:/dev/gsd/repo/.claude/sinogard-hooks.json - Get-ChildItem Env: - Get-ChildItem Env: | Where-Object Name -like 'GSD_TEST*' - Get-ChildItem Env: | Select-Object Name, Value - Get-ChildItem Env: | Where-Object Value -like '*x*' | Select-Object -ExpandProperty Name - Get-ChildItem Env: | Where-Object { $_.Value -like '*x*' } | Select-Object -ExpandProperty Name - Get-ChildItem Env: | Select-Object -ExpandProperty Value - Set-Location C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0; Set-Content hooks/hooks.json '{}' - cd C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0 && echo x > hooks/config/defaults.json - Set-Alias measure Format-List; Get-ChildItem Env: | measure - $x = 'git'; $ExecutionContext.InvokeCommand.InvokeScript(\"$x reset --hard\") - cp x.json .claude/settings.json - Copy-Item x.json .claude/settings.json - Copy-Item -Destination .claude/sinogard-hooks.json -Path x.json - Copy-Item x.json -Destination:.claude/settings.json - Copy-Item -Path x.json -Dest .claude/settings.json - cp /tmp/settings.json .claude/ - Copy-Item C:/tmp/settings.json -Destination .claude - cp -t .claude /tmp/settings.json - cp --target-directory=.claude /tmp/settings.json - mv evil.json C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/hooks.json - Move-Item evil.json -Destination C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/defaults.json - xcopy /Y C:\\tmp\\settings.json .claude\\ - robocopy C:\\tmp .claude settings.json /NJH - Copy-Item -Destination .claude/settings.json x.json - { echo x > .claude/settings.json; } - \\\\?\\C:\\Users\\x\\.claude\\settings.json - \\\\?\\C:\\Users\\x\\.claude\\plugins\\cache\\sinogard-hooks\\sinogard-hooks\\0.3.0\\hooks\\config\\defaults.json - \\\\.\\C:\\Users\\x\\.claude\\settings.local.json - cp cfg/* .claude/ - cp *.json .claude/ - cp settings.* .claude/ - cp -r cfg/. .claude - cp -r src/.claude . - Copy-Item -Path cfg\\* -Destination .claude -Recurse - xcopy cfg .claude /E /Y - robocopy cfg .claude /MIR - robocopy cfg .claude *.json - cp -r cfg/* C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config/ - Rename-Item .claude\\x.json settings.json - ren .claude\\x.json settings.json - Rename-Item -Path .claude\\x.json -NewName settings.json - mv src/.claude . - mv cfg .claude - Move-Item cfg .claude - Move-Item cfg -Destination C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0/hooks/config - Rename-Item cfg .claude - xcopy cfg .claude /Y - mv x.json .claude - Copy-Item cfg .claude -r - Copy-Item cfg .claude -re - cpi cfg .claude -r - Copy-Item evil\\hooks C:/Users/x/.claude/plugins/cache/sinogard-hooks/sinogard-hooks/0.3.0 -r -Force - Get-ChildItem cfg | Copy-Item -Destination .claude - Get-ChildItem cfg -Recurse | Copy-Item -Destination .claude -Force - Get-Item .claude\\x.json | Rename-Item -NewName settings.json - Copy-Item -Path (Get-ChildItem cfg) -Destination .claude - cp cfg/[s]ettings.json .claude/ - cp cfg/{a,settings}.json .claude/ - Copy-Item cfg\\[s]ettings.json .claude - cp x.json .claude/settings.js* - mv .claude/x.json .claude/settings.jso? - cp x.json .claude/[s]ettings.json - Copy-Item x.json .claude\\settings.js* - cp -r cfg/. . - cp -r cfg/. ./ - cp -r cfg/* . - cp -r /tmp/x/. ~ - cp -r cfg/. $CLAUDE_PROJECT_DIR - Copy-Item C:\\tmp\\x\\* . -Recurse -Force - Copy-Item C:\\tmp\\x\\* $HOME -Recurse -Force - robocopy C:\\tmp\\x . /E - xcopy C:\\tmp\\x . /E /Y - mv cfg/* . - bash -c 'cp x.json .claude/settings.json' - pwsh -enc $e - install -m 644 x.json .claude/settings.json - ln -sf /tmp/evil.json .claude/settings.json - rsync x.json .claude/settings.json - rsync -avzhP cfg/ .claude/ - dd if=x.json of=.claude/settings.json - New-Item -ItemType SymbolicLink -Path .claude\\settings.json -Target C:\\tmp\\evil.json - New-Item -ItemType HardLink -Path .claude\\settings.json -Value C:\\tmp\\evil.json - New-Item -Path .claude -Name settings.json -ItemType File -Value '{}' -Force - ni .claude\\settings.json -Force - [IO.File]::Copy('x.json', '.claude\\settings.json', $true) - [System.IO.File]::Move(\"x.json\", \".claude/settings.json\") - [IO.File]::WriteAllText('.claude\\settings.json', '{}') - Copy-Item x.json (Join-Path .claude settings.json) - Copy-Item x.json (Join-Path $d settings.json) - cmd /c copy x.json .claude\\settings.json - cmd /c move x.json .claude\\settings.json - cmd /c mklink .claude\\settings.json C:\\tmp\\evil.json - rsync -a ../sablona/ . - docker exec db psql -U gsd -d postgres -c \"DROP DATABASE gsd_dev\" - podman --connection gsd-root exec gsd-dev-pg psql -U gsd -d postgres -v ON_ERROR_STOP=1 -c \"drop database gsd_dev;\" - podman exec gsd-dev-pg dropdb -U gsd gsd_dev - docker exec -i db psql -c \"DROP DATABASE gsd_dev\" - podman run --rm -e PGPASSWORD=x --network host postgres:17 dropdb -h 127.0.0.1 -U gsd gsd_dev - docker run -it --rm --name tmp -v pgdata:/var/lib/postgresql/data postgres:17 psql -c \"TRUNCATE audit_events\" - docker container exec db psql -c \"DROP DATABASE gsd_dev\" - podman container run --rm postgres:17 psql -c \"UPDATE t SET a = 1\" - docker compose exec db psql -U gsd -c \"DROP DATABASE gsd_dev\" - docker compose -f compose.yml -p gsd exec -T db dropdb -U gsd gsd_dev - podman compose run --rm db psql -c \"TRUNCATE t\" - podman-compose --podman-args \"--log-level debug\" exec db psql -c \"DELETE FROM t\" - docker --config /tmp/dcfg --log-level warn exec db dropdb gsd_dev - podman exec --url ssh://core@127.0.0.1:65340/run/podman/podman.sock db psql -c \"DROP DATABASE gsd_dev\" - docker --tlsverify --tlscacert ca.pem -D exec db psql -c \"TRUNCATE t\" - docker exec -u postgres -w /tmp -e LANG=C db psql -c \"DROP DATABASE gsd_dev\" - docker exec --env-file db.env --detach-keys ctrl-x db dropdb gsd_dev - docker exec -iu postgres db psql -c \"DROP TABLE x\" - docker exec --user=postgres db psql -c \"DROP TABLE x\" - docker exec -ePGAPPNAME=x db psql -c \"DROP TABLE x\" - docker exec -- db psql -c \"DROP TABLE x\" - \"C:/Program Files/Docker/Docker/resources/bin/docker.exe\" exec db psql -c \"DROP TABLE x\" - docker run --entrypoint=dropdb postgres:17 gsd_dev - docker compose run --entrypoint \"psql -c 'DROP TABLE x'\" db - podman exec --latest psql -c \"DROP TABLE x\" - podman exec -l dropdb gsd_dev - docker exec --future-opt value db psql -c \"DROP TABLE x\" - docker exec --future-flag db psql -c \"DROP TABLE x\" - podman exec -Z zz db dropdb gsd_dev - docker exec db bash -c 'psql -c \"DROP TABLE x\"' - podman --connection gsd-root exec -i gsd-dev-pg psql -U gsd <<SQL / DROP DATABASE gsd_dev; / SQL - echo \"DROP TABLE x\" | podman --connection gsd-root exec -i gsd-dev-pg psql - docker exec db sh -c \"$PSQL -c 'DROP TABLE x'\" - sudo docker --context x exec db psql -c \"DROP TABLE x\" - timeout 60 podman exec gsd-dev-pg dropdb gsd_dev - podman exec -i gsd-dev-pg xargs -n1 dropdb - docker exec -e PGHOST=localhost db psql -c \"DROP TABLE x\" - docker run --rm -h dbbox postgres:17 psql -c \"DROP TABLE x\" - docker -H ssh://db.example.com exec db psql -c \"DROP TABLE x\" - docker --context prod exec db dropdb gsd_dev - podman --url ssh://core@db.example.com/run/podman/podman.sock exec db psql -c \"TRUNCATE t\" - DOCKER_HOST=ssh://db.example.com docker exec db psql -c \"DROP TABLE x\" - $env:CONTAINER_HOST = 'ssh://db.example.com'; podman exec db psql -c \"DROP TABLE x\" - psql -c \"DROP DATABASE gsd_dev\" - dropdb gsd_dev - dotnet ef database drop --force - docker exec db sh -c 'echo $DB_PASSWORD' - env -S \"docker --context x exec db dropdb gsd_dev\" - podman-remote exec db dropdb gsd_dev - docker exec -e PGHOST db psql -c \"DROP TABLE x\" - docker exec --env-file prod.env db dropdb app - docker exec db sh -c \"$PSQL -c 'TRUNCATE t'\" - docker compose exec -T db bash <<'EOF' / psql -U gsd -c \"DROP DATABASE gsd_dev\" / EOF - podman --connection x exec -i c sh <<EOF / dropdb gsd_dev / EOF - env -S \"docker --context x exec -i db psql\" <<SQL / DROP DATABASE gsd_dev; / SQL - docker exec $(docker ps -qf name=db) dropdb gsd_dev - docker exec -it $(docker ps -q) psql -c \"DROP TABLE x\" - podman exec `podman ps -q` dropdb gsd_dev - docker exec (docker ps -q) dropdb gsd_dev - docker exec -i $(docker ps -q) psql <<SQL / DROP TABLE x; / SQL - podman-compose run --entry dropdb db gsd_dev - docker compose exec -T db bash -s -- --host=build.example.com <<'EOF' / dropdb gsd_dev / EOF - docker exec -e \"MSG=bye :(\" db dropdb prod - docker --context prod exec -i -e \"M=(\" db psql <<SQL / DROP TABLE x; / SQL - docker exec -w \"/data(1\" db dropdb prod - docker exec -e 'X=`' db dropdb prod - docker compose exec -T db python3 <<'EOF' / import os; os.system(\"dropdb -h prod.example.com prod\") / EOF - docker exec db pwsh -EncodedCommand ZAByAG8AcABkAGIAIABwAHIAbwBkAA== - docker exec app python -c \"c.execute('TRUNCATE t')\" - docker exec -i app python3 <<'EOF' / import shutil; shutil.rmtree('/srv/data') / EOF - sudo docker exec -i app node <<'EOF' / require('fs').rmSync('/srv/data', { recursive: true }) / EOF - docker exec -i -e PGHOST=prod.example.com app python3 <<'EOF' / import os; os.system('dropdb prod') / EOF - docker exec -e \"MSG=bye :(\" $(docker ps -q) dropdb prod - docker exec -e 'X=`' `docker ps -q` dropdb prod - docker exec -w \"/data(1\" (docker ps -q) dropdb prod - docker run -i --rm --entrypoint psql bash <<SQL / DROP TABLE x; / SQL - docker exec -i --detach-keys ctrl-q bash psql <<SQL / DROP TABLE x; / SQL - docker exec -i app python3 <<'EOF' / cur.execute('DROP DATABASE gsd_dev') / EOF - echo \"DROP TABLE x\" | docker exec -i --detach-keys ctrl-q bash psql - docker exec (docker ps -q) ls; bash -c 'docker exec `docker ps -q` dropdb prod' - docker ps; pwsh -c 'docker exec (docker ps -q) dropdb prod' - pwsh -c 'docker ps'; docker exec `docker ps -q` dropdb prod - docker exec c pwsh -EncodedCommand ZABvAGMAawBlAHIAIABlAHgAZQBjACAAKABkAG8AYwBrAGUAcgAgAHAAcwAgAC0AcQApACAAZAByAG8AcABkAGIAIABwAHIAbwBkAA== - docker exec $(docker ps -q --filter \"name=a(\") dropdb prod - docker exec (docker ps -q --filter \"name=a(\") dropdb prod - docker exec outer pwsh -EncodedCommand ZABvAGMAawBlAHIAIABlAHgAZQBjACAALQBlACAAUABHAEgATwBTAFQAIABpAG4AbgBlAHIAIABkAHIAbwBwAGQAYgAgAHgA - bash -c 'docker exec $(docker ps -q) ls'; docker exec (docker ps -q) dropdb prod. || 2026-10-21, ZOPT-Q102 + A179-O3 (Tom/Amber 2026-10-20, 0.3.1: zadne ask; dva radky bez zdroje dostaly zdroj v task179-gate.json skupina Q102-inv): 2 radkum se zmenilo ocekavani (ask -> allow, ask -> deny). Seznam: rm -rf bin/hl�sen�/* - $x = 'echo'; $a, $x = 'b', 'git'; & $x reset --hard. || 2026-10-22, A179-O11 (Amber 2026-10-22: hlava Bashe, ktera neni proste slovo ani hola promenna = deny) a A179-O7 (Amber 2026-10-21: DB allow jen pro jediny statement, roura do klienta = slozeny tvar): 2 radkum se zmenilo ocekavani (allow -> deny). Seznam: $_.Name -like \"*.cs\" - echo \"TRUNCATE t\" | psql -d gsd_dev. || 2026-10-23, 'A179-O11: 1 radkum se zmenilo ocekavani (allow -> deny). Seznam: bash -c \"$(cat cmd.txt)\". || 2026-10-23, A179-O17+A179-O18(Amber_2026-10-23:branch_-d,remoteShell,wildcardPath=deny): 23 radkum se zmenilo ocekavani (allow -> deny). Seznam: ssh prod <<EOF / rm -rf /srv / EOF - ssh host \"rm -rf /\" - ssh host \"psql -c 'DROP TABLE x'\" - ssh -i key.pem host \"rm -rf /\" - cat *.env - cp *.pem /tmp/x - git branch -d feature/x - ssh prod \"rm -rf /\" - cat ~/.aws/* - cat .docker/*.json - Get-Content ~/.kube/* - cat .claude/* - cat **/credentials - cat ~/AppData/Roaming/Microsoft/UserSecrets/*/secrets.json - cat .env* - cat *.env.local - cat *secrets.json - Get-Content src/*.env - cat ~/.ssh/* - git branch -dr origin/feature-x - ssh build-host \"ls -la\" - ssh build-host <<EOF / ls / EOF - cat ~/.ssh/*; env. || 2026-10-23, A179-O20 A179-O21: 1 radkum se zmenilo ocekavani (deny -> allow). Seznam: cat [a-z][a-z].txt. || 2026-10-27, GSD TASK-195, Tom Z179-Q1 = B (2026-10-25) a ZOPT-Q108 = A (2026-10-27): nevynucene git branch -d mlci, hodnota volby neni prepinac: 6 radkum se zmenilo ocekavani (deny -> allow). Seznam: git branch -d feature/x - git branch --delete feature/x - git branch --del feature/x - git branch --delet feature/x - git branch --d feature/x - git branch --sort -committerdate. || 2026-10-28, GSD TASK-195 (0.4.1), Amber AOPT-O34 2026-10-28 (S041-Q4 = a): slovo podprikazu ze zavorkoveho vyrazu PowerShellu neni prosty literal (S041-N16): 1 radkum se zmenilo ocekavani (allow -> deny). Seznam: (git status) + (git log -1).",
   "_ponechano": "2026-09-13, TASK-106 bod 7, vyrok 4 Amber 2026-09-12 v mandatu Toma (NECHAT + PREMERIT): ctyri radky s rozsypanym ceskym textem (rm -rf docs/hl?sen?/z?r? deny, rm -rf bin/hl?sen? allow, rm -rf bin/hl?sen?/* ask, docs/logs/session/hl?sen?-01.md allow; znak U+FFFD) se po davkach D1 a D2 verze 0.2.0 PREMERILY a rozhodnuti v nich drzi (sada gate i secrets zelena nad temito radky). Datovana poznamka o puvodu: artefakt behu generatoru, ktery vystup necetl jako UTF-8; spravne radky pribyly v kole 5b. Rozhodnuti v nich sedi - proto zustavaji.",
   "rows": [
     {
@@ -3421,7 +3421,7 @@
     {
       "tool": "Bash",
       "cmd": "git branch -d feature/x",
-      "expect": "deny",
+      "expect": "allow",
       "since": "branch -d"
     },
     {
@@ -9778,7 +9778,7 @@
     {
       "tool": "PowerShell",
       "cmd": "(git status) + (git log -1)",
-      "expect": "allow",
+      "expect": "deny",
       "since": "CR-X8 (a) + (b) se neduplikuje -> ticho"
     },
     {
@@ -11027,7 +11027,7 @@
     {
       "tool": "PowerShell",
       "cmd": "git branch --delete feature/x",
-      "expect": "deny",
+      "expect": "allow",
       "since": "A179-O17 branch --delete -> deny"
     },
     {
@@ -11172,19 +11172,19 @@
     {
       "tool": "Bash",
       "cmd": "git branch --del feature/x",
-      "expect": "deny",
+      "expect": "allow",
       "since": "A179-O20 CR-AL5 git branch --del (zkratka --delete) -> deny"
     },
     {
       "tool": "Bash",
       "cmd": "git branch --delet feature/x",
-      "expect": "deny",
+      "expect": "allow",
       "since": "A179-O20 CR-AL5 git branch --delet -> deny"
     },
     {
       "tool": "PowerShell",
       "cmd": "git branch --d feature/x",
-      "expect": "deny",
+      "expect": "allow",
       "since": "A179-O20 CR-AL5 git branch --d (PowerShell) -> deny"
     },
     {
@@ -11196,7 +11196,7 @@
     {
       "tool": "Bash",
       "cmd": "git branch --sort -committerdate",
-      "expect": "deny",
+      "expect": "allow",
       "since": "A179-O20 CR-AL6 cena vzoru 0.3.0: --sort s mezerou a -committerdate -> deny"
     },
     {
@@ -11838,6 +11838,1518 @@
       "cmd": "SSH_SK_PROVIDER=internal; ssh build-host",
       "expect": "deny",
       "since": "CR-AQ6 mez README 28: SSH_SK_PROVIDER=internal se strednikem -> deny (falesny, oprava 0.4.1)"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d feature/x",
+      "expect": "allow",
+      "since": "B2 branch -d (PowerShell) -> ticho + audit"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --delete a b",
+      "expect": "allow",
+      "since": "B3 branch --delete dve vetve (Bash) -> ticho + audit"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch --delete a b",
+      "expect": "allow",
+      "since": "B4 branch --delete dve vetve (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C W:/dev/x branch -d x",
+      "expect": "allow",
+      "since": "B5 git -C cesta branch -d (Bash) -> ticho + audit"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git -C W:/dev/x branch -d x",
+      "expect": "allow",
+      "since": "B6 git -C cesta branch -d (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -q -d feature/x",
+      "expect": "allow",
+      "since": "B7 -q pred -d -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d --quiet feature/x",
+      "expect": "allow",
+      "since": "B8 --quiet za -d -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d -- feature/x",
+      "expect": "allow",
+      "since": "B9 -- pred jmenem -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --de feature/x",
+      "expect": "allow",
+      "since": "B12 zkratka --de -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git switch main && git branch -d feature/x",
+      "expect": "allow",
+      "since": "B13 retez switch && branch -d -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git switch main; git branch -d feature/x",
+      "expect": "allow",
+      "since": "B14 retez switch; branch -d (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/TASK-187-obnova-pristupu",
+      "expect": "allow",
+      "since": "B15 jmeno s d a pomlckami -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/x feature/y feature/z",
+      "expect": "allow",
+      "since": "B16 tri vetve -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"git branch -d feature/x\"",
+      "expect": "allow",
+      "since": "B17 obal bash -c -> ticho + audit"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -Command \"git branch -d feature/x\"",
+      "expect": "allow",
+      "since": "B18 obal pwsh -Command -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env GIT_TRACE=0 git branch -d feature/x",
+      "expect": "allow",
+      "since": "B19 obal env -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d \"feature/x\"",
+      "expect": "allow",
+      "since": "B20 jmeno v uvozovkach -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -D feature/x",
+      "expect": "deny",
+      "since": "F2 -D (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d --force feature/x",
+      "expect": "deny",
+      "since": "F4 -d --force -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d --forc feature/x",
+      "expect": "deny",
+      "since": "F5 -d --forc (zkratka) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d --fo feature/x",
+      "expect": "deny",
+      "since": "F6 -d --fo (zkratka) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -fd feature/x",
+      "expect": "deny",
+      "since": "F8 spojene -fd -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -dqf feature/x",
+      "expect": "deny",
+      "since": "F9 spojene -dqf -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -qf -d feature/x",
+      "expect": "deny",
+      "since": "F10 spojene -qf s -d -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --del --force feature/x",
+      "expect": "deny",
+      "since": "F11 --del --force -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch --delete -f feature/x",
+      "expect": "deny",
+      "since": "F12 --delete -f (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --force --delete feature/x",
+      "expect": "deny",
+      "since": "F13 --force --delete -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch feature/x -D",
+      "expect": "deny",
+      "since": "F14 -D za jmenem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/x -D",
+      "expect": "deny",
+      "since": "F15 -d a -D za jmenem -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d feature/x -f",
+      "expect": "deny",
+      "since": "F16 -d a -f za jmenem -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -Dq feature/x",
+      "expect": "deny",
+      "since": "F17 spojene -Dq -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c \"git branch -D feature/x\"",
+      "expect": "deny",
+      "since": "F18 obal bash -c s -D -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "pwsh -Command \"git branch -d -f feature/x\"",
+      "expect": "deny",
+      "since": "F19 obal pwsh -Command s -d -f -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "env git branch -D feature/x",
+      "expect": "deny",
+      "since": "F20 obal env s -D -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/x && git branch -D feature/y",
+      "expect": "deny",
+      "since": "F21 retez: povolene -d a pak -D -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git BRANCH -D feature/x",
+      "expect": "deny",
+      "since": "F22 podprikaz velkymi pismeny s -D -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -rd origin/feature-x",
+      "expect": "deny",
+      "since": "C2 -rd -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d -r origin/feature-x",
+      "expect": "deny",
+      "since": "C3 -d -r -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d --remotes origin/feature-x",
+      "expect": "deny",
+      "since": "C4 -d --remotes -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --remotes --delete origin/feature-x",
+      "expect": "deny",
+      "since": "C5 --remotes --delete -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d --rem origin/feature-x",
+      "expect": "deny",
+      "since": "C6 -d --rem (zkratka --remotes) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --delete-merged",
+      "expect": "deny",
+      "since": "C7 --delete-merged -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d -v feature/x",
+      "expect": "deny",
+      "since": "C8 neznama volba -v -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d --foo feature/x",
+      "expect": "deny",
+      "since": "C9 neznama volba --foo -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -dq feature/x",
+      "expect": "deny",
+      "since": "C10 spojene -dq (mimo mnozinu) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d -",
+      "expect": "deny",
+      "since": "C11 samotna pomlcka -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d $B",
+      "expect": "deny",
+      "since": "C12 promenna (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d \"$B\"",
+      "expect": "deny",
+      "since": "C13 promenna v uvozovkach (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d ${B}",
+      "expect": "deny",
+      "since": "C14 promenna ve slozenych zavorkach (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d $(git rev-parse --abbrev-ref HEAD)",
+      "expect": "deny",
+      "since": "C15 substituce $( ) (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d `git rev-parse --abbrev-ref HEAD`",
+      "expect": "deny",
+      "since": "C16 substituce zpetnymi apostrofy (Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d $b",
+      "expect": "deny",
+      "since": "C17 promenna (PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d @a",
+      "expect": "deny",
+      "since": "C18 splat (PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d (Get-Content b.txt)",
+      "expect": "deny",
+      "since": "C19 podvyraz v zavorce (PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d --% feature/x",
+      "expect": "deny",
+      "since": "C20 --% (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/*",
+      "expect": "deny",
+      "since": "C21 glob hvezdicka -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/?",
+      "expect": "deny",
+      "since": "C22 glob otaznik -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d [ab]x",
+      "expect": "deny",
+      "since": "C23 glob hranata zavorka -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d {a,b}",
+      "expect": "deny",
+      "since": "C24 slozene zavorky (Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d %B%",
+      "expect": "deny",
+      "since": "C25 promenna cmd %X% -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d a,b",
+      "expect": "deny",
+      "since": "C26 carka (pole PowerShellu) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d x\\ y",
+      "expect": "deny",
+      "since": "C27 escape ve jmene (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d ~x",
+      "expect": "deny",
+      "since": "C28 vlnovka -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d --sort refname feature/x",
+      "expect": "deny",
+      "since": "C29 hodnotova volba vedle -d (--sort) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d main",
+      "expect": "deny",
+      "since": "P1 -d main -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d main",
+      "expect": "deny",
+      "since": "P2 -d main (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/x main",
+      "expect": "deny",
+      "since": "P3 main mezi dalsimi jmeny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --delete MAIN",
+      "expect": "deny",
+      "since": "P4 MAIN velkymi pismeny -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d refs/heads/main",
+      "expect": "deny",
+      "since": "P5 refs/heads/main -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch $F feature/x",
+      "expect": "deny",
+      "since": "H1 promenna bez viditelneho -d (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch \"$F\" feature/x",
+      "expect": "deny",
+      "since": "H2 promenna v uvozovkach bez -d (Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch $f feature/x",
+      "expect": "deny",
+      "since": "H3 promenna bez -d (PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch @a",
+      "expect": "deny",
+      "since": "H4 splat bez -d (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch $(cat f.txt) feature/x",
+      "expect": "deny",
+      "since": "H5 substituce $( ) bez -d (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch `cat f.txt` feature/x",
+      "expect": "deny",
+      "since": "H6 substituce zpetnymi apostrofy bez -d (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -\\D feature/x",
+      "expect": "deny",
+      "since": "H7 escape uvnitr prepinace (Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch \\-D feature/x",
+      "expect": "deny",
+      "since": "H8 escape pred prepinacem (Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch `-D feature/x",
+      "expect": "deny",
+      "since": "H9 escape pred prepinacem (PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch {-D,} feature/x",
+      "expect": "deny",
+      "since": "H10 slozene zavorky bez -d (Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch (Get-Content f.txt) feature/x",
+      "expect": "deny",
+      "since": "H11 podvyraz v zavorce bez -d (PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch %F% feature/x",
+      "expect": "deny",
+      "since": "H12 promenna cmd %X% bez -d -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --sort $K feature/x",
+      "expect": "deny",
+      "since": "H13 promenna jako hodnota volby (word splitting, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch",
+      "expect": "allow",
+      "since": "K1 vypis -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -a",
+      "expect": "allow",
+      "since": "K2 -a -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --list \"feature/*\"",
+      "expect": "allow",
+      "since": "K3 --list se vzorem v uvozovkach -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -l \"*187*\"",
+      "expect": "allow",
+      "since": "K4 -l se vzorem zacinajicim hvezdickou -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -M stary novy",
+      "expect": "allow",
+      "since": "K6 -M (mez README, verdikt beze zmeny) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -c stary novy",
+      "expect": "allow",
+      "since": "K7 -c -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -C stary novy",
+      "expect": "allow",
+      "since": "K8 -C (mez README, verdikt beze zmeny) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -f feature/x HEAD",
+      "expect": "allow",
+      "since": "K9 -f vetev commit (mez README, verdikt beze zmeny) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --merged",
+      "expect": "allow",
+      "since": "K12 --merged -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --no-merged main",
+      "expect": "allow",
+      "since": "K14 --no-merged main -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --contains HEAD",
+      "expect": "allow",
+      "since": "K15 --contains HEAD -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -u origin/feature-x",
+      "expect": "allow",
+      "since": "K16 -u -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch --set-upstream-to=origin/feature-x",
+      "expect": "allow",
+      "since": "K17 --set-upstream-to= -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format \"%(refname:short)\"",
+      "expect": "allow",
+      "since": "K20 --format s %( ) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch feature/d-nove",
+      "expect": "allow",
+      "since": "K21 zalozeni vetve se jmenem s d -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -r",
+      "expect": "allow",
+      "since": "K22 -r -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --merged -committerdate",
+      "expect": "allow",
+      "since": "K23 --merged -committerdate (hodnota volby) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --no-delete feature/x",
+      "expect": "allow",
+      "since": "K24 --no-delete -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "docker exec db git branch -d x",
+      "expect": "allow",
+      "since": "K25 branch -d uvnitr kontejneru -> dnesni verdikt (ticho)"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push origin -d feature/x",
+      "expect": "deny",
+      "since": "D2 push origin -d -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin :feature/x",
+      "expect": "deny",
+      "since": "D3 push origin :x -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin +:feature/x",
+      "expect": "deny",
+      "since": "D4 push origin +:x -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --prune origin",
+      "expect": "deny",
+      "since": "N1 push --prune -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --prune origin refs/heads/*:refs/heads/*",
+      "expect": "deny",
+      "since": "N2 push --prune s refspecem -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push --pru origin",
+      "expect": "deny",
+      "since": "N3 push --pru (zkratka) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin --de feature/x",
+      "expect": "deny",
+      "since": "N4 push --de (zkratka --delete) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin --del feature/x",
+      "expect": "deny",
+      "since": "N5 push --del (zkratka --delete) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push origin --delet feature/x",
+      "expect": "deny",
+      "since": "N6 push --delet (zkratka --delete, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -qd origin feature/x",
+      "expect": "deny",
+      "since": "N7 push spojene -qd -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -dq origin feature/x",
+      "expect": "deny",
+      "since": "N8 push spojene -dq -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push -ud origin feature/x",
+      "expect": "deny",
+      "since": "N9 push spojene -ud -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c remote.origin.push=:feature/x push origin",
+      "expect": "deny",
+      "since": "N10 -c remote.origin.push=:x -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c remote.origin.mirror=true push origin",
+      "expect": "deny",
+      "since": "N11 -c remote.origin.mirror=true -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --config-env=remote.origin.push=PUSHSPEC push origin",
+      "expect": "deny",
+      "since": "N12 --config-env remote.origin.push -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --mirr origin",
+      "expect": "deny",
+      "since": "N13 push --mirr (zkratka --mirror) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -u origin feature/x",
+      "expect": "allow",
+      "since": "Q2 push -u -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --dry-run origin feature/x",
+      "expect": "allow",
+      "since": "Q3 push --dry-run -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push --progress origin feature/x",
+      "expect": "allow",
+      "since": "Q4 push --progress -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --no-prune origin feature/x",
+      "expect": "allow",
+      "since": "Q5 push --no-prune -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin --tags",
+      "expect": "allow",
+      "since": "Q6 push --tags -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c remote.origin.url=x push origin feature/x",
+      "expect": "allow",
+      "since": "Q7 -c jiny klic remote (url) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin feature/d-nove",
+      "expect": "allow",
+      "since": "Q8 push vetve se jmenem s d -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d",
+      "expect": "deny",
+      "since": "C30 -d bez jmena vetve (CR1-2) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --merged | xargs git branch -d",
+      "expect": "deny",
+      "since": "C31 jmena z roury pres xargs (CR1-2) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo main | xargs git branch -d",
+      "expect": "deny",
+      "since": "C32 chranena vetev z roury pres xargs (CR1-2) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -q -d --",
+      "expect": "deny",
+      "since": "C33 jen -q -d -- bez jmena (CR1-2, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -? feature/x",
+      "expect": "deny",
+      "since": "H14 glob s pomlckou na zacatku (?) (CR1-6, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -* feature/x",
+      "expect": "deny",
+      "since": "H15 glob s pomlckou na zacatku (*) (CR1-6, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --config-env remote.origin.push=PUSHSPEC push origin",
+      "expect": "deny",
+      "since": "N14 --config-env s mezerou (CR1-3) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin \\:feature/x",
+      "expect": "deny",
+      "since": "N15 escape pred dvojteckou refspecu (CR1-1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push \\-\\-delete origin feature/x",
+      "expect": "deny",
+      "since": "N16 escape v --delete (CR1-1, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push origin `-d feature/x",
+      "expect": "deny",
+      "since": "N17 escape v -d (CR1-1, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push \\-f origin main",
+      "expect": "deny",
+      "since": "N18 escape v -f na main (CR1-1, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git push C:\\repos\\gsd feature/x",
+      "expect": "allow",
+      "since": "Q9 remote jako cesta se zpetnymi lomitky (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo main | xargs git branch -d feature/x",
+      "expect": "deny",
+      "since": "C34 xargs pripoji jmena i za doslovne jmeno (CR2-4) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c branch.x.remote=. -c branch.x.merge=refs/heads/x branch -d x",
+      "expect": "deny",
+      "since": "C35 -c branch.<n>.remote/merge meni, co git povazuje za sloucene (CR2-5) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --\\delete -f main",
+      "expect": "deny",
+      "since": "H16 escape uvnitr dlouhe volby (CR2-2, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --{delete,force} main",
+      "expect": "deny",
+      "since": "H17 slozene zavorky uvnitr volby (CR2-3, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push --force origin `printf mai`n",
+      "expect": "deny",
+      "since": "N19 force s cilem ze substituce zpetnymi apostrofy (CR2-1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c core.quotepath=off branch -vv",
+      "expect": "allow",
+      "since": "K26 -c jiny klic u git branch bez mazani -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -d feature/x 2>$null",
+      "expect": "allow",
+      "since": "B21 -d s presmerovanim 2>$null (CR3-1, PowerShell) -> ticho + audit"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo '-D main' | xargs git branch",
+      "expect": "deny",
+      "since": "H18 xargs dodava prepinac mazani (CR3-4) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo main | xargs git branch -f",
+      "expect": "deny",
+      "since": "H19 xargs dodava jmeno k -f (CR3-4) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --{format=x,delete,force} feature/x",
+      "expect": "deny",
+      "since": "H20 slozene zavorky pred = (CR3-10, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo :main | xargs git push origin",
+      "expect": "deny",
+      "since": "N20 xargs dodava refspec (CR3-7) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo '--delete main' | xargs git push origin",
+      "expect": "deny",
+      "since": "N21 xargs dodava --delete (CR3-7) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push -odeploy origin feature/x",
+      "expect": "allow",
+      "since": "Q10 -o s prilepenou hodnotou s d (CR3-6) -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch --show-current 2>$null",
+      "expect": "allow",
+      "since": "K27 presmerovani 2>$null (CR3-1, PowerShell) -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch -a *>$null",
+      "expect": "allow",
+      "since": "K28 presmerovani *>$null (CR3-1, PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='%(refname:short)\\t%(upstream)'",
+      "expect": "allow",
+      "since": "K29 --format= se zpetnym lomitkem (CR3-2) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='{\"n\":\"%(refname:short)\"}'",
+      "expect": "allow",
+      "since": "K30 --format= se slozenymi zavorkami (CR3-2) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='%(if)%(HEAD)%(then)* %(end)%(refname:short)'",
+      "expect": "allow",
+      "since": "K31 --format= s hvezdickou (CR3-3) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch --format='[%(refname:short)]'",
+      "expect": "allow",
+      "since": "K32 --format= s hranatymi zavorkami (CR3-3) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -uorigin/develop",
+      "expect": "allow",
+      "since": "K33 -u s prilepenou hodnotou s d (CR3-5) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch '2>' -D main",
+      "expect": "deny",
+      "since": "R1 presmerovani v uvozovkach pred -D (S041-A1 P1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch \"2>\" -D main",
+      "expect": "deny",
+      "since": "R2 presmerovani v dvojitych uvozovkach pred -D (S041-A1 P2, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch '2>' -D main",
+      "expect": "deny",
+      "since": "R3 presmerovani v uvozovkach pred -D (S041-A1 P3, PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch \"2>\" -D main",
+      "expect": "deny",
+      "since": "R4 presmerovani v dvojitych uvozovkach pred -D (S041-A1 P4, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch '>' -D main",
+      "expect": "deny",
+      "since": "R5 operator > v uvozovkach pred -D (S041-A1 P5, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -d feature/x '2>' -D",
+      "expect": "deny",
+      "since": "R6 presmerovani v uvozovkach za -d jmeno (S041-A1 P6, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch 2\\> -D main",
+      "expect": "deny",
+      "since": "R7 escape pred > (S041-A1 P7, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git branch 2`> -D main",
+      "expect": "deny",
+      "since": "R8 escape pred > (S041-A1 P8, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch '2>x' -D main",
+      "expect": "deny",
+      "since": "R9 presmerovani s cilem v uvozovkach (S041-A1 P9, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git push origin '2>' :main",
+      "expect": "deny",
+      "since": "R10 push s presmerovanim v uvozovkach pred :main (S041-A1 Q1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo x 2> f; git branch '2>' -D main",
+      "expect": "deny",
+      "since": "R11 tyz text mimo uvozovky v jinem prikazu a v uvozovkach pred -D (S041-A1, fail-closed) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice branch -D main",
+      "expect": "deny",
+      "since": "U1 --no-advice pred branch -D (S041-N14 G4, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-advice branch -D main",
+      "expect": "deny",
+      "since": "U2 --no-advice pred branch -D (S041-N14 H1, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-lazy-fetch branch -D main",
+      "expect": "deny",
+      "since": "U3 --no-lazy-fetch pred branch -D (S041-N14 G5, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --attr-source=HEAD branch -D main",
+      "expect": "deny",
+      "since": "U4 --attr-source= pred branch -D (S041-N14 G10, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --attr-source HEAD branch -D main",
+      "expect": "deny",
+      "since": "U5 --attr-source s mezerou pred branch -D (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'git --no-advice branch -D main'",
+      "expect": "deny",
+      "since": "U6 --no-advice pod bash -c (S041-N14 H8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --bogus-option branch -D main",
+      "expect": "deny",
+      "since": "U7 neznamy globalni prepinac pred branch -D (S041-N14 H12, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice push --force origin main",
+      "expect": "deny",
+      "since": "U8 --no-advice pred push --force main (S041-N14 H3, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-lazy-fetch push origin --delete main",
+      "expect": "deny",
+      "since": "U9 --no-lazy-fetch pred push --delete (S041-N14 H4, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice reset --hard",
+      "expect": "deny",
+      "since": "U10 --no-advice pred reset --hard (S041-N14 H2, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --attr-source HEAD reset --hard",
+      "expect": "deny",
+      "since": "U11 --attr-source s mezerou pred reset --hard (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice clean -fdx",
+      "expect": "deny",
+      "since": "U12 --no-advice pred clean -fdx (S041-N14 H5, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-lazy-fetch clean -fd",
+      "expect": "deny",
+      "since": "U13 --no-lazy-fetch pred clean -fd (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice stash clear",
+      "expect": "deny",
+      "since": "U14 --no-advice pred stash clear (S041-N14 H10, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-advice stash drop",
+      "expect": "deny",
+      "since": "U15 --no-advice pred stash drop (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice checkout -- .",
+      "expect": "deny",
+      "since": "U16 --no-advice pred checkout -- . (S041-N14, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --attr-source=HEAD checkout .",
+      "expect": "deny",
+      "since": "U17 --attr-source= pred checkout . (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice restore .",
+      "expect": "deny",
+      "since": "U18 --no-advice pred restore . (S041-N14, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --bogus-option reset --hard",
+      "expect": "deny",
+      "since": "U19 neznamy globalni prepinac pred reset --hard (S041-N14, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --bogus-option status",
+      "expect": "deny",
+      "since": "U20 neznamy globalni prepinac pred neskodnym podprikazem (S041-N14, fail-closed; git ho odmitne) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -Cx branch -D main",
+      "expect": "deny",
+      "since": "U21 prilepena hodnota -C (git 2.50 neumi, fail-closed) pred branch -D -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git $X branch -D main",
+      "expect": "deny",
+      "since": "U22 promenna na miste podprikazu (S041-Q2, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git $(true) branch -D main",
+      "expect": "deny",
+      "since": "U23 substituce na miste podprikazu (S041-Q2, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git $x branch -D main",
+      "expect": "deny",
+      "since": "U24 promenna na miste podprikazu (S041-Q2, PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git (Write-Output) branch -D main",
+      "expect": "deny",
+      "since": "U25 podvyraz na miste podprikazu (S041-Q2, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C $repo status",
+      "expect": "allow",
+      "since": "W1 promenna jako hodnota -C (hodnota, ne podprikaz) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C \"$(pwd)\" log",
+      "expect": "allow",
+      "since": "W2 substituce jako hodnota -C v uvozovkach -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c $kv status",
+      "expect": "allow",
+      "since": "W3 promenna jako hodnota -c pred status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git -C $repo status",
+      "expect": "allow",
+      "since": "W4 promenna jako hodnota -C (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git \"branch\" -D main",
+      "expect": "deny",
+      "since": "W5 podprikaz v uvozovkach, branch -D (Bash) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git 'branch' -D main",
+      "expect": "deny",
+      "since": "W6 podprikaz v uvozovkach, branch -D (PowerShell) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice status",
+      "expect": "allow",
+      "since": "V1 --no-advice pred status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-lazy-fetch log --oneline",
+      "expect": "allow",
+      "since": "V2 --no-lazy-fetch pred log (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --version",
+      "expect": "allow",
+      "since": "V3 --version -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git -v",
+      "expect": "allow",
+      "since": "V4 -v (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --help branch",
+      "expect": "allow",
+      "since": "V5 --help s podprikazem (git spusti help) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --attr-source HEAD diff",
+      "expect": "allow",
+      "since": "V6 --attr-source s mezerou pred diff -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --no-advice branch -d feature/x",
+      "expect": "allow",
+      "since": "V7 --no-advice pred branch -d (S041-N14, Bash) -> ticho + audit"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -P branch -D main",
+      "expect": "deny",
+      "since": "V8 -P pred branch -D (velke P, rozliseni velikosti) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C W:/dev/x --no-advice reset --hard",
+      "expect": "deny",
+      "since": "V9 -C cesta a --no-advice pred reset --hard -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -p status",
+      "expect": "allow",
+      "since": "V10 -p pred status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --no-pager branch -D main",
+      "expect": "deny",
+      "since": "V11 --no-pager pred branch -D (PowerShell) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git --literal-pathspecs status",
+      "expect": "allow",
+      "since": "V12 --literal-pathspecs pred status (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git --exec-path branch -D main",
+      "expect": "deny",
+      "since": "V13 --exec-path bez hodnoty pred branch -D (git vypise cestu a skonci; hook fail-closed) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git bran\\ch -D main",
+      "expect": "deny",
+      "since": "L1 escape ve slove podprikazu pred -D (S041-N16 X1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git res\\et --hard",
+      "expect": "deny",
+      "since": "L2 escape ve slove podprikazu reset --hard (S041-N16 X6, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git pu\\sh --force origin main",
+      "expect": "deny",
+      "since": "L3 escape ve slove podprikazu push --force (S041-N16 X7, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git cle\\an -fdx",
+      "expect": "deny",
+      "since": "L4 escape ve slove podprikazu clean -fdx (S041-N16 X8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git st\\ash clear",
+      "expect": "deny",
+      "since": "L5 escape ve slove podprikazu stash clear (S041-N16 X40, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git check\\out .",
+      "expect": "deny",
+      "since": "L6 escape ve slove podprikazu checkout . (S041-N16 X41, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git re\\store .",
+      "expect": "deny",
+      "since": "L7 escape ve slove podprikazu restore . (S041-N16 Z8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -C x bran\\ch -D main",
+      "expect": "deny",
+      "since": "L8 -C cesta a escape ve slove podprikazu (S041-N16 Y6, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c core.x=1 res\\et --hard",
+      "expect": "deny",
+      "since": "L9 -c a escape ve slove podprikazu (S041-N16 B5, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "bash -c 'git bran\\ch -D main'",
+      "expect": "deny",
+      "since": "L10 escape ve slove podprikazu pod bash -c (S041-N16 X37, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "echo x | xargs git bran\\ch -D",
+      "expect": "deny",
+      "since": "L11 escape ve slove podprikazu pod xargs (S041-N16 Y12, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git b{r,}anch -D main",
+      "expect": "deny",
+      "since": "L12 slozene zavorky uvnitr slova podprikazu (S041-N16 B1, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git br[a]nch -D main",
+      "expect": "deny",
+      "since": "L13 glob [] ve slove podprikazu (S041-N16 Y7, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch{,} -D main",
+      "expect": "deny",
+      "since": "L14 slozene zavorky na konci slova podprikazu (S041-N16, Grace brana 2; 0.4.0 deny vzorem, 0.4.1 do 14e678e allow) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git bran?h -D main",
+      "expect": "deny",
+      "since": "L15 glob ? ve slove podprikazu (S041-N16, Grace brana 2) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git bran\\ch -D main",
+      "expect": "deny",
+      "since": "L16 zpetne lomitko ve slove podprikazu (S041-N16, PowerShell; git takove jmeno nezna) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git \"bra\"nch -D main",
+      "expect": "deny",
+      "since": "T1 podprikaz z casti v uvozovkach (Bash) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git \"bra\"nch -D main",
+      "expect": "deny",
+      "since": "T2 podprikaz z casti v uvozovkach (PowerShell) -> deny pravidlem vetve"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch -\\D main",
+      "expect": "deny",
+      "since": "T3 escape v prepinaci vetve (pravidlo vetve cte escape samo od 0.4.1) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -c $kv log",
+      "expect": "allow",
+      "since": "T4 promenna jako hodnota -c pred log -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status",
+      "expect": "allow",
+      "since": "T5 git status -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git log",
+      "expect": "allow",
+      "since": "T6 git log (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git rev-parse",
+      "expect": "allow",
+      "since": "T7 git rev-parse -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git cherry-pick --abort",
+      "expect": "allow",
+      "since": "T8 jmeno s pomlckou: cherry-pick --abort -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git rev-parse HEAD",
+      "expect": "allow",
+      "since": "T9 jmeno s pomlckou: rev-parse HEAD (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git ls-files",
+      "expect": "allow",
+      "since": "T10 jmeno s pomlckou: ls-files -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git credential-manager --version",
+      "expect": "allow",
+      "since": "T11 externi prikaz s pomlckou: credential-manager --version (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git lfs ls-files",
+      "expect": "allow",
+      "since": "T12 externi prikaz: lfs ls-files -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git -h",
+      "expect": "allow",
+      "since": "T13 -h (git spusti help) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "\\git branch -D main",
+      "expect": "deny",
+      "since": "T14 zpetne lomitko na zacatku jmena prikazu (README 27) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd /w/dev/x && git status)",
+      "expect": "deny",
+      "since": "C1 subshell s gitem jako poslednim prikazem (S041-N19 R1, AOPT-O35 cena, dvojce CR-X8, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status>/dev/null",
+      "expect": "deny",
+      "since": "C2 presmerovani prilepene k podprikazu status (S041-N19 R4, AOPT-O35 cena, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git diff>x.patch",
+      "expect": "deny",
+      "since": "C3 presmerovani prilepene k podprikazu diff (S041-N19 R5, AOPT-O35 cena, Bash) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git log>log.txt",
+      "expect": "deny",
+      "since": "C4 presmerovani prilepene k podprikazu log (S041-N19 R6, AOPT-O35 cena, Bash) -> deny"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git status>$null",
+      "expect": "deny",
+      "since": "C5 presmerovani prilepene k podprikazu (S041-N19 R9, deny od 14e678e, PowerShell) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git branch>/dev/null -D main",
+      "expect": "deny",
+      "since": "C6 presmerovani prilepene k branch pred -D (S041-N19, regrese 0.4.1 do 14e678e zavrena) -> deny"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "cd /w/dev/x && git status",
+      "expect": "allow",
+      "since": "C7 nahrada C1: bez zavorek -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git status >/dev/null",
+      "expect": "allow",
+      "since": "C8 nahrada C2: mezera pred presmerovanim -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "git diff > x.patch",
+      "expect": "allow",
+      "since": "C9 nahrada C3: mezery kolem presmerovani -> ticho"
+    },
+    {
+      "tool": "PowerShell",
+      "cmd": "git status >$null",
+      "expect": "allow",
+      "since": "C10 nahrada C5: mezera pred presmerovanim (PowerShell) -> ticho"
+    },
+    {
+      "tool": "Bash",
+      "cmd": "(cd /w/dev/x; git log -1)",
+      "expect": "allow",
+      "since": "C11 subshell, git neni posledni slovo pred zavorkou -> ticho"
     }
   ]
 }
